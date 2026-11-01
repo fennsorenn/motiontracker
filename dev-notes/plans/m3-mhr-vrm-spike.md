@@ -1,6 +1,6 @@
 # Plan: M3 spike, MHR ↔ VRM 1.0 mapping
 
-> Branch: `feature/m3-mhr-vrm-spike` · Status: draft
+> Branch: `feature/m3-mhr-vrm-spike` · Status: done (2026-11-01)
 > This plan is the seed context for a cloud worker. It is a starting point, not an
 > airtight spec — the worker is interactive and may ask to refine it.
 
@@ -84,6 +84,36 @@ Code: `spikes/m3-mhr-vrm/` (uv, CPU PyTorch). `dump_skeleton.py`, `fit_avatars.p
   The head/hand error comes from MHR's extra spine joint (`c_spine0`). Moving forearm twist from
   the hand onto lowerArm (driving it by `wrist_twist`) adds 0.4–0.8 cm at the hand because the
   twist axis isn't exactly the forearm axis; a swing-twist split would avoid that.
+
+- **Forearm twist split** (owner decision): VRM lowerArm takes the twist part of MHR's `wrist_twist`
+  about the forearm axis (swing-twist). No added hand error; lowerArm carries the twist.
+- **VRM 0.x avatars face −Z**; the reader turns them 180° about Y to match VRM 1.0 / MHR (+Z).
+- **CMU → MHR fit** (`fit_cmu.py`, pymomentum `solve_sequence_ik`): shared performer scales within
+  MHR limits + per-frame pose, 20 joint pairs. CMU's `wrist` bone is the distal forearm, so MHR's
+  wrist pairs with its end; hand/finger scales are frozen (no CMU finger data). Median residual
+  0.4–1.3 cm per clip on 10 upper-body clips; limbs ≲ 1 cm, spine pairs 5–8 cm (different joint
+  placement, low weight). Spine/neck scales lean on their limits because of that; worth a looser
+  spine pairing for M1. About 0.3 s per 100 frames.
+- **CMU clip scan** (`scan_cmu.py`): 760 of 2514 clips keep root travel < 60 cm; ranked by hand
+  motion relative to chest and by hands near head.
+- **Spatial relations after plain rotation transfer** (`eval_cmu_roundtrip.py`, 10 clips, close
+  frames only, error in cm on the avatar, median / p90):
+
+  | Target | hand–face | hand–hand | hand–chest |
+  |---|---|---|---|
+  | VRM with performer's MHR proportions | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 |
+  | AvatarSample_D | 1.2–2.0 / ≤ 4.5 | 3.6 / 5.7 | 1.7–1.9 / ≤ 2.3 |
+  | Base_Male, Sakurada_Fumiriya (same skeleton) | 2.2–3.2 / ≤ 6.8 | 2.2 / 4.9 | 3.3–5.1 / ≤ 7.0 |
+  | AvatarSample_E | 1.2–1.6 / ≤ 3.6 | 2.6 / 4.7 | 1.4–1.6 / ≤ 2.1 |
+
+  The conversion itself preserves relations exactly; the misses come from proportion differences.
+  This is the gap the learned retargeting layer (PLAN.md §3.10a) has to close.
+
+## Conclusion
+
+MHR works as the canonical skeleton for VRM 1.0 output: go. Rotation transfer is exact up to
+~1 cm from folded joints; stylized avatars need out-of-range scales (allowed) and the retargeting
+layer for contacts. CMU → MHR fitting works and becomes M1's data preparation.
 
 ## Approach
 

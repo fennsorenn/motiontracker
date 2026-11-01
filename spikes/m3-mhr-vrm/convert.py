@@ -19,6 +19,8 @@ MAP = {
     "upperChest": ("c_spine3", "c_neck"),
     "neck": ("c_neck", "c_head"),
     "head": ("c_head", None),
+    "leftEye": ("l_eye", None),
+    "rightEye": ("r_eye", None),
 }
 for s, m in (("left", "l"), ("right", "r")):
     MAP.update({
@@ -41,7 +43,8 @@ for s, m in (("left", "l"), ("right", "r")):
         })
 
 # VRM 1.0 humanoid parents (subset that MAP covers)
-VRM_PARENT = {"spine": "hips", "chest": "spine", "upperChest": "chest", "neck": "upperChest", "head": "neck"}
+VRM_PARENT = {"spine": "hips", "chest": "spine", "upperChest": "chest", "neck": "upperChest", "head": "neck",
+              "leftEye": "head", "rightEye": "head"}
 for s in ("left", "right"):
     VRM_PARENT.update({f"{s}Shoulder": "upperChest", f"{s}UpperArm": f"{s}Shoulder", f"{s}LowerArm": f"{s}UpperArm",
                        f"{s}Hand": f"{s}LowerArm", f"{s}UpperLeg": "hips", f"{s}LowerLeg": f"{s}UpperLeg",

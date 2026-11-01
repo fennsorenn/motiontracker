@@ -51,4 +51,7 @@ def load_vrm(path):
             cache[i] = M(parent[i]) @ m if i in parent else m
         return cache[i]
 
-    return version, v.get("meta", {}), {k: M(i)[:3, 3].copy() for k, i in bones.items()}
+    pos = {k: M(i)[:3, 3].copy() for k, i in bones.items()}
+    if version == "0.x":  # VRM 0.x faces -Z; VRM 1.0 (and MHR) face +Z: turn 180 degrees about Y
+        pos = {k: p * np.array([-1.0, 1.0, -1.0]) for k, p in pos.items()}
+    return version, v.get("meta", {}), pos
