@@ -103,7 +103,7 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
        → service output (VMC/OSC over UDP + WebSocket)
 ```
 - Keep the detector frozen and add a learned **lifter** on top that outputs rotations directly. `[CLAUDE]` (owner's goal was direct skeleton output; this structure is Claude's proposal)
-- Rotation representation: **6D rotations** (better for training than Euler/quaternions). `[CLAUDE]`
+- Rotation representation: **6D rotations** (better for training than Euler/quaternions). `[USER]` (2026-11-01, for M1)
 - Strictly **causal** (no future frames). `[CLAUDE]`, consistent with `[USER]` latency requirement.
 
 ### 3.2 Base detector: MediaPipe vs RTMPose
@@ -396,7 +396,7 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 **Order change `[USER]` (2026-11-01):** M3 (MHR ↔ VRM spike) runs before M1, so M1 trains in MHR space from the start. M0's remaining items are deferred: more seated-v2 recordings happen alongside, the face-cost check moves to M4. The rest of the order is still `[CLAUDE]`.
 
 1. **M0: Baseline + evaluation harness.** Extract current tracking `[USER]`; implement metrics (§6); record a few seated test videos; measure baseline. Also re-check face blendshape cost with correct running mode.
-2. **M1: Body keypoint lifter POC.** MediaPipe pose keypoints → causal temporal head → rotations. Data: CMU + synthetic seated motion + simulated noise; short history window. Compare against baseline on real seated video. **Go/no-go point** for the learned approach.
+2. **M1: Body keypoint lifter POC.** Plan: `dev-notes/plans/m1-body-lifter.md`. Decisions `[USER]` (2026-11-01): landmarks synthesized from fitted MHR poses with a session-calibrated noise and framing model (rendering stays in M6); small causal model over time-offset history, 6D output, rotation + FK position + joint-limit + velocity losses (over a GRU); CMU low-travel clips weighted to upper-body activity plus spliced seated motion, performer scales varied within MHR limits; new `train/` uv project (CUDA) and spike code moved into a shared package. MediaPipe pose keypoints → causal temporal head → rotations. Data: CMU + synthetic seated motion + simulated noise; short history window. Compare against baseline on real seated video. **Go/no-go point** for the learned approach.
 3. **M2: Service skeleton** (can run parallel to M1). Python service owning camera; VMC over UDP + OSC over WebSocket; browser viewer with three-vrm; video-file source for repeatable tests; timestamps, sequence numbers, latest-wins.
 4. **M3: MHR ↔ VRM spike** (can run parallel). Decide canonical skeleton.
 5. **M4: Hand and face heads + merger.** Procedural hands; face head on top of MediaPipe blendshapes; modality dropout; residual merger; gaze angles; learned retargeting layer (§3.10a).
