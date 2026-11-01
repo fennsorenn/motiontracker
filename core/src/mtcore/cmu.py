@@ -107,12 +107,22 @@ def read_amc(path):
     return frames
 
 
-def clip_positions(subject, clip, step=4):
-    """Joint end positions for every `step`-th frame (CMU is 120 fps; step 4 -> 30 fps)."""
+def clip_positions(subject, clip, step=4, frames=None):
+    """Joint end positions for every `step`-th frame (CMU is 120 fps; step 4 -> 30 fps).
+
+    `frames` optionally selects indices into that subsampled sequence (FK runs only on those)."""
     sid = f"{int(subject):02d}"
     d = CMU_ROOT / sid
     sk = Skeleton(d / f"{sid}.asf")
-    frames = read_amc(d / f"{sid}_{int(clip):02d}.amc")[::step]
-    names = list(sk.fk(frames[0]).keys())
-    out = np.array([[sk.fk(f)[n] for n in names] for f in frames])
+    seq = read_amc(d / f"{sid}_{int(clip):02d}.amc")[::step]
+    if frames is not None:
+        seq = [seq[i] for i in frames]
+    fk = [sk.fk(f) for f in seq]
+    names = list(fk[0].keys())
+    out = np.array([[p[n] for n in names] for p in fk])
     return names, out
+
+
+def clip_length(subject, clip, step=4):
+    sid = f"{int(subject):02d}"
+    return len(read_amc(CMU_ROOT / sid / f"{sid}_{int(clip):02d}.amc")[::step])

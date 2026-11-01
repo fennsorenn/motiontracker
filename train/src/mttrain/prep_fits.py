@@ -29,7 +29,8 @@ _ch = None
 
 def _worker_init():
     global _ch
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    import torch
+    torch.set_num_threads(1)  # one process per core; threaded workers oversubscribe the CPU
     from mtcore.mhr import load
     _ch = load()
 
@@ -58,9 +59,11 @@ def _clip(subject, clip, scales):
 
 
 def main():
+    for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        os.environ.setdefault(v, "1")  # inherited by the worker processes
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-travel", type=float, default=60.0)
-    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
+    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2 + 2))
     ap.add_argument("--limit", type=int, default=0, help="only the first N clips (smoke test)")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)

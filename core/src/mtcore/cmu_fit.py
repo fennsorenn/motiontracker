@@ -10,7 +10,7 @@ import pymomentum.geometry as g
 import pymomentum.solver as S
 import torch
 
-from .cmu import clip_positions
+from .cmu import clip_length, clip_positions
 from .mhr import FLEX_T, load
 
 # MHR joint <- CMU bone end, weight
@@ -116,8 +116,9 @@ def fit_subject_scales(ch, subject, clips, step=4, frames_per_clip=60, pairs=PAI
     pn = list(ch.parameter_transform.names)
     chunks, names = [], None
     for clip in clips:
-        names, P = clip_positions(subject, clip, step)
-        chunks.append(P[np.linspace(0, len(P) - 1, min(frames_per_clip, len(P))).astype(int)])
+        n = clip_length(subject, clip, step)
+        names, P = clip_positions(subject, clip, step, np.linspace(0, n - 1, min(frames_per_clip, n)).astype(int))
+        chunks.append(P)
     P = np.concatenate(chunks)
     cons = _constraints(jn, names, P, pairs)
     active = torch.tensor([not _frozen(n) for n in pn])
