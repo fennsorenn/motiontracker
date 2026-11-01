@@ -1,26 +1,8 @@
-"""Dump MHR's rest skeleton and the effect of its scale parameters.
-
-Uses pymomentum directly: MHR.from_files segfaults in Character.with_blend_shape
-(pymomentum-cpu 0.1.114, torch 2.8 CPU), and the skeleton never depends on the
-identity blendshapes anyway (see mhr/mhr.py forward: skel_state comes from model
-parameters only).
-"""
-
-from pathlib import Path
+"""Dump MHR's rest skeleton and the effect of its scale parameters."""
 
 import numpy as np
-import pymomentum.geometry as g
 
-ASSETS = Path(__file__).resolve().parents[2] / "data" / "mhr" / "assets"
-
-
-def load():
-    return g.Character.load_fbx(str(ASSETS / "lod1.fbx"), str(ASSETS / "compact_v6_1.model"), load_blendshapes=False)
-
-
-def positions(ch, mp):
-    return np.asarray(g.model_parameters_to_skeleton_state(ch, np.asarray(mp, dtype=np.float32)))[..., :3]
-
+from mtcore.mhr import load, positions
 
 if __name__ == "__main__":
     ch = load()

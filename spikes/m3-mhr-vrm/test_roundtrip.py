@@ -1,15 +1,14 @@
 """Random MHR poses -> VRM rotations -> VRM FK; compare bone directions with MHR's."""
 
 import sys
-from pathlib import Path
 
 import numpy as np
 import pymomentum.geometry as g
 
-from convert import MAP, VRM_CHILD, MhrToVrm, qrot, vrm_fk
-from dump_skeleton import load
-from fit_avatars import AVATARS
-from vrm_skeleton import load_vrm
+from mtcore.convert import MAP, VRM_CHILD, MhrToVrm, qrot, vrm_fk
+from mtcore.mhr import FLEX_T, load
+from mtcore.paths import AVATARS
+from mtcore.vrm import load_vrm
 
 rng = np.random.default_rng(0)
 ch = load()
@@ -24,8 +23,6 @@ _, _, vrm_rest = load_vrm(AVATARS / f"{avatar}.vrm")
 conv = MhrToVrm(jn, rest, vrm_rest)
 
 # random poses: pose parameters only (no scale, no root translation), moderate range
-FLEX_T = {"spine_length_flexible", "neck_length_flexible", "shoulder_width_flexible", "arm_length_flexible",
-          "hip_width_flexible", "leg_length_flexible"}  # joint translations VRM cannot express
 mode = sys.argv[2] if len(sys.argv) > 2 else "no-flex"
 pose_idx = [i for i, n in enumerate(pn) if not n.startswith("scale_") and not n.startswith("root_t")
             and (mode == "flex" or n not in FLEX_T)]

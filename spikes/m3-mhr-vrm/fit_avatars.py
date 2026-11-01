@@ -6,14 +6,13 @@ MHR's limits, and the residual of segments MHR has no parameter for.
 """
 
 import sys
-from pathlib import Path
 
 import numpy as np
 
-from dump_skeleton import load, positions
-from vrm_skeleton import load_vrm
+from mtcore.mhr import limits, load, positions
+from mtcore.paths import AVATARS
+from mtcore.vrm import load_vrm
 
-AVATARS = Path(__file__).resolve().parents[3] / "volleyball" / "tools" / "avatars" / "models"
 NAMES = ["AvatarSample_D", "AvatarSample_D_Darkness", "AvatarSample_E", "AvatarSample_F", "AvatarSample_G",
          "Base_Female", "Base_Male", "HairSample_Female", "HairSample_Male", "Sakurada_Fumiriya", "Sendagaya_Shino"]
 
@@ -33,21 +32,11 @@ SEGMENTS = {
 }
 
 
-def mhr_limits(path):
-    lim = {}
-    for line in Path(path).read_text().splitlines():
-        p = line.split()
-        if len(p) >= 4 and p[0] == "limit" and p[2] == "minmax":
-            lo, hi = line.split("[")[1].split("]")[0].split(",")
-            lim[p[1]] = (float(lo), float(hi))
-    return lim
-
-
 def main():
     ch = load()
     jn = list(ch.skeleton.joint_names)
     pn = list(ch.parameter_transform.names)
-    lim = mhr_limits(Path(__file__).resolve().parents[2] / "data/mhr/assets/compact_v6_1.model")
+    lim = limits()
     zero = np.zeros(len(pn), np.float32)
     base = positions(ch, zero)
 

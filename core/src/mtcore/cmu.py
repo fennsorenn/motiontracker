@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-CMU_ROOT = Path(__file__).resolve().parents[2] / "data" / "cmu" / "all_asfamc" / "subjects"
+from .paths import CMU_ROOT
 
 
 def _rot(axis, deg):

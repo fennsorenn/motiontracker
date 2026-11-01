@@ -41,10 +41,15 @@ approach.
 4. **Code layout:** new `train/` uv project with CUDA PyTorch. Spike code that M1 reuses (CMU
    reader, CMU → MHR fit, MHR → VRM conversion, MHR loading) moves into a shared package instead
    of being imported from `spikes/`.
+5. **Shared package:** `core/`, Python package `mtcore` (follow-up, 2026-11-01).
+6. **Per-bone confidence** is output from the start, trained with an uncertainty-weighted loss
+   (follow-up, 2026-11-01; PLAN.md §3.4 needs it for the M4 merger).
+7. **Spine:** the model predicts all four MHR spine joints (`c_spine0..3`); the conversion folds
+   them onto VRM's spine bones (follow-up, 2026-11-01).
 
 ## Files in scope
 
-- `mhrcore/` (name open) — shared package: MHR loading/FK, CMU reader + fit, MHR → VRM conversion,
+- `core/` (`mtcore`) — shared package: MHR loading/FK, CMU reader + fit, MHR → VRM conversion,
   moved from `spikes/m3-mhr-vrm/` with tests. The spike keeps working or is pointed at it.
 - `train/` — uv project (CUDA PyTorch): data prep scripts, dataset, model, training loop, export.
 - `data/m1/` (gitignored) — fitted CMU sequences, generated training sets, checkpoints.
@@ -59,7 +64,7 @@ approach.
 
 ## Approach
 
-1. **Shared package.** Move the reused spike modules, add tests for the conversion round trip
+1. **Shared package.** (done) Move the reused spike modules, add tests for the conversion round trip
    and the CMU fit (small, fast).
 2. **Batch CMU → MHR fit.** Fit the selected clips at 30 fps (`step=4` on 120 fps), store MHR
    model parameters + subject scales per clip in `data/m1/fits/`. Log residuals; drop clips with
@@ -95,9 +100,6 @@ approach.
 
 ## Open questions (ask before deciding)
 
-- Shared package name and location.
-- Exact MHR joint set for the output (e.g. whether `c_spine0` is predicted or held).
-- Whether the model also outputs per-bone confidence in M1 (PLAN.md §3.4 wants it for M4).
 - How the `baseline-rendered` render stage is applied to model output (reuse the baseline's
   Node renderer with a rotation-track input, or reimplement).
 
