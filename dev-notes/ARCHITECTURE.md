@@ -2,7 +2,7 @@
 
 Learned live motion tracking for VRM 1.0 avatars: webcam → MediaPipe detectors → small causal learned heads + merger → bone rotations, root translation, blendshapes, gaze → VMC/OSC. Full context, decisions and open questions: `PLAN.md` (decision tags there are authoritative; `[CLAUDE]` items are unconfirmed).
 
-No learned-model or service code exists yet. Current milestone: M0 (baseline + evaluation harness, `PLAN.md` §10); tooling is implemented; the first real session (seated-v1, 2026-11-01) has been measured, more sessions with seated-v2 are next.
+No learned-model or service code exists yet. Current milestone: the M3 MHR ↔ VRM 1.0 mapping spike, run before M1 (owner decision 2026-11-01, `PLAN.md` §10 and §9 #1). M0 tooling is done and the first real session (seated-v1) has been measured. Remaining M0 items are deferred: more seated-v2 recordings run alongside M3, and the face-cost check moves to M4.
 
 ## Modules
 
@@ -11,6 +11,7 @@ No learned-model or service code exists yet. Current milestone: M0 (baseline + e
 | `baseline` | implemented (frozen) | Frozen snapshot of the owner's current algorithmic MediaPipe → VRM bone solver (vspark), for comparison. Details: `modules/baseline.md`. |
 | `eval-harness` | implemented | Python (`eval/`, package `mteval`): runs systems over recorded sessions and computes metrics (`PLAN.md` §6). Details: `modules/eval-harness.md`. |
 | `recorder` | implemented | Static browser page (`tools/recorder/`) that records test sessions: raw video + MediaPipe landmarks + protocol segments. Details: `modules/recorder.md`. |
+| `mhr-vrm-spike` | WIP (M3) | Spike: MHR ↔ VRM 1.0 joint mapping and round-trip check. |
 | `retargeting` | planned (M4) | Learned layer mapping the performer's pose onto the avatar's MHR identity, then to VRM 1.0 (`PLAN.md` §3.10a). |
 
 ### baseline (implemented, frozen)
@@ -29,7 +30,10 @@ Location: `eval/` (uv project, package `mteval`, CLI `mteval evaluate`). Runs sy
 - Compare systems at the same stage only (solver vs solver, rendered vs rendered).
 - Not yet: contact preservation, reprojection error. Success thresholds remain `[OPEN]`.
 
-Next step: record more sessions with the owner (seated-v2) and measure the baseline on them. Usage and metric definitions: `eval/README.md`.
+Next step: record more seated-v2 sessions with the owner (alongside M3) and measure the baseline on them. Usage and metric definitions: `eval/README.md`.
+
+### mhr-vrm-spike (WIP, M3)
+Started 2026-11-01. Scope: load the MHR rig and list its joints; build an MHR → VRM 1.0 joint mapping table; round-trip VRM → MHR → VRM on CMU clips; fit the VRoid sample avatars as MHR identities. Check spine, twist joints, fingers/thumb and rest pose. Code location and outcome not yet known. No module file yet.
 
 ### retargeting (planned, M4)
 Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracked on the performer's realistic MHR identity) onto the avatar's MHR identity, then to VRM 1.0. Avatar bone lengths enter only here. Trained to keep spatial accuracy (relative positions/directions between body parts, contacts included); may read earlier latents for temporal context. Comes after the M3 MHR↔VRM mapping spike. No module file yet.
