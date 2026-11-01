@@ -66,17 +66,21 @@ approach.
 
 1. **Shared package.** (done) Move the reused spike modules, add tests for the conversion round trip
    and the CMU fit (small, fast).
-2. **Batch CMU → MHR fit.** Fit the selected clips at 30 fps (`step=4` on 120 fps), store MHR
+2. **Batch CMU → MHR fit.** (done 2026-11-01: 760 clips, 3.1 h at 30 fps, arm residual median 0.4 cm;
+   QC flags 23 clips with arm p95 > 3 cm and 18 with wrist speeds > 10 m/s, to exclude.) Fit the selected clips at 30 fps (`step=4` on 120 fps), store MHR
    model parameters + subject scales per clip in `data/m1/fits/`. Log residuals; drop clips with
    bad fits. Loosen the spine pairing (spike finding: spine scales lean on their limits).
    About 0.3 s per 100 frames, so the whole set takes minutes to an hour on CPU.
-3. **Landmark synthesis.** Map MediaPipe's 33 pose landmarks to MHR joints/mesh points (face
+3. **Landmark synthesis.** (landmark model + camera done; MediaPipe bias layer next.) Map MediaPipe's 33 pose landmarks to MHR joints/mesh points (face
    points like nose, eyes, ears, mouth corners from the mesh; hips/shoulders/elbows/wrists from
    joints with an offset). Produce both outputs the recorder stores: world landmarks (metres,
    hip-centred, MediaPipe axes) and image landmarks (`pose2d`, from a sampled camera: desk-webcam
    framing, FOV, distance, tilt). Validate against the real session: bone length ratios,
    axis conventions, typical values.
-4. **Noise and framing model.** Calibrate on the recorded sessions: jitter spectrum per landmark
+4. **Noise and framing model.** First session comparison (2026-11-01): MediaPipe's landmarks differ
+   systematically from MHR anatomy: eye points 3.4 cm apart (MHR 6.3), hip points 6 cm wider,
+   arms ~17% and torso ~12% shorter. Needs a per-landmark bias layer, randomized around the
+   calibrated values, plus input normalization (e.g. by shoulder width). Calibrate on the recorded sessions: jitter spectrum per landmark
    at rest, depth noise vs 2D noise, visibility values, dropouts. Out-of-frame joints: imitate
    what MediaPipe does with arms below the frame (from the arms-below-frame segment; more
    seated-v2 sessions improve this). This is the hardest part and drives success criterion 1.
