@@ -72,7 +72,7 @@ def load_session(path: str | Path) -> Session:
         meta = json.loads((path / "session.json").read_text())
         lm = path / meta.get("landmarks", {}).get("file", "landmarks.jsonl")
         segments = [Segment(s["label"], float(s["t0"]), float(s["t1"])) for s in meta.get("segments", [])]
-        name = meta.get("name") or path.name
+        name = path.name  # the folder name is unique (timestamped); meta["name"] is a free label
     else:
         meta, lm, segments, name = {}, path, [], path.stem
     frames = [json.loads(line) for line in lm.read_text().splitlines() if line.strip()]
