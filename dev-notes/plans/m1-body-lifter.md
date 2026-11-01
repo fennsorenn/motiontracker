@@ -94,10 +94,13 @@ approach.
    breathing and sway, per-arm rest postures lap/desk/hanging from IK templates, limits clamped;
    camera framing sampled around the session's; seated hips get lower visibility as measured.) CMU upper body (spine and up) on a seated lower body (fixed hips/legs in a
    chair pose), plus idle sway/breathing.
-6. **Model + training.** Inputs: landmarks + visibility at time offsets, differences between
+6. **Model + training.** (code done 2026-11-02: `mttrain.skeleton/features/model/losses/dataset/train`;
+   17 rotations, 1.14M parameters, 0.7 ms/frame on one CPU thread; first run `m1-first` training.
+   Joint limits in training use a per-joint rotation-vector box measured on the clamped targets,
+   a cheap proxy for MHR's Euler limits.) Inputs: landmarks + visibility at time offsets, differences between
    them. Output: 6D rotations for the body joints. Losses as in decision 2; joint-limit penalty
    from MHR's `[Limits]`. Train on the 3090. Track held-out synthetic metrics.
-7. **Inference on sessions.** Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
+7. **Inference on sessions.** (`mttrain.infer` writes harness pose tracks; render stage still open.) Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
    write a pose track the harness accepts, apply the same render stage as `baseline-rendered`,
    and produce the harness report against the baseline.
 8. **Go/no-go write-up** in PLAN.md §6/§10 with the criteria table.
