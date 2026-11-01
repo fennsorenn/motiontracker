@@ -26,7 +26,7 @@ When the owner confirms or changes something, update the tag in `PLAN.md` (e.g. 
 - Person selection is out of scope (detector problem).
 
 ## Current state
-M0 in progress. The baseline (frozen copy of vspark's solver, verified bit-identical to vspark's engine) is in `baseline/`. Next: the evaluation harness (`PLAN.md` §6). See `dev-notes/ARCHITECTURE.md`.
+M0 in progress. Done: the baseline (`baseline/`, frozen copy of vspark's solver, bit-identical to vspark's engine), the session recorder (`tools/recorder/`) and the label-free evaluation harness (`eval/`). Next: record real sessions with the owner and measure the baseline. See `dev-notes/ARCHITECTURE.md`.
 
 ## Housekeeping
 - Maintain a license register (e.g. `docs/LICENSES-REGISTER.md`): source, license, link and usage for every asset, dataset, model and recording.

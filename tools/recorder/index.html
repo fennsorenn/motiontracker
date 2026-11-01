@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>motiontracker session recorder</title>
+  <style>
+    body { font: 15px/1.4 system-ui, sans-serif; margin: 1.5rem; max-width: 980px; color: #222; }
+    .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: .75rem; }
+    video { width: 640px; max-width: 100%; transform: scaleX(-1); background: #111; border-radius: 6px; }
+    #prompt { font-size: 1.5rem; min-height: 4.5rem; margin: .5rem 0; }
+    #status { font-family: ui-monospace, monospace; font-size: 13px; color: #555; white-space: pre; }
+    button { font-size: 15px; padding: .4rem 1rem; }
+    .rec { color: #c00; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Session recorder</h1>
+  <p>Records webcam video and MediaPipe Holistic landmarks the way vspark does: mirrored,
+    320×240, 10 FPS. See <code>tools/recorder/README.md</code>.</p>
+  <div class="row">
+    <label>Camera <select id="camera"></select></label>
+    <label>Video size <select id="size">
+      <option value="640x480" selected>640×480</option>
+      <option value="1280x960">1280×960</option>
+      <option value="320x240">320×240 (vspark's request)</option>
+    </select></label>
+    <label>Protocol <select id="protocol"></select></label>
+    <label>Name <input id="name" value="session" size="14"></label>
+  </div>
+  <div class="row">
+    <button id="start" disabled>Start recording</button>
+    <button id="stop" disabled>Stop and save</button>
+    <span id="state">Loading MediaPipe…</span>
+  </div>
+  <div id="prompt"></div>
+  <video id="video" playsinline muted></video>
+  <div id="status"></div>
+  <script type="module" src="recorder.js"></script>
+</body>
+</html>
