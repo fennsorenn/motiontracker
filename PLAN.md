@@ -188,8 +188,9 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
   - **Camera tilt vs body lean ambiguity**: add a short **calibration** step (neutral pose ≈1 s) as reference; output root position/orientation relative to it; feed calibration as context. Recalibration handles moved cameras.
 
 ### 3.10 Canonical skeleton and output
-- Owner **leans toward MHR**, but must confirm it maps cleanly to VRM. `[USER-LEAN]`
-- Claude's proposal: **MHR as internal canonical skeleton** for training and rendering, thin fixed retargeting layer to **VRM 1.0** at the output, **OpenXR hand joints** as an optional second output. Fallback: own canonical skeleton that's a superset of VRM bones, with MHR used only for rendering. `[CLAUDE]`
+- **MHR is the canonical skeleton; VRM poses are derived from MHR rotations.** `[USER]` (2026-11-01; was `[USER-LEAN]`). The M3 spike still has to confirm the mapping is clean.
+- **Target avatars' proportions are modeled as MHR identities**: each VRM avatar gets an MHR fit, and contact preservation (§3.3) works in MHR space on that fit. `[USER]` (2026-11-01). Owner will provide a few VRM models for this. Open risk: whether MHR's human-derived identity space can represent stylized (VRoid) proportions closely enough; see the M3 spike.
+- Claude's proposal: thin fixed retargeting layer from MHR to **VRM 1.0** at the output, **OpenXR hand joints** as an optional second output. Fallback: own canonical skeleton that's a superset of VRM bones, with MHR used only for rendering. `[CLAUDE]`
 - Reasons for MHR: Apache 2.0 (avoids SMPL licensing), explicit bone lengths (fits avatar-proportion conditioning), body+hands+face in one model, provides licensed realistic meshes for rendering, aligned with where the ecosystem is going. `[CLAUDE]`
 - Known risk: MHR's pose parameterization is richer and less game-engine-shaped; mapping trouble spots likely: **spine segment count, forearm twist joints (VRM has none; fold twist into lower arm/hand), finger/thumb conventions, rest pose**. `[CLAUDE]` → needs spike (§9)
 - **Gaze**: owner sees no reason to treat it differently from other outputs. `[USER]`
