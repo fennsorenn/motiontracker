@@ -120,6 +120,8 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
 - **Disabling parts to save compute must work** (owner's question). Approach: **modality dropout** in training: randomly drop whole parts, replace with learned "missing" token + mask flag. Same mechanism handles hands leaving frame / detector dropouts. `[CLAUDE]`
   - Note: disabling a part saves *detector* compute; the heads themselves are negligible.
 - **Arms resting below the frame must look natural.** This is a normal streaming posture, not an edge case: elbows and wrists out of frame, hands undetected. `[USER]` (2026-11-01). Observed in the first real session: the baseline jitters most here because MediaPipe guesses the off-frame joints and vspark holds stale hand landmarks.
+- **Hand position parity must improve.** The baseline's hands land away from where the real hands are, because per-bone rotation errors add up along the shoulder → upper arm → forearm → hand chain. `[USER]` (2026-11-01). What "parity" targets (the user's real hand position vs. contacts preserved on the avatar's proportions) is `[OPEN]`.
+- **No impossible poses**, especially no jittering into them at low confidence or on full tracking loss. `[USER]` (2026-11-01).
 - **Asynchronous update rates** per part (e.g. hands at lower rate when compute-tight): each head receives time since its last update. `[CLAUDE]`
 
 ### 3.4 Head ↔ merger interface
