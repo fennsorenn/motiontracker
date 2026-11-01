@@ -26,7 +26,7 @@ When the owner confirms or changes something, update the tag in `PLAN.md` (e.g. 
 - Person selection is out of scope (detector problem).
 
 ## Current state
-Planning done; no code yet. Next step per suggested milestones (`PLAN.md` §10, unconfirmed order): M0, extract the owner's current tracking implementation as a baseline and build the evaluation harness.
+M0 in progress. The baseline (frozen copy of vspark's solver, verified bit-identical to vspark's engine) is in `baseline/`. Next: the evaluation harness (`PLAN.md` §6). See `dev-notes/ARCHITECTURE.md`.
 
 ## Housekeeping
 - Maintain a license register (e.g. `docs/LICENSES-REGISTER.md`): source, license, link and usage for every asset, dataset, model and recording.

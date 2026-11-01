@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "ESNext.Decorators"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@vspark/shared/signal": ["./vendor/shared/signal.ts"],
+      "@vspark/shared/signal_types": ["./vendor/shared/signal_types.ts"],
+      "@vspark/shared/node": ["./vendor/shared/node.ts"],
+      "@vspark/shared/node_decorators": ["./vendor/shared/node_decorators.ts"]
+    }
+  },
+  "include": ["src/**/*", "test/**/*", "vendor/**/*", "vitest.config.ts"]
+}

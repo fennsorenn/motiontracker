@@ -1,0 +1,21 @@
+{
+  "name": "@motiontracker/baseline",
+  "private": true,
+  "type": "module",
+  "description": "Frozen snapshot of vspark's algorithmic MediaPipe -> VRM solver, runnable standalone as the M0 baseline.",
+  "scripts": {
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "run-baseline": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "three": "^0.168.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/three": "~0.168.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  }
+}

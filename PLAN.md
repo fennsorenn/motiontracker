@@ -47,7 +47,7 @@ A live motion-tracking system that drives VRM avatars (primarily VRoid models) f
 - **ARKit** is already a tracking option in the app, but only covers face/head and isn't available to all users. `[USER]`
 - The current tracking implementation exists on the owner's machine and will be **extracted as the baseline** for comparison. `[USER]`
   - Source: `../vspark`, branch `bugfix/mediapipe-arm-solve` **including its uncommitted WIP** (elbow-hinge arm solve + confidence-weighted `pose_smooth` node), judged more accurate than the last commit. `[USER]` (2026-11-01)
-  - Extraction method (copy vs run in place vs recorded outputs): `[OPEN]`
+  - Extraction method: **frozen copy** of the solver into `baseline/` with a standalone driver (not running vspark in place, not recorded outputs only). `[USER]` (2026-11-01). Provenance and fidelity notes in `baseline/README.md`.
 
 ---
 
