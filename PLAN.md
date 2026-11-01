@@ -120,7 +120,7 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
 - **Disabling parts to save compute must work** (owner's question). Approach: **modality dropout** in training: randomly drop whole parts, replace with learned "missing" token + mask flag. Same mechanism handles hands leaving frame / detector dropouts. `[CLAUDE]`
   - Note: disabling a part saves *detector* compute; the heads themselves are negligible.
 - **Arms resting below the frame must look natural.** This is a normal streaming posture, not an edge case: elbows and wrists out of frame, hands undetected. `[USER]` (2026-11-01). Observed in the first real session: the baseline jitters most here because MediaPipe guesses the off-frame joints and vspark holds stale hand landmarks.
-- **Hand position parity must improve.** The baseline's hands land away from where the real hands are, because per-bone rotation errors add up along the shoulder → upper arm → forearm → hand chain. `[USER]` (2026-11-01). Target: **hand position relative to the character** (contacts like hand-on-face, hands together, hand on chest preserved on the avatar's proportions) matters more than matching the hand's absolute position in space, which is approximate anyway. `[USER]` (2026-11-01). Where contact preservation lives (model conditioned on avatar proportions vs. a separate retargeting/IK step after the model) is `[OPEN]`.
+- **Hand position parity must improve.** The baseline's hands land away from where the real hands are, because per-bone rotation errors add up along the shoulder → upper arm → forearm → hand chain. `[USER]` (2026-11-01). Target: **hand position relative to the character** (contacts like hand-on-face, hands together, hand on chest preserved on the avatar's proportions) matters more than matching the hand's absolute position in space, which is approximate anyway. `[USER]` (2026-11-01). Not just contacts: relative positions and directions between parts must hold before they touch (e.g. two index fingers approaching each other). Handled by the learned retargeting layer (§3.10a). `[USER]` (2026-11-01)
 - **No impossible poses**, especially no jittering into them at low confidence or on full tracking loss. `[USER]` (2026-11-01).
 - **Asynchronous update rates** per part (e.g. hands at lower rate when compute-tight): each head receives time since its last update. `[CLAUDE]`
 
@@ -190,12 +190,23 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
 ### 3.10 Canonical skeleton and output
 - **MHR is the canonical skeleton; VRM poses are derived from MHR rotations.** `[USER]` (2026-11-01; was `[USER-LEAN]`). The M3 spike still has to confirm the mapping is clean.
 - **Two identities: performer and avatar.** The video shows the performer with (usually) realistic proportions; the avatar has its own, often stylized ones. Both are MHR identities and must be kept distinct: the pose is tracked on the performer's proportions and then mapped onto the avatar's. `[USER]` (2026-11-01)
-- **Target avatars' proportions are modeled as MHR identities**: each VRM avatar gets an MHR fit, and contact preservation (§3.3) works in MHR space on that fit. `[USER]` (2026-11-01). Owner will provide a few VRM models for this. Open risk: whether MHR's human-derived identity space can represent stylized (VRoid) proportions closely enough; see the M3 spike.
+- **Target avatars' proportions are modeled as MHR identities**: each VRM avatar gets an MHR fit, and the retargeting layer (§3.10a) maps the performer's pose onto that fit. `[USER]` (2026-11-01). Owner will provide a few VRM models for this. Open risk: whether MHR's human-derived identity space can represent stylized (VRoid) proportions closely enough; see the M3 spike.
 - Claude's proposal: thin fixed retargeting layer from MHR to **VRM 1.0** at the output, **OpenXR hand joints** as an optional second output. Fallback: own canonical skeleton that's a superset of VRM bones, with MHR used only for rendering. `[CLAUDE]`
 - Reasons for MHR: Apache 2.0 (avoids SMPL licensing), explicit bone lengths (fits avatar-proportion conditioning), body+hands+face in one model, provides licensed realistic meshes for rendering, aligned with where the ecosystem is going. `[CLAUDE]`
 - Known risk: MHR's pose parameterization is richer and less game-engine-shaped; mapping trouble spots likely: **spine segment count, forearm twist joints (VRM has none; fold twist into lower arm/hand), finger/thumb conventions, rest pose**. `[CLAUDE]` → needs spike (§9)
 - **Gaze**: owner sees no reason to treat it differently from other outputs. `[USER]`
   - Detail: since VRM look-at is bone- or expression-based per avatar, output **canonical gaze angles per eye** and let the adapter map to bones or expressions (three-vrm's look-at handles both). `[CLAUDE]`
+
+### 3.10a Learned retargeting layer
+- **A learned retargeting layer maps the performer's pose onto the avatar.** Avatar bone lengths are fed only into this layer; everything before it works in the performer's proportions and stays avatar-independent. It is trained explicitly to keep spatial accuracy (relative positions and directions between body parts, contacts included) and can read earlier latents so temporal history informs the targeting. `[USER]` (2026-11-01)
+- Rejected alternatives (2026-11-01): a purely analytic IK step that only snaps explicit contacts (sees one pose, flickers near contact thresholds, misses pre-contact geometry); explicit contact probabilities from the model plus analytic IK (too narrow: only contacts). `[DISCARDED]`
+- Details proposed by Claude, not yet confirmed `[CLAUDE]`:
+  - **Placement after the merger**, since the relations that matter span parts (left finger to right finger, hand to face).
+  - **Residual on plain rotation transfer**: output = performer rotations copied to the avatar + learned correction. Worst case degrades to ordinary retargeting; identity when proportions match.
+  - **Explicit pose + confidence as main input, latents optional with dropout**, so head retrains don't force a retargeting retrain (same rule as §3.4).
+  - **Self-supervised objective**: preserve vectors between key points (fingertips, hands, face, chest) scaled to each body, weighted up as pairs get closer; regularized by rotation similarity, joint limits (also serves the no-impossible-poses requirement, §3.3) and smoothness. Training pairs = any motion × randomly sampled avatar MHR identity; no paired labels needed. Prior art: spatial-relationship-preserving retargeting.
+  - **Evaluation split**: performer-space hand accuracy label-free on real video; retargeting quality on synthetic poses with the same relation metric.
+  - **Timing**: not needed for M1; fits M4, after the M3 MHR mapping spike.
 
 ### 3.11 Blendshapes
 - Not the owner's focus (many setups use ARKit), but **include for completeness**. `[USER]`
@@ -370,7 +381,7 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 2. **M1: Body keypoint lifter POC.** MediaPipe pose keypoints → causal temporal head → rotations. Data: CMU + synthetic seated motion + simulated noise; short history window. Compare against baseline on real seated video. **Go/no-go point** for the learned approach.
 3. **M2: Service skeleton** (can run parallel to M1). Python service owning camera; VMC over UDP + OSC over WebSocket; browser viewer with three-vrm; video-file source for repeatable tests; timestamps, sequence numbers, latest-wins.
 4. **M3: MHR ↔ VRM spike** (can run parallel). Decide canonical skeleton.
-5. **M4: Hand and face heads + merger.** Procedural hands; face head on top of MediaPipe blendshapes; modality dropout; residual merger; gaze angles.
+5. **M4: Hand and face heads + merger.** Procedural hands; face head on top of MediaPipe blendshapes; modality dropout; residual merger; gaze angles; learned retargeting layer (§3.10a).
 6. **M5: Root translation + calibration.**
 7. **M6: Render-then-detect pipeline** (three.js first). Self-supervised reprojection on real video; adversarial motion prior.
 8. **M7: Feature taps.** Convert MediaPipe models to PyTorch/ONNX; reimplement detect-track plumbing; feature-level heads (forearm twist).
