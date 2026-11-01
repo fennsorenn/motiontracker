@@ -7,13 +7,14 @@ Status: implemented. Usage, system definitions, metric table and known limits: `
 uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. If sandboxed, uv may need `UV_CACHE_DIR` set.
 
 - `quat.py` — quaternion helpers.
-- `session.py` — `Session` / `Segment` / `PoseTrack` loading (recorder session dirs or bare landmarks files). `auto_still_segments`: windowed-average landmark speed, threshold 0.12 m/s (set from one static clip, rough).
+- `session.py` — `Session` / `Segment` (optional `variant`) / `PoseTrack` loading (recorder session dirs or bare landmarks files). A session is named after its folder, not the `name` in `session.json`. `auto_still_segments`: windowed-average landmark speed, threshold 0.12 m/s (set from one static clip, rough).
 - `metrics.py` — label-free and labeled metrics. All time-based so systems with different output rates are comparable. `xcorr_lag` linearly resamples midpoint-stamped speeds onto a common grid to stay unbiased across rates.
 - `systems.py` — system registry.
   - Builtins `baseline` and `baseline-rendered`: run the baseline CLI (`baseline/`, needs `pnpm install`), with head calibration captured at the middle of the first `still` segment.
   - `name=path.jsonl`: precomputed `OutputFrame` JSONL (`{t, bones:{vrmBone:[x,y,z,w]}}`).
 - `report.py` — `evaluate` → JSON; summary is the median per bone group (torso/head, shoulders, arms, hands, fingers); markdown rendering.
-- `cli.py` — `mteval evaluate`.
+  - Pooled rest metrics are over all `still` segments together. Additionally `per_still_segment` per system and a top-level `still_segment_summary` break rest noise / twitches down per still segment (keyed by `variant` where present); the markdown adds a "Rest by still segment" table when a session has more than one still segment.
+- `cli.py` — `mteval evaluate`. Reports default to `<repo>/reports/<session folder>/` regardless of cwd.
 - `tests/test_metrics.py` — synthetic known-answer tests for every metric. `tests/test_end_to_end.py` — runs the real baseline on vspark's `hand_dropouts` clip.
 
 ## Extending
@@ -32,7 +33,9 @@ uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. 
 - MediaPipe pose world landmarks jitter about 5 cm/s median at rest.
 - Hands are the noisiest bones at rest: rest noise about 3.6 deg (solver), 2.1 deg (rendered).
 
-Real-session baseline numbers are still pending (next step: record sessions with the owner).
+## First real session (2026-11-01)
+
+- Baseline hand rest noise depends strongly on rest posture: about 9.9 deg with arms below the frame vs about 1.8 deg with elbows in view. This motivated the `seated-v2` protocol and the per-still-segment breakdown; pooled rest metrics hide the difference.
 
 ## Not yet
 
