@@ -13,7 +13,7 @@ uv run mteval evaluate ../sessions/<session> --system baseline --system mymodel=
 uv run pytest
 ```
 
-The report goes to `reports/<session>/report.md` and `report.json`, or to `--out`.
+The report goes to `reports/<session folder>/report.md` and `report.json` at the repo root, or to `--out`.
 
 - **Systems:** `baseline` is vspark's solver output, one pose per detector frame.
   `baseline-rendered` adds vspark's frontend One Euro filter at 60 Hz, which is what the
