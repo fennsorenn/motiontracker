@@ -1,0 +1,14 @@
+[project]
+name = "m3-mhr-vrm"
+version = "0.0.0"
+description = "M3 spike: MHR <-> VRM 1.0 mapping (see dev-notes/plans/m3-mhr-vrm-spike.md)"
+requires-python = ">=3.12,<3.13"
+dependencies = ["mhr", "pymomentum-cpu", "torch", "numpy", "trimesh>=4.8.3,<5"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
