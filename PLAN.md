@@ -195,6 +195,10 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
 - Claude's proposal: thin fixed retargeting layer from MHR to **VRM 1.0** at the output, **OpenXR hand joints** as an optional second output. Fallback: own canonical skeleton that's a superset of VRM bones, with MHR used only for rendering. `[CLAUDE]`
 - Reasons for MHR: Apache 2.0 (avoids SMPL licensing), explicit bone lengths (fits avatar-proportion conditioning), body+hands+face in one model, provides licensed realistic meshes for rendering, aligned with where the ecosystem is going. `[CLAUDE]`
 - **M3 spike findings (2026-11-01)**, details in `dev-notes/plans/m3-mhr-vrm-spike.md`: rotations map onto VRM 1.0 with a fixed per-bone rest offset; bone directions exact, end-effector error under ~1 cm from folding joints VRM lacks. `[CORRECTED]` Bone lengths come from MHR's additive `scale_*` model parameters, not the 45 identity coefficients (those shape the mesh only). Stylized VRoid shoulders and some lower legs fall outside MHR's human limits (soft penalties, still representable). MHR's `*_flexible` joint translations can't be expressed in VRM.
+- **Canonical skeleton rules from the M3 spike** `[USER]` (2026-11-01):
+  - Avatar MHR fits may go beyond MHR's human scale limits; the performer identity stays within them.
+  - MHR's `*_flexible` joint translations stay at zero in the canonical pose (VRM bones can't translate).
+  - Forearm twist goes onto VRM `lowerArm` via a swing-twist split, not onto the hand.
 - Known risk: MHR's pose parameterization is richer and less game-engine-shaped; mapping trouble spots likely: **spine segment count, forearm twist joints (VRM has none; fold twist into lower arm/hand), finger/thumb conventions, rest pose**. `[CLAUDE]` → needs spike (§9)
 - **Gaze**: owner sees no reason to treat it differently from other outputs. `[USER]`
   - Detail: since VRM look-at is bone- or expression-based per avatar, output **canonical gaze angles per eye** and let the adapter map to bones or expressions (three-vrm's look-at handles both). `[CLAUDE]`

@@ -113,10 +113,10 @@ Code: `spikes/m3-mhr-vrm/` (uv, CPU PyTorch). `dump_skeleton.py`, `fit_avatars.p
 ## Open decisions
 
 - ~~Python environment~~: uv + pip, CPU PyTorch for the spike (owner, 2026-11-01).
-- Allow avatar fits outside MHR's human limits (avatar side only; performer stays within)?
-- Flexible translation parameters: keep at zero in the canonical pose?
-- Forearm twist on VRM hand (as now) or split onto lowerArm?
-- CMU round trip (step 4) needs a CMU → MHR fit, which is also M1's data preparation.
+- ~~Avatar fits outside MHR's limits~~: allowed on the avatar side only (owner, 2026-11-01).
+- ~~Flexible translations~~: kept at zero (owner, 2026-11-01).
+- ~~Forearm twist~~: swing-twist split onto lowerArm (owner, 2026-11-01).
+- ~~CMU round trip~~: go ahead; its CMU → MHR fit doubles as M1 data preparation (owner, 2026-11-01).
 
 ## Output
 
