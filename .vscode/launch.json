@@ -1,0 +1,109 @@
+{
+  // M3 spike (spikes/m3-mhr-vrm). Needs `uv sync` in that folder first; uses its .venv.
+  // Nothing here is trained: these are geometry checks and IK fits.
+  "version": "0.2.0",
+  "inputs": [
+    {
+      "id": "avatar",
+      "type": "pickString",
+      "description": "VRoid sample avatar (../volleyball/tools/avatars/models)",
+      "options": ["AvatarSample_D", "AvatarSample_D_Darkness", "AvatarSample_E", "AvatarSample_F", "AvatarSample_G",
+                  "Base_Female", "Base_Male", "HairSample_Female", "HairSample_Male", "Sakurada_Fumiriya", "Sendagaya_Shino"],
+      "default": "AvatarSample_D"
+    },
+    {
+      "id": "poseFraction",
+      "type": "pickString",
+      "description": "Random pose range as a fraction of MHR's joint limits",
+      "options": ["0.25", "0.5", "1.0"],
+      "default": "0.5"
+    },
+    {
+      "id": "cmuSubject",
+      "type": "promptString",
+      "description": "CMU subject number",
+      "default": "2"
+    },
+    {
+      "id": "cmuClip",
+      "type": "promptString",
+      "description": "CMU clip number",
+      "default": "1"
+    }
+  ],
+  "configurations": [
+    {
+      "name": "Spike: test_roundtrip (bone directions)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spikes/m3-mhr-vrm/test_roundtrip.py",
+      "args": ["${input:avatar}"],
+      "cwd": "${workspaceFolder}/spikes/m3-mhr-vrm",
+      "python": "${workspaceFolder}/spikes/m3-mhr-vrm/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Spike: test_positions (end-effector error)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spikes/m3-mhr-vrm/test_positions.py",
+      "args": ["${input:poseFraction}"],
+      "cwd": "${workspaceFolder}/spikes/m3-mhr-vrm",
+      "python": "${workspaceFolder}/spikes/m3-mhr-vrm/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Spike: eval_cmu_roundtrip (spatial relations)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spikes/m3-mhr-vrm/eval_cmu_roundtrip.py",
+      "cwd": "${workspaceFolder}/spikes/m3-mhr-vrm",
+      "python": "${workspaceFolder}/spikes/m3-mhr-vrm/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Spike: fit_cmu (one CMU clip)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spikes/m3-mhr-vrm/fit_cmu.py",
+      "args": ["${input:cmuSubject}", "${input:cmuClip}"],
+      "cwd": "${workspaceFolder}/spikes/m3-mhr-vrm",
+      "python": "${workspaceFolder}/spikes/m3-mhr-vrm/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Spike: fit_avatars (proportions vs MHR limits)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spikes/m3-mhr-vrm/fit_avatars.py",
+      "cwd": "${workspaceFolder}/spikes/m3-mhr-vrm",
+      "python": "${workspaceFolder}/spikes/m3-mhr-vrm/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Spike: dump_skeleton (MHR rest skeleton)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spikes/m3-mhr-vrm/dump_skeleton.py",
+      "cwd": "${workspaceFolder}/spikes/m3-mhr-vrm",
+      "python": "${workspaceFolder}/spikes/m3-mhr-vrm/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Spike: scan_cmu (rank CMU clips)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spikes/m3-mhr-vrm/scan_cmu.py",
+      "cwd": "${workspaceFolder}/spikes/m3-mhr-vrm",
+      "python": "${workspaceFolder}/spikes/m3-mhr-vrm/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

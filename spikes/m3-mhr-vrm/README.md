@@ -14,6 +14,8 @@ uv run python scan_cmu.py                 # rank CMU clips by upper-body activit
 uv run python eval_cmu_roundtrip.py       # CMU -> MHR -> avatars: spatial relations
 ```
 
+VS Code: the repo's `.vscode/launch.json` has a "Spike: …" entry per script (run `uv sync` first).
+
 | File | What |
 |---|---|
 | `convert.py` | MHR skeleton state → VRM 1.0 normalized local rotations (`MhrToVrm`), VRM FK. |
