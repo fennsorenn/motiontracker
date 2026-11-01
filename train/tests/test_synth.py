@@ -73,3 +73,14 @@ def test_synthesize_shapes():
     T = len(s["t"])
     assert 25 <= T <= 31 and s["world"].shape == (T, 33, 3) and s["vis"].shape == (T, 33)
     assert np.isfinite(s["world"]).all() and np.isfinite(s["image"]).all()
+
+
+def test_visibility_lags_when_leaving_the_frame():
+    rng = np.random.default_rng(5)
+    T = 30
+    image = np.full((T, 33, 3), 0.5)
+    image[10:, I("left_wrist"), 1] = 1.6
+    quiet = NoiseConfig(jitter_scale=0.0, guess_sigma=0.0, vis_logit_sigma=0.0, glitch_rate=0.0, dropout_rate=0.0)
+    _, _, vis, _ = observe(rng, np.zeros((T, 33, 3)), image, np.full(T, 0.1), quiet)
+    v = vis[:, I("left_wrist")]
+    assert v[9] > 0.95 and 0.3 < v[11] < 0.95 and v[29] < 0.1  # decays over several frames

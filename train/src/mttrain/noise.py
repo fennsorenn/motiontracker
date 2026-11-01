@@ -7,6 +7,9 @@ Calibrated on the first recorded session (2026-11-01, seated-v1, 10 FPS; `python
 - Jitter is slow: lag-1 autocorrelation ~0.85 at 10 FPS -> AR(1) noise.
 - Visibility vs distance outside the frame (normalized units, negative = inside): ~0.99 well
   inside, 0.96 near the edge, ~0.68 within +-0.05..0.15 of it, 0.13 at 0.15-0.3, 0.02 beyond.
+- Visibility lags: when the hands drop just below the frame, wrist visibility decays over ~1.3 s
+  (0.94 -> 0.48) and recovers over a few frames when they return (dropout segment) -> first-order
+  lag toward the curve, slower falling than rising. Positions stay plausible meanwhile.
 - Far outside the frame MediaPipe guesses, and its guesses are smooth (knee ~4 mm jitter), so
   out-of-frame points get a slowly drifting offset, not more jitter.
 Synthetic vs real (`python -m mttrain.calibrate`): proportions and visibility match; synthetic
@@ -53,6 +56,8 @@ class NoiseConfig:
     guess_sigma: float = 0.06  # metres, drift of far out-of-frame guesses
     guess_rho10: float = 0.97
     vis_logit_sigma: float = 0.5
+    vis_tau_fall: float = 0.6  # s
+    vis_tau_rise: float = 0.3  # s
     glitch_rate: float = 0.003  # per frame
     glitch_sigma: float = 0.08
     dropout_rate: float = 0.005  # whole-frame detector misses
@@ -65,6 +70,8 @@ class NoiseConfig:
                    image_per_metre=float(rng.uniform(0.8, 1.6)),
                    jitter_scale=float(np.exp(rng.normal(0, 0.35))),
                    guess_sigma=float(rng.uniform(0.02, 0.12)),
+                   vis_tau_fall=float(rng.uniform(0.3, 1.0)),
+                   vis_tau_rise=float(rng.uniform(0.1, 0.5)),
                    glitch_rate=float(rng.uniform(0.0, 0.01)),
                    dropout_rate=float(rng.uniform(0.0, 0.02)))
 
@@ -92,8 +99,13 @@ def observe(rng, world, image, dt, cfg=None):
     cfg = cfg or NoiseConfig()
     T = len(dt)
     d = outside_distance(image)
-    # visibility: curve + slow logit noise
-    v = np.interp(d, *VIS_CURVE)
+    # visibility: lagged curve + slow logit noise
+    target = np.interp(d, *VIS_CURVE)
+    v = target.copy()
+    for t in range(1, T):
+        tau = np.where(target[t] < v[t - 1], cfg.vis_tau_fall, cfg.vis_tau_rise)
+        a = 1 - np.exp(-dt[t] / np.maximum(tau, 1e-6))
+        v[t] = v[t - 1] + a * (target[t] - v[t - 1])
     logit = np.log(v / (1 - v)) + cfg.vis_logit_sigma * _ar1(rng, dt, 0.8, (33,))
     vis = 1 / (1 + np.exp(-logit))
 
