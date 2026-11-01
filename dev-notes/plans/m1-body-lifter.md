@@ -71,7 +71,7 @@ approach.
    model parameters + subject scales per clip in `data/m1/fits/`. Log residuals; drop clips with
    bad fits. Loosen the spine pairing (spike finding: spine scales lean on their limits).
    About 0.3 s per 100 frames, so the whole set takes minutes to an hour on CPU.
-3. **Landmark synthesis.** (landmark model + camera done; MediaPipe bias layer next.) Map MediaPipe's 33 pose landmarks to MHR joints/mesh points (face
+3. **Landmark synthesis.** (done: `mtcore.landmarks`, `mttrain.camera`, `mttrain.synth`.) Map MediaPipe's 33 pose landmarks to MHR joints/mesh points (face
    points like nose, eyes, ears, mouth corners from the mesh; hips/shoulders/elbows/wrists from
    joints with an offset). Produce both outputs the recorder stores: world landmarks (metres,
    hip-centred, MediaPipe axes) and image landmarks (`pose2d`, from a sampled camera: desk-webcam
@@ -80,7 +80,13 @@ approach.
 4. **Noise and framing model.** First session comparison (2026-11-01): MediaPipe's landmarks differ
    systematically from MHR anatomy: eye points 3.4 cm apart (MHR 6.3), hip points 6 cm wider,
    arms ~17% and torso ~12% shorter. Needs a per-landmark bias layer, randomized around the
-   calibrated values, plus input normalization (e.g. by shoulder width). Calibrate on the recorded sessions: jitter spectrum per landmark
+   calibrated values, plus input normalization (e.g. by shoulder width).
+   Done 2026-11-01 (`mttrain.mpstyle`, `mttrain.noise`, `mttrain.calibrate`): placement biases (both
+   spaces) vs world-only distortions, calibrated against the fitted CMU population; AR(1) jitter,
+   visibility and drifting guesses by distance outside the frame, lagged visibility, glitches,
+   dropouts; all randomized per sequence. Synthetic vs real: proportions and visibility match,
+   rest jitter ~0.6-1x real. Limits: one session, one person; how wrong MediaPipe's far
+   out-of-frame guesses are is unknown (seated-v2 sessions needed). Calibrate on the recorded sessions: jitter spectrum per landmark
    at rest, depth noise vs 2D noise, visibility values, dropouts. Out-of-frame joints: imitate
    what MediaPipe does with arms below the frame (from the arms-below-frame segment; more
    seated-v2 sessions improve this). This is the hardest part and drives success criterion 1.
