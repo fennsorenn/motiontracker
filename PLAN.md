@@ -46,6 +46,8 @@ A live motion-tracking system that drives VRM avatars (primarily VRoid models) f
 - The app runs in **Node**. Its stack is based on **three.js** (three-vrm). `[USER]`
 - **ARKit** is already a tracking option in the app, but only covers face/head and isn't available to all users. `[USER]`
 - The current tracking implementation exists on the owner's machine and will be **extracted as the baseline** for comparison. `[USER]`
+  - Source: `../vspark`, branch `bugfix/mediapipe-arm-solve` **including its uncommitted WIP** (elbow-hinge arm solve + confidence-weighted `pose_smooth` node), judged more accurate than the last commit. `[USER]` (2026-11-01)
+  - Extraction method (copy vs run in place vs recorded outputs): `[OPEN]`
 
 ---
 
