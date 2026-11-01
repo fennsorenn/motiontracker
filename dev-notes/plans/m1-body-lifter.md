@@ -90,7 +90,9 @@ approach.
    at rest, depth noise vs 2D noise, visibility values, dropouts. Out-of-frame joints: imitate
    what MediaPipe does with arms below the frame (from the arms-below-frame segment; more
    seated-v2 sessions improve this). This is the hardest part and drives success criterion 1.
-5. **Seated motion.** CMU upper body (spine and up) on a seated lower body (fixed hips/legs in a
+5. **Seated motion.** (done 2026-11-01, `mttrain.seated`: seated legs, damped pelvis lean/turn,
+   breathing and sway, per-arm rest postures lap/desk/hanging from IK templates, limits clamped;
+   camera framing sampled around the session's; seated hips get lower visibility as measured.) CMU upper body (spine and up) on a seated lower body (fixed hips/legs in a
    chair pose), plus idle sway/breathing.
 6. **Model + training.** Inputs: landmarks + visibility at time offsets, differences between
    them. Output: 6D rotations for the body joints. Losses as in decision 2; joint-limit penalty
