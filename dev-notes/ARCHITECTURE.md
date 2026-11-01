@@ -2,7 +2,7 @@
 
 Learned live motion tracking for VRM 1.0 avatars: webcam → MediaPipe detectors → small causal learned heads + merger → bone rotations, root translation, blendshapes, gaze → VMC/OSC. Full context, decisions and open questions: `PLAN.md` (decision tags there are authoritative; `[CLAUDE]` items are unconfirmed).
 
-No learned-model or service code exists yet. Current milestone: M0 (baseline + evaluation harness, `PLAN.md` §10); tooling is implemented, measuring the baseline on real recordings is pending.
+No learned-model or service code exists yet. Current milestone: M0 (baseline + evaluation harness, `PLAN.md` §10); tooling is implemented; the first real session (seated-v1, 2026-11-01) has been measured, more sessions with seated-v2 are next.
 
 ## Modules
 
@@ -28,7 +28,7 @@ Location: `eval/` (uv project, package `mteval`, CLI `mteval evaluate`). Runs sy
 - Compare systems at the same stage only (solver vs solver, rendered vs rendered).
 - Not yet: contact preservation, reprojection error. Success thresholds remain `[OPEN]`.
 
-Next step: record real sessions with the owner and measure the baseline. Usage and metric definitions: `eval/README.md`.
+Next step: record more sessions with the owner (seated-v2) and measure the baseline on them. Usage and metric definitions: `eval/README.md`.
 
 ## Key decisions
 - Build the evaluation harness and measure the baseline before training any model (`PLAN.md` §6).
