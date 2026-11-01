@@ -194,6 +194,12 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
 - **Target avatars' proportions are modeled as MHR identities**: each VRM avatar gets an MHR fit, and the retargeting layer (§3.10a) maps the performer's pose onto that fit. `[USER]` (2026-11-01). Owner will provide a few VRM models for this. Open risk: whether MHR's human-derived identity space can represent stylized (VRoid) proportions closely enough; see the M3 spike.
 - Claude's proposal: thin fixed retargeting layer from MHR to **VRM 1.0** at the output, **OpenXR hand joints** as an optional second output. Fallback: own canonical skeleton that's a superset of VRM bones, with MHR used only for rendering. `[CLAUDE]`
 - Reasons for MHR: Apache 2.0 (avoids SMPL licensing), explicit bone lengths (fits avatar-proportion conditioning), body+hands+face in one model, provides licensed realistic meshes for rendering, aligned with where the ecosystem is going. `[CLAUDE]`
+- **M3 spike findings (2026-11-01)**, details in `dev-notes/plans/m3-mhr-vrm-spike.md`: rotations map onto VRM 1.0 with a fixed per-bone rest offset; bone directions exact, end-effector error under ~1 cm from folding joints VRM lacks. `[CORRECTED]` Bone lengths come from MHR's additive `scale_*` model parameters, not the 45 identity coefficients (those shape the mesh only). Stylized VRoid shoulders and some lower legs fall outside MHR's human limits (soft penalties, still representable). MHR's `*_flexible` joint translations can't be expressed in VRM.
+- **M3 spike result (2026-11-01): go.** CMU → MHR fitting works (median residual ~1 cm, limbs below that). Plain rotation transfer onto stylized VRoid avatars misses close contacts by ~1–5 cm median, up to ~7 cm (p90), while preserving them exactly on an avatar with the performer's proportions: proportion differences, not the conversion, cause the misses. Confirms the need for the retargeting layer (§3.10a).
+- **Canonical skeleton rules from the M3 spike** `[USER]` (2026-11-01):
+  - Avatar MHR fits may go beyond MHR's human scale limits; the performer identity stays within them.
+  - MHR's `*_flexible` joint translations stay at zero in the canonical pose (VRM bones can't translate).
+  - Forearm twist goes onto VRM `lowerArm` via a swing-twist split, not onto the hand.
 - Known risk: MHR's pose parameterization is richer and less game-engine-shaped; mapping trouble spots likely: **spine segment count, forearm twist joints (VRM has none; fold twist into lower arm/hand), finger/thumb conventions, rest pose**. `[CLAUDE]` → needs spike (§9)
 - **Gaze**: owner sees no reason to treat it differently from other outputs. `[USER]`
   - Detail: since VRM look-at is bone- or expression-based per avatar, output **canonical gaze angles per eye** and let the adapter map to bones or expressions (three-vrm's look-at handles both). `[CLAUDE]`
@@ -367,7 +373,7 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 
 | # | Question | Owner of decision | Notes |
 |---|---|---|---|
-| 1 | **MHR → VRM 1.0 maps cleanly?** | Owner (after spike) | Spike: load MHR rig, list joints, build mapping table; round-trip VRM→MHR→VRM on CMU clips; check spine, twist joints, fingers/thumb, rest pose. |
+| 1 | ~~**MHR → VRM 1.0 maps cleanly?**~~ Resolved 2026-11-01: yes (M3 spike, §3.10). | Owner (after spike) | Spike: load MHR rig, list joints, build mapping table; round-trip VRM→MHR→VRM on CMU clips; check spine, twist joints, fingers/thumb, rest pose. |
 | 2 | ~~**MediaPipe vs RTMPose** as base~~ | Owner | Resolved 2026-11-01: MediaPipe `[USER]` (§3.2). |
 | 3 | **three.js vs Blender** for rendering | Owner | three.js first is Claude's suggestion. |
 | 4 | **Success criteria** numbers | Owner | Provisional set confirmed 2026-11-01 (§6); revisit with more sessions. |
@@ -386,6 +392,8 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 ---
 
 ## 10. Suggested milestones `[CLAUDE]` (order not confirmed)
+
+**Order change `[USER]` (2026-11-01):** M3 (MHR ↔ VRM spike) runs before M1, so M1 trains in MHR space from the start. M0's remaining items are deferred: more seated-v2 recordings happen alongside, the face-cost check moves to M4. The rest of the order is still `[CLAUDE]`.
 
 1. **M0: Baseline + evaluation harness.** Extract current tracking `[USER]`; implement metrics (§6); record a few seated test videos; measure baseline. Also re-check face blendshape cost with correct running mode.
 2. **M1: Body keypoint lifter POC.** MediaPipe pose keypoints → causal temporal head → rotations. Data: CMU + synthetic seated motion + simulated noise; short history window. Compare against baseline on real seated video. **Go/no-go point** for the learned approach.
