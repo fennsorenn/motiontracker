@@ -3,7 +3,7 @@
     uv run python -m mttrain.calibrate [SESSION_DIR ...] [--clips 40]
 
 Real numbers come from `sessions/*` (default: all). Synthetic numbers run fitted CMU clips
-(data/m1/fits) through the camera, bias and noise models. Use it to recalibrate `mpstyle.py` and
+(data/m1/fits), seated, through the camera, bias and noise models. Use it to recalibrate `mpstyle.py` and
 `noise.py` when new sessions are recorded.
 """
 
@@ -14,12 +14,13 @@ from pathlib import Path
 import numpy as np
 
 from mtcore.landmarks import MP33, LandmarkModel
-from mtcore.mhr import load, skeleton_state
+from mtcore.mhr import limits, load, skeleton_state
 from mtcore.paths import DATA, REPO_ROOT
 
 from .noise import outside_distance
 from .mpstyle import Style
 from .noise import NoiseConfig
+from .seated import seat
 from .synth import synthesize
 
 I = MP33.index
@@ -96,12 +97,13 @@ def synthetic_stats(n_clips, seed=0, raw=False):
     ch = load()
     pn = list(ch.parameter_transform.names)
     lm = LandmarkModel(ch, skeleton_state(ch, np.zeros(len(pn))))
+    lim = limits()
     files = sorted((DATA / "m1" / "fits").glob("*.npz"))
     files = [files[i] for i in rng.choice(len(files), min(n_clips, len(files)), replace=False)]
     quiet = NoiseConfig(jitter_scale=0.0, guess_sigma=0.0, vis_logit_sigma=0.0, glitch_rate=0.0, dropout_rate=0.0)
     Ws, Is, Vs = [], [], []
     for f in files:
-        mp = np.load(f)["mp"]
+        mp = seat(rng, pn, np.load(f)["mp"], limits=lim)
         if raw:  # geometry only: no MediaPipe bias, no noise
             s = synthesize(rng, ch, lm, mp, fps=10.0, style=Style.identity(), noise=quiet)
         else:
@@ -110,7 +112,7 @@ def synthetic_stats(n_clips, seed=0, raw=False):
     # jitter: frozen poses (10 s each), so only the noise model moves the points
     Js, Ji = [], []
     for f in files:
-        mp = np.load(f)["mp"]
+        mp = seat(rng, pn, np.load(f)["mp"], limits=lim)
         frozen = np.repeat(mp[rng.integers(len(mp))][None], 300, 0)
         s = synthesize(rng, ch, lm, frozen, fps=10.0, noise=quiet if raw else None,
                        style=Style.identity() if raw else None)

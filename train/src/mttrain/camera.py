@@ -62,19 +62,24 @@ def look_at(eye, target, roll=0.0):
 def sample_desk_camera(rng, landmarks_m):
     """Desk-webcam framing for a clip, from its landmarks (T, 33, 3) in MHR metres.
 
-    The camera faces the performer's average front, at roughly face height, 0.45-1.1 m from the chest,
-    with random yaw, pitch, roll and field of view."""
+    Samples the framing itself, centred on the recorded session (shoulders at 58% of the frame
+    height, shoulder width 25% of the frame width), then derives distance and aim; plus random
+    yaw, camera height, roll and field of view. The camera faces the performer's average front."""
     sh = landmarks_m[:, [L_SH, R_SH]].mean(1)  # (T, 3)
     chest = np.median(sh, 0)
     across = np.median(landmarks_m[:, L_SH] - landmarks_m[:, R_SH], 0)  # toward the person's left
+    width = float(np.linalg.norm(across))
     front = np.cross(across, [0.0, 1.0, 0.0])
     front[1] = 0.0
     front /= np.linalg.norm(front)
     yaw = np.radians(rng.uniform(-25, 25))
     c, s = np.cos(yaw), np.sin(yaw)
     dirn = np.array([c * front[0] + s * front[2], 0.0, -s * front[0] + c * front[2]])
-    dist = rng.uniform(0.45, 1.1)
-    eye = chest + dist * dirn + [0.0, rng.uniform(-0.05, 0.3), 0.0]
-    target = chest + [0.0, rng.uniform(-0.15, 0.1), 0.0]
-    hfov = np.radians(rng.uniform(55, 80))
-    return Camera(R=look_at(eye, target, np.radians(rng.uniform(-4, 4))), t=eye, fx=0.5 / np.tan(hfov / 2))
+    fx = 0.5 / np.tan(np.radians(rng.uniform(55, 80)) / 2)
+    sw_frac = float(np.exp(rng.normal(np.log(0.25), 0.2)))  # shoulder width / frame width
+    sh_y = rng.uniform(0.45, 0.72)  # shoulder height in the frame (0 = top)
+    dist = fx * width / sw_frac
+    eye = chest + dist * dirn + [0.0, rng.uniform(0.0, 0.3), 0.0]
+    # aim above or below the chest so the shoulders land at sh_y
+    target = chest + [0.0, dist * (sh_y - 0.5) / (fx * 4 / 3), 0.0]
+    return Camera(R=look_at(eye, target, np.radians(rng.uniform(-4, 4))), t=eye, fx=fx)

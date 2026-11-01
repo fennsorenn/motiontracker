@@ -42,6 +42,11 @@ BASE_SIGMA = np.array([_BASE[_group(n)] for n in MP33])
 LIMB_GROUPS = [[MP33.index(n) for n in MP33 if side in n and any(k in n for k in parts)]
                for side in ("left", "right") for parts in (("elbow",), ("wrist", "pinky", "index", "thumb"))]
 
+# seated hips sit just below the frame (~0.04 outside) yet get visibility 0.16-0.33, not the curve's
+# ~0.67: the desk and the seated pose hide them. Logit offset per landmark (randomized per sequence).
+HIP_VIS_LOGIT = -1.6
+LOWER_BODY = [MP33.index(n) for n in MP33[23:]]
+
 # (distance outside the frame, value) breakpoints
 VIS_CURVE = ([-0.3, -0.15, -0.05, 0.0, 0.1, 0.2, 0.3, 0.5], [0.99, 0.97, 0.85, 0.70, 0.66, 0.25, 0.05, 0.02])
 JITTER_CURVE = ([-0.3, -0.1, 0.0, 0.1, 0.2, 0.4], [1.0, 1.5, 4.0, 4.0, 2.0, 1.2])
@@ -58,6 +63,7 @@ class NoiseConfig:
     vis_logit_sigma: float = 0.5
     vis_tau_fall: float = 0.6  # s
     vis_tau_rise: float = 0.3  # s
+    hip_vis_logit: float = HIP_VIS_LOGIT
     glitch_rate: float = 0.003  # per frame
     glitch_sigma: float = 0.08
     dropout_rate: float = 0.005  # whole-frame detector misses
@@ -72,6 +78,7 @@ class NoiseConfig:
                    guess_sigma=float(rng.uniform(0.02, 0.12)),
                    vis_tau_fall=float(rng.uniform(0.3, 1.0)),
                    vis_tau_rise=float(rng.uniform(0.1, 0.5)),
+                   hip_vis_logit=float(rng.uniform(-2.5, -0.7)),
                    glitch_rate=float(rng.uniform(0.0, 0.01)),
                    dropout_rate=float(rng.uniform(0.0, 0.02)))
 
@@ -106,7 +113,9 @@ def observe(rng, world, image, dt, cfg=None):
         tau = np.where(target[t] < v[t - 1], cfg.vis_tau_fall, cfg.vis_tau_rise)
         a = 1 - np.exp(-dt[t] / np.maximum(tau, 1e-6))
         v[t] = v[t - 1] + a * (target[t] - v[t - 1])
-    logit = np.log(v / (1 - v)) + cfg.vis_logit_sigma * _ar1(rng, dt, 0.8, (33,))
+    logit = np.log(v / (1 - v))
+    logit[:, LOWER_BODY] += cfg.hip_vis_logit
+    logit = logit + cfg.vis_logit_sigma * _ar1(rng, dt, 0.8, (33,))
     vis = 1 / (1 + np.exp(-logit))
 
     # jitter: AR(1), shared between world and image lateral axes, scaled by the edge curve
