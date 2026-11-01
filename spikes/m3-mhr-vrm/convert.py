@@ -77,6 +77,14 @@ def qrot(q, v):
     return qmul(qmul(q, p), qinv(q))[..., :3]
 
 
+def twist(q, axis):
+    """Twist component of q about a unit axis (swing-twist decomposition), [x,y,z,w]."""
+    p = np.sum(q[..., :3] * axis, -1, keepdims=True) * axis
+    t = np.concatenate([p, q[..., 3:4]], -1)
+    n = np.linalg.norm(t, axis=-1, keepdims=True)
+    return np.where(n > 1e-9, t / np.maximum(n, 1e-12), np.array([0, 0, 0, 1.0]))
+
+
 def q_between(a, b):
     a = a / np.linalg.norm(a); b = b / np.linalg.norm(b)
     c = np.cross(a, b); w = 1 + np.dot(a, b)
@@ -94,6 +102,13 @@ class MhrToVrm:
         self.bones = [b for b in MAP if b in vrm_rest_positions]
         self.q_rest_inv, self.D = {}, {}
         P, Q = mhr_rest_state[:, :3], mhr_rest_state[:, 3:7]
+        # forearm twist: wrist_twist's rotation relative to lowarm, twist part about the forearm axis
+        # (in lowarm's local frame), goes onto VRM lowerArm. The hand keeps the remaining swing.
+        self.forearm = {}
+        for side, m in (("left", "l"), ("right", "r")):
+            lo, wt, wr = (self.jn.index(f"{m}_{n}") for n in ("lowarm", "wrist_twist", "wrist"))
+            axis = qrot(qinv(Q[lo]), P[wr] - P[lo])
+            self.forearm[f"{side}LowerArm"] = (lo, wt, axis / np.linalg.norm(axis))
         for b in self.bones:
             j, jd = MAP[b][:2]
             jp = MAP[b][2] if len(MAP[b]) > 2 else j  # joint where the VRM bone sits
@@ -108,7 +123,15 @@ class MhrToVrm:
 
     def globals(self, state):
         Q = state[..., 3:7]
-        return {b: qmul(qmul(Q[..., self.jn.index(MAP[b][0]), :], self.q_rest_inv[b]), self.D[b]) for b in self.bones}
+        out = {}
+        for b in self.bones:
+            Qj = Q[..., self.jn.index(MAP[b][0]), :]
+            if b in self.forearm:
+                lo, wt, axis = self.forearm[b]
+                rel = qmul(qinv(Q[..., lo, :]), Q[..., wt, :])
+                Qj = qmul(Q[..., lo, :], twist(rel, axis))
+            out[b] = qmul(qmul(Qj, self.q_rest_inv[b]), self.D[b])
+        return out
 
     def locals(self, state):
         G = self.globals(state)

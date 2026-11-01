@@ -37,7 +37,9 @@ for _ in range(200):
     P_vrm, _ = vrm_fk(conv.locals(st), vrm_rest)
     for b in conv.bones:
         c = VRM_CHILD.get(b); jd = MAP[b][1]
-        if c not in P_vrm or jd is None:
+        # hips: MHR's c_spine1 position also moves with c_spine0, which VRM folds into its spine bone,
+        # so this direction comparison is not meaningful; test_positions.py covers the upper body.
+        if c not in P_vrm or jd is None or b == "hips":
             continue
         d_v = P_vrm[c] - P_vrm[b]
         d_m = st[jn.index(jd), :3] - st[jn.index(MAP[b][0]), :3]
