@@ -95,24 +95,26 @@ source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "pymomentum-cpu" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
-    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "numpy" },
     { name = "pymomentum-cpu" },
-    { name = "torch", index = "https://download.pytorch.org/whl/cpu" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest" }]
+dev = [
+    { name = "pytest" },
+    { name = "torch", specifier = ">=2.8,<2.9", index = "https://download.pytorch.org/whl/cpu" },
+]
 
 [[package]]
 name = "networkx"
