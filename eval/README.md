@@ -45,6 +45,9 @@ fingers.
 | Lag vs detector | Delay (ms) at which the bone's angular speed best correlates with the detector's: upper-arm and forearm directions from the pose landmarks, and head direction for the neck. Counted only when the correlation is at least 0.3. This is what the solver and smoothing add on top of MediaPipe, not camera or display latency. | motion |
 | Presence | Fraction of output frames in which the bone exists. | – |
 
+The rest metrics pool all still segments. When a session has more than one, the report adds
+a per-segment table of rest noise and twitches, named by `variant` (seated-v2) or time span.
+
 Labeled metrics are implemented and tested on synthetic signals. They are not in the report
 yet, because no labeled sessions exist. They are rotation error (mean, median and p95
 geodesic error), onset lag, and peak-velocity ratio (predicted over true peak speed per

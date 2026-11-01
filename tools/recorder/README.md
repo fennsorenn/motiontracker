@@ -14,6 +14,9 @@ camera, video size and protocol, then press **Start recording**.
 
 - **seated-v1** (about 70 s) prompts you through still, slow, fast, hand, head and hand-dropout
   segments. It stops by itself. The labels become `segments` in `session.json`.
+- **seated-v2** (about 71 s) is the same, except the two still segments cover the two rest
+  postures: arms below the camera view first, hands resting visibly on the desk last. They
+  carry a `variant` tag in `session.json`. Prefer it for new recordings.
 - **free** has no prompts. Press <kbd>S</kbd> to start and end a "still" segment. Press
   **Stop and save** when done.
 

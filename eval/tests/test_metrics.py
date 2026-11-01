@@ -138,3 +138,32 @@ def test_dropout_jump_sees_snap():
     r = M.dropout_jump(tr, sess)["leftHand"]
     assert r["transitions"] == 1
     assert r["mean_peak"] == pytest.approx(300.0)
+
+
+@pytest.mark.filterwarnings("ignore:invalid value:RuntimeWarning")  # all-zero landmarks in lag metric
+def test_rest_summary_per_still_segment(tmp_path):
+    import json
+
+    from mteval.report import evaluate, to_markdown
+    from mteval.session import load_session
+    from mteval.systems import SystemResult
+
+    t = np.arange(0, 20000, 100.0)
+    frames = [{"t": float(tt), "pose": [[0.0, 0.0, 0.0, 1.0]] * 33} for tt in t]
+    (tmp_path / "landmarks.jsonl").write_text("\n".join(json.dumps(f) for f in frames))
+    segs = [
+        {"label": "still", "variant": "arms-below-frame", "t0": 0, "t1": 10000},
+        {"label": "still", "t0": 10000, "t1": 20000},
+    ]
+    (tmp_path / "session.json").write_text(json.dumps({"name": "x", "segments": segs}))
+    sess = load_session(tmp_path)
+    assert sess.name == tmp_path.name and sess.segments[0].variant == "arms-below-frame"
+
+    rng = np.random.default_rng(1)
+    sigma = np.where(t < 10000, 3.0, 0.3)  # noisy first rest segment, calm second
+    res = SystemResult("sys", track(t, neck=rot([0, 1, 0], rng.normal(0, 1, len(t)) * sigma)), [])
+    rep = evaluate(sess, [res])
+    seg = rep["still_segment_summary"]["sys"]
+    first, second = seg["arms-below-frame (0-10 s)"], seg["still 10-20 s"]
+    assert first["torso_head"]["rest_noise"] > 5 * second["torso_head"]["rest_noise"]
+    assert "Rest by still segment" in to_markdown(rep)

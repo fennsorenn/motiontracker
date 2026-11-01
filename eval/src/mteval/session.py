@@ -29,6 +29,7 @@ class Segment:
     label: str
     t0: float  # ms
     t1: float  # ms
+    variant: str | None = None  # e.g. 'arms-below-frame' for still segments (seated-v2)
 
     def contains(self, t: np.ndarray) -> np.ndarray:
         return (t >= self.t0) & (t < self.t1)
@@ -71,7 +72,10 @@ def load_session(path: str | Path) -> Session:
     if path.is_dir():
         meta = json.loads((path / "session.json").read_text())
         lm = path / meta.get("landmarks", {}).get("file", "landmarks.jsonl")
-        segments = [Segment(s["label"], float(s["t0"]), float(s["t1"])) for s in meta.get("segments", [])]
+        segments = [
+            Segment(s["label"], float(s["t0"]), float(s["t1"]), s.get("variant"))
+            for s in meta.get("segments", [])
+        ]
         name = path.name  # the folder name is unique (timestamped); meta["name"] is a free label
     else:
         meta, lm, segments, name = {}, path, [], path.stem
