@@ -11,6 +11,7 @@ No learned-model or service code exists yet. Current milestone: M0 (baseline + e
 | `baseline` | implemented (frozen) | Frozen snapshot of the owner's current algorithmic MediaPipe → VRM bone solver (vspark), for comparison. Details: `modules/baseline.md`. |
 | `eval-harness` | implemented | Python (`eval/`, package `mteval`): runs systems over recorded sessions and computes metrics (`PLAN.md` §6). Details: `modules/eval-harness.md`. |
 | `recorder` | implemented | Static browser page (`tools/recorder/`) that records test sessions: raw video + MediaPipe landmarks + protocol segments. Details: `modules/recorder.md`. |
+| `retargeting` | planned (M4) | Learned layer mapping the performer's pose onto the avatar's MHR identity, then to VRM 1.0 (`PLAN.md` §3.10a). |
 
 ### baseline (implemented, frozen)
 Location: `baseline/` (own pnpm/TypeScript package). Byte-identical copies of vspark's solver nodes under `baseline/vendor/`, driven by a minimal standalone pipeline (`src/pipeline.ts`) instead of vspark's graph engine. CLI: MediaPipe landmark frames JSONL in → `OutputFrame` JSONL out (`{t, bones:{vrmBone:[x,y,z,w]}}`). Verified bit-exact against vspark's real engine. Usage, provenance and fidelity quirks: `baseline/README.md`.
@@ -30,6 +31,9 @@ Location: `eval/` (uv project, package `mteval`, CLI `mteval evaluate`). Runs sy
 
 Next step: record more sessions with the owner (seated-v2) and measure the baseline on them. Usage and metric definitions: `eval/README.md`.
 
+### retargeting (planned, M4)
+Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracked on the performer's realistic MHR identity) onto the avatar's MHR identity, then to VRM 1.0. Avatar bone lengths enter only here. Trained to keep spatial accuracy (relative positions/directions between body parts, contacts included); may read earlier latents for temporal context. Comes after the M3 MHR↔VRM mapping spike. No module file yet.
+
 ## Key decisions
 - Build the evaluation harness and measure the baseline before training any model (`PLAN.md` §6).
 - Baseline source is the vspark branch including uncommitted WIP, judged more accurate than its last commit (`[USER]`, 2026-11-01).
@@ -37,6 +41,8 @@ Next step: record more sessions with the owner (seated-v2) and measure the basel
 - Eval harness in Python, uv project in `eval/` (`[USER]`, 2026-11-01).
 - Test sessions record both raw webcam video and browser-side MediaPipe landmarks in one session (`[USER]`, 2026-11-01).
 - First harness version: label-free metrics on real recordings; labeled metrics built and tested on synthetic signals for M1 (`[USER]`, 2026-11-01).
+- MHR is the canonical skeleton; VRM poses derive from MHR rotations (`[USER]`, 2026-11-01).
+- Performer and avatar are separate MHR identities (`[USER]`, 2026-11-01).
 
 ## Licensing
 `docs/LICENSES-REGISTER.md` tracks source, license and usage of every asset, dataset, model and recording. The vendored vspark code has no declared license; the owner must relicense it before any public release.
