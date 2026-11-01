@@ -119,6 +119,7 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
 - **Merger's job:** resolve consistency at joints where parts meet. Key cases: **forearm twist** (body sees elbow/wrist positions, hand sees palm orientation; only together do they determine twist) and **neck vs head** split. `[CLAUDE]`
 - **Disabling parts to save compute must work** (owner's question). Approach: **modality dropout** in training: randomly drop whole parts, replace with learned "missing" token + mask flag. Same mechanism handles hands leaving frame / detector dropouts. `[CLAUDE]`
   - Note: disabling a part saves *detector* compute; the heads themselves are negligible.
+- **Arms resting below the frame must look natural.** This is a normal streaming posture, not an edge case: elbows and wrists out of frame, hands undetected. `[USER]` (2026-11-01). Observed in the first real session: the baseline jitters most here because MediaPipe guesses the off-frame joints and vspark holds stale hand landmarks.
 - **Asynchronous update rates** per part (e.g. hands at lower rate when compute-tight): each head receives time since its last update. `[CLAUDE]`
 
 ### 3.4 Head ↔ merger interface
