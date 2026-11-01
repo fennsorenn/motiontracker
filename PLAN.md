@@ -387,6 +387,8 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 
 ## 10. Suggested milestones `[CLAUDE]` (order not confirmed)
 
+**Order change `[USER]` (2026-11-01):** M3 (MHR ↔ VRM spike) runs before M1, so M1 trains in MHR space from the start. M0's remaining items are deferred: more seated-v2 recordings happen alongside, the face-cost check moves to M4. The rest of the order is still `[CLAUDE]`.
+
 1. **M0: Baseline + evaluation harness.** Extract current tracking `[USER]`; implement metrics (§6); record a few seated test videos; measure baseline. Also re-check face blendshape cost with correct running mode.
 2. **M1: Body keypoint lifter POC.** MediaPipe pose keypoints → causal temporal head → rotations. Data: CMU + synthetic seated motion + simulated noise; short history window. Compare against baseline on real seated video. **Go/no-go point** for the learned approach.
 3. **M2: Service skeleton** (can run parallel to M1). Python service owning camera; VMC over UDP + OSC over WebSocket; browser viewer with three-vrm; video-file source for repeatable tests; timestamps, sequence numbers, latest-wins.
