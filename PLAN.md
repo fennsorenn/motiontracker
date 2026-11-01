@@ -109,6 +109,7 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
 ### 3.2 Base detector: MediaPipe vs RTMPose
 - Owner is **unsure** which is the better base. `[USER]` → `[OPEN]` for the owner
 - Claude's recommendation: **MediaPipe**, after research: Apache-licensed weights, tiny models, iGPU-friendly, convertible to PyTorch for feature taps/fine-tuning. RTMPose as fallback if body accuracy disappoints (would need COCO-only retraining for a permissive release). `[CLAUDE]`
+- **MediaPipe is the base detector.** `[USER]` (2026-11-01): no better option.
 - `[CORRECTED]` Claude initially recommended **RTMW** as a single-vendor whole-body option; retracted after finding its size (~65M params) and murky weight licensing.
 - `[CORRECTED]` Claude initially said MediaPipe was a "dead end" for modification (no training code). Retracted: third-party TFLite→PyTorch conversions with parity exist.
 - Hybrid (RTMPose body + MediaPipe hands) was suggested at one point `[CLAUDE]`; superseded by the MediaPipe recommendation.
@@ -238,7 +239,7 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
 
 ### 5.1 Motion sources
 - Must be permissively licensed. `[USER]`
-- CMU (+ UPenn) as primary real mocap; 100STYLE only if license confirmed. `[CLAUDE]`
+- **CMU approved and downloaded** as primary real mocap. `[USER]` (2026-11-01). Original ASF/AMC from mocap.cs.cmu.edu into gitignored `data/` (never commit: the terms forbid reselling the data, even converted). UPenn as second source and 100STYLE (license unconfirmed) remain `[CLAUDE]`.
 - Retarget everything to the canonical skeleton yourself; never via SMPL. Randomize bone lengths. `[CLAUDE]`
 - Budget time to **clean CMU** data (varying skeletons per subject, noisy clips). `[CLAUDE]`
 
@@ -289,7 +290,16 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
   - Contact preservation (hand-face, hands-together)
   - Reprojection error on unlabeled real video
 - Test sets: held-out synthetic, ARKit-labeled face/head recordings, unlabeled real seated video.
-- **Success criteria numbers** (latency budget, jitter thresholds, "beats baseline by X"): `[OPEN]`, define before training.
+- **Success criteria for the M1 go/no-go**, provisional `[USER]` (2026-11-01: "confirm it for now to get going"); revisit after more seated-v2 sessions. Measured after the same render filter as `baseline-rendered`, on at least three seated-v2 sessions, holding on each session. Body bones only (shoulders, arms); hand/finger targets belong to M4.
+  1. Rest noise with arms below the frame: at least 50% lower than baseline.
+  2. Twitches per minute at rest: under 10 (baseline ~38–49).
+  3. Rest noise with elbows in view: no worse than baseline.
+  4. Added lag vs detector: no more than baseline, ideally under 50 ms (harness resolution is coarse at 10 FPS).
+  5. Speed p90 in slow/fast segments: at least 80% of baseline (guards against over-smoothing).
+  6. Model cost: under 2 ms per frame on a laptop CPU.
+  7. Hand position on the performer's own skeleton vs detected hands: at least 30% lower error than baseline.
+  8. Joint-limit violations: near zero in all conditions, including low confidence and tracking loss.
+  9. Side-by-side video check by the owner: at least as natural, especially with arms below the frame.
 
 ---
 
@@ -358,9 +368,9 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 | # | Question | Owner of decision | Notes |
 |---|---|---|---|
 | 1 | **MHR → VRM 1.0 maps cleanly?** | Owner (after spike) | Spike: load MHR rig, list joints, build mapping table; round-trip VRM→MHR→VRM on CMU clips; check spine, twist joints, fingers/thumb, rest pose. |
-| 2 | **MediaPipe vs RTMPose** as base | Owner | Claude recommends MediaPipe (§3.2). |
+| 2 | ~~**MediaPipe vs RTMPose** as base~~ | Owner | Resolved 2026-11-01: MediaPipe `[USER]` (§3.2). |
 | 3 | **three.js vs Blender** for rendering | Owner | three.js first is Claude's suggestion. |
-| 4 | **Success criteria** numbers | Owner | Define before training. |
+| 4 | **Success criteria** numbers | Owner | Provisional set confirmed 2026-11-01 (§6); revisit with more sessions. |
 | 5 | **OS targets** | Owner | Affects runtime choices (GPU support varies by platform). |
 | 6 | **v1 knob set** | Owner | Suggested: responsiveness, prediction horizon, seated/standing context. |
 | 7 | **100STYLE license** | — | Check Zenodo page if still wanted. |
