@@ -174,7 +174,7 @@ function runProtocol(protocol) {
     } else if (steps.length && t >= end) {
       $('prompt').textContent = 'Done. Stopping…';
       clearInterval(protocolTimer);
-      segments = steps.map((s) => ({ label: s.label, t0: s.t0, t1: s.t1, prompt: s.prompt }));
+      segments = steps.map((s) => ({ label: s.label, ...(s.variant && { variant: s.variant }), t0: s.t0, t1: s.t1, prompt: s.prompt }));
       stop();
     }
   };

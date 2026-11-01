@@ -28,7 +28,7 @@ def evaluate(session: Session, results: list[SystemResult], auto_still: bool = F
         "session": session.name,
         "frames": len(session.frames),
         "duration_s": float((session.times[-1] - session.times[0]) / 1000) if session.frames else 0.0,
-        "segments": [{"label": s.label, "t0": s.t0, "t1": s.t1} for s in segments],
+        "segments": [{"label": s.label, "variant": s.variant, "t0": s.t0, "t1": s.t1} for s in segments],
         "still_source": still_source,
         "systems": {},
     }
@@ -46,9 +46,23 @@ def evaluate(session: Session, results: list[SystemResult], auto_still: bool = F
                 "dropout_jump": M.dropout_jump(tr, session),
                 "lag_vs_detector": M.lag_vs_detector(tr, session),
             },
+            "per_still_segment": [
+                {
+                    "segment": still_name(s),
+                    "rest_noise": M.rest_noise(tr, [s]),
+                    "twitch_rate": M.twitch_rate(tr, [s]),
+                }
+                for s in still
+            ],
         }
     report["summary"] = summarize(report)
+    report["still_segment_summary"] = summarize_still_segments(report)
     return report
+
+
+def still_name(s) -> str:
+    span = f"{s.t0 / 1000:.0f}-{s.t1 / 1000:.0f} s"
+    return f"{s.variant} ({span})" if s.variant else f"still {span}"
 
 
 def _median(values: list[float | None]) -> float | None:
@@ -75,6 +89,20 @@ def summarize(report: dict) -> dict:
             lag = pb["lag_vs_detector"].get(bone)
             g["lag_ms"].append(lag["lag_ms"] if lag and (lag["corr"] or 0) >= 0.3 else None)
         out[name] = {grp: {k: _median(v) for k, v in m.items()} for grp, m in groups.items()}
+    return out
+
+
+def summarize_still_segments(report: dict) -> dict:
+    """Per system and still segment: median over the bones of each group."""
+    out: dict[str, dict] = {}
+    for name, sys in report["systems"].items():
+        out[name] = {}
+        for seg in sys.get("per_still_segment", []):
+            groups: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+            for key in ("rest_noise", "twitch_rate"):
+                for bone, v in seg[key].items():
+                    groups[M.bone_group(bone)][key].append(v)
+            out[name][seg["segment"]] = {g: {k: _median(v) for k, v in m.items()} for g, m in groups.items()}
     return out
 
 
@@ -115,6 +143,23 @@ def to_markdown(report: dict) -> str:
             if any(c != "–" for c in cells):
                 lines.append(f"| {grp} | " + " | ".join(cells) + " |")
         lines.append("")
+    seg_summary = report.get("still_segment_summary", {})
+    seg_names = list(next(iter(seg_summary.values()), {}))
+    if len(seg_names) > 1:
+        lines += ["## Rest by still segment", "",
+                  "Rest noise (deg) / twitches per minute, per still segment. The tables above pool them.", ""]
+        for s in systems:
+            lines += [f"**{s}**", "", "| Group | " + " | ".join(seg_names) + " |", "|---|" + "---|" * len(seg_names)]
+            for grp in GROUP_ORDER:
+                cells = []
+                for seg in seg_names:
+                    g = seg_summary[s].get(seg, {}).get(grp, {})
+                    n, tw = g.get("rest_noise"), g.get("twitch_rate")
+                    cells.append("–" if n is None and tw is None else
+                                 f"{'–' if n is None else f'{n:.1f}'} / {'–' if tw is None else f'{tw:.1f}'}")
+                if any(c != "–" for c in cells):
+                    lines.append(f"| {grp} | " + " | ".join(cells) + " |")
+            lines.append("")
     return "\n".join(lines)
 
 

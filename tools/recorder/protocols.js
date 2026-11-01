@@ -16,6 +16,21 @@ export const PROTOCOLS = {
       { label: 'still', duration: 8, prompt: 'Hold still again, arms resting.' },
     ],
   },
+  // Like seated-v1, but the two rest segments cover the two rest postures separately (variant
+  // tags in session.json). Arms below the frame is a normal streaming posture (PLAN.md §3.3).
+  'seated-v2': {
+    description: 'Seated, with separate arms-below-frame and hands-on-desk rest segments. About 71 s.',
+    leadIn: 3,
+    steps: [
+      { label: 'still', variant: 'arms-below-frame', duration: 10, prompt: 'Let your arms hang or rest below the camera view. Look at the camera. Hold still.' },
+      { label: 'slow', duration: 10, prompt: 'Slowly raise both arms forward, then lower them again.' },
+      { label: 'fast', duration: 10, prompt: 'Quick movements: wave, reach to the sides, point at things.' },
+      { label: 'hands', duration: 10, prompt: 'Hands in front of your chest: open, fist, point, count with your fingers.' },
+      { label: 'head', duration: 8, prompt: 'Turn your head left and right, nod, tilt it side to side.' },
+      { label: 'dropout', duration: 10, prompt: 'Drop your hands out of view and bring them back, a few times.' },
+      { label: 'still', variant: 'hands-on-desk', duration: 10, prompt: 'Rest your hands on the desk where the camera can see them. Hold still.' },
+    ],
+  },
   free: {
     description: 'No prompts. Press S to start/stop a "still" segment.',
     leadIn: 0,
