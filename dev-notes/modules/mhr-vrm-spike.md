@@ -13,11 +13,13 @@ Spike code, not production. Pieces likely reused in M1 (CMU → MHR data prep) a
 | `fit_cmu.py` | Fits CMU clips to MHR with pymomentum `solve_sequence_ik`. |
 | `scan_cmu.py` | Scans the CMU set (output: `cmu_scan.json`). |
 | `eval_cmu_roundtrip.py` | Round-trip / spatial-relation evaluation on CMU clips. |
-
-Other scripts in the folder (`fit_avatars.py`, `dump_skeleton.py`, `test_*.py`) are not described here yet.
+| `dump_skeleton.py` | Loads the MHR rig via pymomentum (no blendshapes) and prints the rest skeleton; its `load()` and `positions()` are shared by the other scripts. |
+| `fit_avatars.py` | Matches VRoid avatar segment lengths with a uniform scale plus MHR `scale_*` parameters; reports needed values relative to MHR's limits. |
+| `test_roundtrip.py` | Random MHR poses → VRM: checks every bone's direction matches (should be < 0.05°). |
+| `test_positions.py` | VRM skeleton with MHR proportions: end-effector error from joints VRM lacks, and the forearm twist split. |
 
 ## Conversion (MHR → VRM 1.0)
-- Per bone: `G_vrm = Q_mhr * Q_mhr_rest^-1 * D` (MHR rotation relative to MHR rest, times a per-bone term `D`; see `convert.py` for how `D` is built). Output is VRM 1.0 normalized local rotations.
+- Per bone: `G_vrm = Q_mhr * Q_mhr_rest^-1 * D` (MHR rotation relative to MHR rest, times `D`: the minimal rotation taking the bone's direction in the avatar's T-pose rest onto the matching MHR bone's direction in MHR's A-pose rest; the direction target is the MHR joint where the VRM child bone sits). Output is VRM 1.0 normalized local rotations.
 - Forearm twist: MHR's forearm twist is moved onto VRM `lowerArm` by a swing-twist split.
 - MHR flexible joint translations are kept at zero (rotation-only output).
 
