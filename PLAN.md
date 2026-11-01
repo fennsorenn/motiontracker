@@ -189,6 +189,7 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
 
 ### 3.10 Canonical skeleton and output
 - **MHR is the canonical skeleton; VRM poses are derived from MHR rotations.** `[USER]` (2026-11-01; was `[USER-LEAN]`). The M3 spike still has to confirm the mapping is clean.
+- **Two identities: performer and avatar.** The video shows the performer with (usually) realistic proportions; the avatar has its own, often stylized ones. Both are MHR identities and must be kept distinct: the pose is tracked on the performer's proportions and then mapped onto the avatar's. `[USER]` (2026-11-01)
 - **Target avatars' proportions are modeled as MHR identities**: each VRM avatar gets an MHR fit, and contact preservation (§3.3) works in MHR space on that fit. `[USER]` (2026-11-01). Owner will provide a few VRM models for this. Open risk: whether MHR's human-derived identity space can represent stylized (VRoid) proportions closely enough; see the M3 spike.
 - Claude's proposal: thin fixed retargeting layer from MHR to **VRM 1.0** at the output, **OpenXR hand joints** as an optional second output. Fallback: own canonical skeleton that's a superset of VRM bones, with MHR used only for rendering. `[CLAUDE]`
 - Reasons for MHR: Apache 2.0 (avoids SMPL licensing), explicit bone lengths (fits avatar-proportion conditioning), body+hands+face in one model, provides licensed realistic meshes for rendering, aligned with where the ecosystem is going. `[CLAUDE]`
