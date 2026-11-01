@@ -52,6 +52,39 @@ Draft mapping (to verify):
 | foot / toes | foot ∘ talocrural ∘ subtalar ∘ transversetarsal / ball | |
 | left/rightEye | l/r_eye_null | Gaze output. |
 
+## Findings so far (2026-11-01)
+
+Code: `spikes/m3-mhr-vrm/` (uv, CPU PyTorch). `dump_skeleton.py`, `fit_avatars.py`, `convert.py`,
+`test_roundtrip.py`, `test_positions.py`.
+
+- **pymomentum crash:** `MHR.from_files` segfaults in `Character.with_blend_shape`
+  (pymomentum-cpu 0.1.114, torch 2.8 CPU). Not needed: the skeleton never depends on identity
+  blendshapes. The spike loads the rig with pymomentum directly.
+- **Identity vs scale:** MHR's 45 identity coefficients only shape the mesh. Bone lengths come from
+  the `scale_*` model parameters, which are additive (1 unit ≈ 10 cm for limb segments). PLAN.md's
+  "identity parameters give bone lengths" was imprecise.
+- **Rest pose:** cm, y up, +x = character's left, z forward; A-pose with bent elbows. Root = pelvis.
+- **Avatar fit (uniform scale + MHR scale parameters, segment lengths):** spine, neck, upper arm,
+  forearm, hands and hip width fit all eleven avatars within MHR's human limits. Shoulder width
+  needs ~2.4× MHR's narrowest setting for the female-type VRoid bodies; lower legs reach or pass
+  the limit on several avatars. Clavicle length and head-to-eye distance have no parameter.
+  MHR limits are solver penalties, not FK limits, so out-of-range values work geometrically.
+- **Flexible translations:** pose parameters `*_flexible` (spine/neck length, shoulder width, arm,
+  hip, leg) translate joints. VRM bones only rotate, so these must stay zero (or be absorbed).
+- **Conversion:** `G_vrm(b) = Q_mhr(j) · Q_mhr_rest(j)⁻¹ · D(b)`, D = rest-direction alignment.
+  With flexible translations at zero, bone directions match to < 0.05° for every bone on two
+  avatar builds (200 random poses). End-effector error on a VRM skeleton with MHR proportions,
+  relative to hips, from folding joints VRM lacks:
+
+  | Pose range (fraction of MHR limits) | Head/hands mean (max) | Thumb tip | Foot |
+  |---|---|---|---|
+  | 25% | 0.4 cm (0.8) | 0.6 cm (1.3) | 1.1 cm (1.8) |
+  | 50% | 0.8 cm (1.6) | 1.2 cm (2.7) | 1.3 cm (2.6) |
+
+  The head/hand error comes from MHR's extra spine joint (`c_spine0`). Moving forearm twist from
+  the hand onto lowerArm (driving it by `wrist_twist`) adds 0.4–0.8 cm at the hand because the
+  twist axis isn't exactly the forearm axis; a swing-twist split would avoid that.
+
 ## Approach
 
 1. Load MHR (LOD 1 is enough), dump the rest-pose skeleton: joint hierarchy, positions,
@@ -79,8 +112,11 @@ Draft mapping (to verify):
 
 ## Open decisions
 
-- Python environment for MHR: pymomentum + PyTorch via uv/pip (MHR calls pip "experimental")
-  or Pixi (MHR's recommended conda-based route). Owner to choose.
+- ~~Python environment~~: uv + pip, CPU PyTorch for the spike (owner, 2026-11-01).
+- Allow avatar fits outside MHR's human limits (avatar side only; performer stays within)?
+- Flexible translation parameters: keep at zero in the canonical pose?
+- Forearm twist on VRM hand (as now) or split onto lowerArm?
+- CMU round trip (step 4) needs a CMU → MHR fit, which is also M1's data preparation.
 
 ## Output
 
