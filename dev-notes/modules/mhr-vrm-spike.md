@@ -2,7 +2,7 @@
 
 Location: `spikes/m3-mhr-vrm/` (uv project; CPU PyTorch, `pymomentum`, `mhr`). Usage: `spikes/m3-mhr-vrm/README.md`. Results and numbers: `dev-notes/plans/m3-mhr-vrm-spike.md` and `PLAN.md` §3.10 (not copied here). Outcome: go for MHR as canonical skeleton.
 
-Spike code, not production. Pieces likely reused in M1 (CMU → MHR data prep) and later in the MHR → VRM output stage.
+Spike code, not production. The reusable code (MHR loading/FK, conversion, VRM reader, CMU reader, CMU → MHR fit) moved to `core/` (package `mtcore`, `modules/mtcore.md`); the spike scripts import it from there. The file table below describes the spike as originally written; the maintained versions live in `mtcore`.
 
 ## Files
 | File | Role |

@@ -2,7 +2,7 @@
 
 Learned live motion tracking for VRM 1.0 avatars: webcam → MediaPipe detectors → small causal learned heads + merger → bone rotations, root translation, blendshapes, gaze → VMC/OSC. Full context, decisions and open questions: `PLAN.md` (decision tags there are authoritative; `[CLAUDE]` items are unconfirmed).
 
-No learned-model or service code exists yet. Current milestone: **M1, the body lifter in MHR space** (WIP, plan: `plans/m1-body-lifter.md`); fitting CMU mocap to MHR is its data prep. More seated-v2 recordings run alongside. Done: M0 tooling plus the first measured session (seated-v1), and the M3 MHR ↔ VRM 1.0 spike (result: go for MHR as canonical skeleton). The face-cost check moves to M4.
+No service code exists yet. Current milestone: **M1, the body lifter in MHR space** (WIP, plan: `plans/m1-body-lifter.md`): pipeline built and first models trained; the go/no-go still needs seated-v2 sessions and a render-filter decision. Done: M0 tooling plus the first measured session (seated-v1), and the M3 MHR ↔ VRM 1.0 spike (result: go for MHR as canonical skeleton). The face-cost check moves to M4.
 
 ## Modules
 
@@ -11,10 +11,10 @@ No learned-model or service code exists yet. Current milestone: **M1, the body l
 | `baseline` | implemented (frozen) | Frozen snapshot of the owner's current algorithmic MediaPipe → VRM bone solver (vspark), for comparison. Details: `modules/baseline.md`. |
 | `eval-harness` | implemented | Python (`eval/`, package `mteval`): runs systems over recorded sessions and computes metrics (`PLAN.md` §6). Details: `modules/eval-harness.md`. |
 | `recorder` | implemented | Static browser page (`tools/recorder/`) that records test sessions: raw video + MediaPipe landmarks + protocol segments. Details: `modules/recorder.md`. |
-| `mhr-vrm-spike` | implemented (M3, done) | Spike (`spikes/m3-mhr-vrm/`): MHR → VRM 1.0 conversion, CMU → MHR fitting, round-trip eval. Details: `modules/mhr-vrm-spike.md`. |
+| `mhr-vrm-spike` | implemented (M3, done) | Spike (`spikes/m3-mhr-vrm/`): MHR → VRM 1.0 conversion, CMU → MHR fitting, round-trip eval. Reusable code now in `core/`. Details: `modules/mhr-vrm-spike.md`. |
 | `m1-body-lifter` | WIP (M1) | First learned model: MediaPipe pose landmarks → small causal model → MHR upper-body rotations → VRM 1.0. Go/no-go for the learned approach. Plan: `plans/m1-body-lifter.md`. |
-| `mhrcore` (name open) | planned (M1) | Shared Python package: MHR loading/FK, CMU reader + CMU → MHR fit, MHR → VRM conversion, moved from the spike with tests. |
-| `train` | planned (M1) | uv project (CUDA PyTorch): data prep, landmark synthesis, noise/framing model, model, training, export. |
+| `mtcore` | implemented | Shared Python package (`core/`): MHR loading/FK, CMU reader + CMU → MHR fit, MHR → VRM conversion, MediaPipe landmarks from MHR. Details: `modules/mtcore.md`. |
+| `train` | implemented | uv project (`train/`, package `mttrain`, CUDA PyTorch): CMU fits, seated synthesis, synthetic landmarks + noise, model, training, inference on sessions. Details: `modules/train.md`. |
 | `retargeting` | planned (M4) | Learned layer mapping the performer's pose onto the avatar's MHR identity, then to VRM 1.0 (`PLAN.md` §3.10a). |
 
 ### baseline (implemented, frozen)
@@ -36,14 +36,16 @@ Location: `eval/` (uv project, package `mteval`, CLI `mteval evaluate`). Runs sy
 Next step: record more seated-v2 sessions with the owner (alongside M1) and measure the baseline on them. Usage and metric definitions: `eval/README.md`.
 
 ### mhr-vrm-spike (implemented, M3 done)
-Location: `spikes/m3-mhr-vrm/` (uv project, CPU PyTorch, `pymomentum`, `mhr`). Converts MHR skeleton states to VRM 1.0 normalized local rotations, fits CMU mocap to MHR, and checks the round trip. Result: go for MHR as canonical skeleton (`PLAN.md` §3.10; numbers in `plans/m3-mhr-vrm-spike.md`). Its CMU → MHR fitting is the starting point for M1 data prep. Data lives in gitignored `data/` (`data/cmu`, `data/mhr`). Known issue: `MHR.from_files` segfaults in pymomentum (0.1.114 CPU) when loading blendshapes; the spike loads the rig without them. Details: `modules/mhr-vrm-spike.md`.
+Location: `spikes/m3-mhr-vrm/` (uv project, CPU PyTorch, `pymomentum`, `mhr`). Converts MHR skeleton states to VRM 1.0 normalized local rotations, fits CMU mocap to MHR, and checks the round trip. Result: go for MHR as canonical skeleton (`PLAN.md` §3.10; numbers in `plans/m3-mhr-vrm-spike.md`). Its reusable code moved to `core/` (`mtcore`); the spike imports it. Data lives in gitignored `data/` (`data/cmu`, `data/mhr`). Known issue: `MHR.from_files` segfaults in pymomentum (0.1.114 CPU) when loading blendshapes; the spike loads the rig without them. Details: `modules/mhr-vrm-spike.md`.
 
 ### m1-body-lifter (WIP, M1)
-Body bones only (spine, neck, head, clavicles, arms); hands, face, merger, root translation come later. Planned pieces:
-- `mhrcore/` (placeholder name, `[OPEN]`): spike code M1 reuses, moved out of `spikes/m3-mhr-vrm/` instead of imported from it. The spike keeps working or points at it.
-- `train/`: batch CMU → MHR fits, synthetic MediaPipe landmarks (world + image) from fitted MHR poses, noise/framing model calibrated on real sessions, seated-motion synthesis, model + training, inference on recorded sessions for the eval harness.
-- `data/m1/` (gitignored): fits, generated training sets, checkpoints. CMU-derived data is never committed.
-Open (see plan): package name, exact output joint set, per-bone confidence output, how the `baseline-rendered` render stage is applied to model output. No module files until code exists.
+Body bones only (spine, neck, head, clavicles, arms); hands, face, merger, root translation come later. Built from `core/` (`mtcore`, implemented) and `train/` (`mttrain`, implemented); CMU-derived fits, training data and checkpoints stay in gitignored `data/m1/`. Two runs so far (`m1-first`, `m1-v2`; numbers in the plan): much calmer shoulders/hands than the baseline with no added lag, torso/head slightly noisier. Still open: render stage for model output, consistent neck/head split in the fit, go/no-go on seated-v2 sessions.
+
+### mtcore (implemented)
+Location: `core/`. Shared by the spike and `train/` as an editable path dependency; consumers pick their own torch build. Details: `modules/mtcore.md`.
+
+### train (implemented)
+Location: `train/`. Pipeline prep_fits → seated → camera → mpstyle → noise → synth → features → dataset → model → losses → train → infer, plus calibrate (real vs synthetic stats). Details: `modules/train.md`.
 
 ### retargeting (planned, M4)
 Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracked on the performer's realistic MHR identity) onto the avatar's MHR identity, then to VRM 1.0. Avatar bone lengths enter only here. Trained to keep spatial accuracy (relative positions/directions between body parts, contacts included); may read earlier latents for temporal context. The M3 spike confirmed it is needed: proportion differences, not the conversion, cause contact misses on stylized avatars. No module file yet.
@@ -61,7 +63,8 @@ Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracke
   - Training input synthesised directly from fitted MHR poses + calibrated noise and simulated camera framing; render-then-detect stays in M6.
   - Model: small stateless causal model over past samples at fixed time offsets (≈ 0.1–1.6 s) with explicit differences, 6D rotation output; preferred over a GRU (dropped frames, stateless calls, ONNX export).
   - Data: low-root-travel CMU clips weighted toward upper-body activity; seated motion from CMU upper bodies on a seated lower body; performer proportions varied within MHR limits.
-  - Code layout: new `train/` uv project (CUDA PyTorch); reused spike code moves into a shared package.
+  - Code layout: new `train/` uv project (CUDA PyTorch); reused spike code moved into the shared package `core/` (`mtcore`).
+  - Per-bone confidence output from the start (uncertainty-weighted loss); the model predicts all four MHR spine joints, folded onto VRM's spine bones by the conversion.
 
 ## Licensing
 `docs/LICENSES-REGISTER.md` tracks source, license and usage of every asset, dataset, model and recording. The vendored vspark code has no declared license; the owner must relicense it before any public release.
