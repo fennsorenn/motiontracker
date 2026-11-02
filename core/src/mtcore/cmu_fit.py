@@ -32,9 +32,16 @@ PAIRS = [
 # MHR's upper limit for every subject tried (CMU's head sits higher above the shoulders); a low neck
 # weight lets the head joint follow CMU's (head residual ~1-2 cm instead of 2-4 cm).
 LOOSE_SPINE = {"c_spine1": 0.1, "c_spine3": 0.1, "c_neck": 0.1}
-PAIRS_M1 = [(m, c, LOOSE_SPINE.get(m, w)) for m, c, w in PAIRS]
+# M1 also pairs the thumbs (hand roll; otherwise forearm twist and wrist orientation are unconstrained)
+PAIRS_M1 = [(m, c, LOOSE_SPINE.get(m, w)) for m, c, w in PAIRS] + [
+    ("l_thumb1", "lthumb", 0.5), ("r_thumb1", "rthumb", 0.5)]
+# Head orientation: positions only pin the head joint, not where the face points. CMU's rest pose
+# faces +z with the left at +x like MHR's, so MHR's head target is CMU's head rotation applied to
+# MHR's rest head orientation.
+HEAD_WEIGHT = 10.0
 
 ERRORS = [S.ErrorFunctionType.Position, S.ErrorFunctionType.Limit]
+ERRORS_M1 = ERRORS + [S.ErrorFunctionType.Orientation]
 
 
 def _frozen(n):
@@ -51,6 +58,34 @@ def _constraints(jn, names, P, pairs):
         position_cons_targets=torch.tensor(np.stack([P[:, names.index(c)] for _, c, _ in pairs], 1),
                                            dtype=torch.float32),
     )
+
+
+def _mat_to_quat(R):
+    w = np.sqrt(np.maximum(0, 1 + R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2])) / 2
+    x = np.copysign(np.sqrt(np.maximum(0, 1 + R[..., 0, 0] - R[..., 1, 1] - R[..., 2, 2])) / 2, R[..., 2, 1] - R[..., 1, 2])
+    y = np.copysign(np.sqrt(np.maximum(0, 1 - R[..., 0, 0] + R[..., 1, 1] - R[..., 2, 2])) / 2, R[..., 0, 2] - R[..., 2, 0])
+    z = np.copysign(np.sqrt(np.maximum(0, 1 - R[..., 0, 0] - R[..., 1, 1] + R[..., 2, 2])) / 2, R[..., 1, 0] - R[..., 0, 1])
+    q = np.stack([x, y, z, w], -1)
+    return q / np.linalg.norm(q, axis=-1, keepdims=True)
+
+
+def _quat_mul(a, b):
+    ax, ay, az, aw = np.moveaxis(a, -1, 0)
+    bx, by, bz, bw = np.moveaxis(b, -1, 0)
+    return np.stack([aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+                     aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz], -1)
+
+
+def _head_constraint(ch, jn, head_rot, weight):
+    """Orientation constraint dict for c_head from CMU head rotations (T, 3, 3)."""
+    h = jn.index("c_head")
+    rest = np.asarray(g.model_parameters_to_skeleton_state(
+        ch, np.zeros(len(ch.parameter_transform.names), np.float32)))[h, 3:7]
+    tgt = _quat_mul(_mat_to_quat(head_rot), rest)
+    return dict(orientation_cons_parents=torch.tensor([h], dtype=torch.int32),
+                orientation_cons_offsets=torch.tensor([[0.0, 0.0, 0.0, 1.0]]),
+                orientation_cons_weights=torch.tensor([1.0]),
+                orientation_cons_targets=torch.tensor(tgt[:, None], dtype=torch.float32))
 
 
 def _init(pn, names, P, base=None):
@@ -108,37 +143,39 @@ def fit(subject, clip, step=4, max_frames=300, verbose=True, pairs=PAIRS):
     return ch, mp, states, res
 
 
-def fit_subject_scales(ch, subject, clips, step=4, frames_per_clip=60, pairs=PAIRS_M1):
+def fit_subject_scales(ch, subject, clips, step=4, frames_per_clip=60, pairs=PAIRS_M1, head_weight=HEAD_WEIGHT):
     """One performer identity per CMU subject: scales solved on evenly spaced frames from `clips`.
 
     Returns the model parameter vector with only the scale entries set (pose entries zero)."""
     jn = list(ch.skeleton.joint_names)
     pn = list(ch.parameter_transform.names)
-    chunks, names = [], None
+    chunks, rots, names = [], [], None
     for clip in clips:
         n = clip_length(subject, clip, step)
-        names, P = clip_positions(subject, clip, step, np.linspace(0, n - 1, min(frames_per_clip, n)).astype(int))
+        names, P, R = clip_positions(subject, clip, step, np.linspace(0, n - 1, min(frames_per_clip, n)).astype(int),
+                                     rot_bones=("head",))
         chunks.append(P)
+        rots.append(R[:, 0])
     P = np.concatenate(chunks)
-    cons = _constraints(jn, names, P, pairs)
+    cons = _constraints(jn, names, P, pairs) | _head_constraint(ch, jn, np.concatenate(rots), 1.0)
     active = torch.tensor([not _frozen(n) for n in pn])
     is_scale = torch.tensor([n.startswith("scale_") for n in pn]) & active
     opts = _options()
     mp = _rigid(ch, pn, _init(pn, names, P), cons, opts)
-    mp = S.solve_sequence_ik(ch, active, is_scale, mp, ERRORS, torch.tensor([1.0, 1.0]), opts, **cons)
+    mp = S.solve_sequence_ik(ch, active, is_scale, mp, ERRORS_M1, torch.tensor([1.0, 1.0, head_weight]), opts, **cons)
     scales = np.zeros(len(pn), np.float32)
     sel = is_scale.numpy()
     scales[sel] = mp[0].detach().numpy()[sel]
     return scales
 
 
-def fit_clip(ch, subject, clip, scales, step=4, pairs=PAIRS_M1, chunk=500):
+def fit_clip(ch, subject, clip, scales, step=4, pairs=PAIRS_M1, chunk=500, head_weight=HEAD_WEIGHT):
     """Per-frame pose for a whole clip with the subject's scales frozen.
 
     Returns (model parameters (T, P), residual per pair (T, pairs) in cm)."""
     jn = list(ch.skeleton.joint_names)
     pn = list(ch.parameter_transform.names)
-    names, P = clip_positions(subject, clip, step)
+    names, P, R = clip_positions(subject, clip, step, rot_bones=("head",))
     pose = torch.tensor([not _frozen(n) and not n.startswith("scale_") for n in pn])
     opts = _options()
     out, res = [], []
@@ -146,7 +183,8 @@ def fit_clip(ch, subject, clip, scales, step=4, pairs=PAIRS_M1, chunk=500):
         Pc = P[s:s + chunk]
         cons = _constraints(jn, names, Pc, pairs)
         mp = _rigid(ch, pn, _init(pn, names, Pc, scales), cons, opts)
-        mp = S.solve_ik(ch, pose, mp, ERRORS, torch.tensor([1.0, 1.0]), opts, **cons)
+        cons |= _head_constraint(ch, jn, R[s:s + chunk, 0], 1.0)
+        mp = S.solve_ik(ch, pose, mp, ERRORS_M1, torch.tensor([1.0, 1.0, head_weight]), opts, **cons)
         mp = mp.detach().numpy().astype(np.float32)
         out.append(mp)
         res.append(_residual(ch, jn, mp, cons)[1])
