@@ -100,6 +100,14 @@ approach.
    a cheap proxy for MHR's Euler limits.) Inputs: landmarks + visibility at time offsets, differences between
    them. Output: 6D rotations for the body joints. Losses as in decision 2; joint-limit penalty
    from MHR's `[Limits]`. Train on the 3090. Track held-out synthetic metrics.
+   First run (`m1-first`, 40k steps, ~78 min on the 3090): held-out subjects, synthetic: wrist
+   position 4.3 cm (seated 4.1), upper arm 11 deg, head 1.1 cm; wrist rotation stays ~23 deg (hand
+   orientation barely observable from pose landmarks; M4 hand head). On the recorded session vs
+   baseline: shoulders and hands much calmer (hand rest noise with arms below frame 2.5 vs 9.9 deg,
+   shoulder twitches 1.9 vs 13/min, no added lag), but arms noisier (rest noise 5.0 vs 3.7 deg) and
+   the head never moved. Cause: the CMU fits constrained only positions, so head orientation and
+   hand roll (hence forearm twist) were unconstrained in the targets. Fixed in the fit (head
+   orientation constraint from CMU's head bone, thumb pairs); refit + retrain `m1-v2`.
 7. **Inference on sessions.** (`mttrain.infer` writes harness pose tracks; render stage still open.) Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
    write a pose track the harness accepts, apply the same render stage as `baseline-rendered`,
    and produce the harness report against the baseline.
