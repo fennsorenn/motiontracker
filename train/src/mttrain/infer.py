@@ -26,6 +26,9 @@ from .features import frame_features, history_indices, model_input
 from .model import Lifter
 from .skeleton import OUT_JOINTS, PARENT_IDX, quat_to_mat
 
+# VRM bones the model drives; legs, feet, eyes and fingers would only be the rest pose
+OUTPUT_BONES = ["hips", "spine", "chest", "upperChest", "neck", "head", "leftShoulder", "rightShoulder",
+                "leftUpperArm", "rightUpperArm", "leftLowerArm", "rightLowerArm", "leftHand", "rightHand"]
 # camera axes (x right, y down, z forward) -> MHR world for a performer facing the camera
 R0 = np.diag([1.0, -1.0, -1.0])
 
@@ -131,7 +134,8 @@ def main():
     out = a.out or a.ckpt.parent / f"{a.session.name}.poses.jsonl"
     with open(out, "w") as f:
         for i, t in enumerate(times):
-            f.write(json.dumps({"t": round(t * 1000, 1), "bones": {b: q[i].round(6).tolist() for b, q in bones.items()},
+            f.write(json.dumps({"t": round(t * 1000, 1),
+                                "bones": {b: bones[b][i].round(6).tolist() for b in OUTPUT_BONES if b in bones},
                                 "conf": dict(zip(OUT_JOINTS, conf[i].round(3).tolist()))}) + "\n")
     feats = frame_features(times, world, image, vis, present)
     idx, age = history_indices(times, np.arange(len(times)))

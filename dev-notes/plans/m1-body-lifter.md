@@ -108,6 +108,14 @@ approach.
    the head never moved. Cause: the CMU fits constrained only positions, so head orientation and
    hand roll (hence forearm twist) were unconstrained in the targets. Fixed in the fit (head
    orientation constraint from CMU's head bone, thumb pairs); refit + retrain `m1-v2`.
+   Second run (`m1-v2`, refit data, same settings): held-out synthetic wrist 4.3 cm (seated 4.2),
+   upper arm 11.3 deg, forearm 6.9 deg, head direction ~7 deg (neck/head split in the targets is
+   arbitrary; local head-group error ~12 deg). Recorded session, raw output vs baseline /
+   baseline-rendered: rest noise shoulders 0.7 vs 3.4 / 2.6, arms 3.1 vs 3.7 / 3.2, hands 1.3 vs
+   7.1 / 6.0, torso+head 1.0 vs 0.4 / 0.2 deg; twitches/min shoulders 0, arms 9.4 vs 16.9 / 45,
+   hands 0 vs 15 / 54; lag 0 ms; 0.26 ms/frame. Follow-ups: consistent neck/head split in the fit,
+   torso jitter, render filter for model output, hand-position and exact limit metrics in the
+   harness, seated-v2 sessions for the go/no-go.
 7. **Inference on sessions.** (`mttrain.infer` writes harness pose tracks; render stage still open.) Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
    write a pose track the harness accepts, apply the same render stage as `baseline-rendered`,
    and produce the harness report against the baseline.
