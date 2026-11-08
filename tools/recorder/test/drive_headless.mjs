@@ -1,8 +1,10 @@
 // Drive tools/recorder in headless Chrome over a test video via CDP; print a summary.
-// Usage: node drive_headless.mjs <page url> <output dir>. Called by run_headless.sh.
+// Usage: node drive_headless.mjs <page url> <output dir> [timeout seconds, default 40].
+// Called by run_headless.sh and mttrain.render (rendered synthetic sessions).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-const [,, pageUrl, outDir] = process.argv;
+const [,, pageUrl, outDir, timeoutArg] = process.argv;
+const timeoutS = Number(timeoutArg || 40);
 const chrome = spawn('google-chrome', ['--headless=new', '--remote-debugging-port=9333', '--no-first-run',
   '--autoplay-policy=no-user-gesture-required', `--user-data-dir=${outDir}/chrome-profile`, 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -24,7 +26,7 @@ for (let i = 0; i < 120; i++) { await sleep(500); state = await ev("document.get
 console.log('state after load:', state);
 if (state === 'Ready.') {
   await ev("document.getElementById('start').click()");
-  for (let i = 0; i < 80; i++) { await sleep(500); if (await ev('!!window.__mtResult')) break; }
+  for (let i = 0; i < timeoutS * 2; i++) { await sleep(500); if (await ev('!!window.__mtResult')) break; }
   const res = await ev('window.__mtResult');
   if (res) { fs.writeFileSync(`${outDir}/session.json`, res.session); fs.writeFileSync(`${outDir}/landmarks.jsonl`, res.landmarks); }
   console.log('status:', await ev("document.getElementById('status').textContent"));

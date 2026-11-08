@@ -63,3 +63,24 @@ def test_contact_distances(tmp_path):
     assert abs(c["palms-together"]["system_cm"] - 140) < 1e-3
     assert abs(c["palms-together"]["mediapipe_cm"] - 140) < 1e-3
     assert c["palms-together"]["n"] == 15  # frames after the settle time
+
+
+def test_ground_truth_metrics_zero_for_identical_tracks():
+    from mteval.metrics import ground_truth_metrics
+    t = np.arange(50) * 33.3
+    rng = np.random.default_rng(0)
+    bones = {}
+    for b in ("hips", "spine", "chest", "neck", "head", "leftShoulder", "leftUpperArm", "leftLowerArm", "leftHand",
+              "rightShoulder", "rightUpperArm", "rightLowerArm", "rightHand"):
+        q = rng.normal(0, 0.2, (50, 4)); q[:, 3] = 1.0
+        bones[b] = q / np.linalg.norm(q, axis=1, keepdims=True)
+    tr = PoseTrack(t, bones)
+    g = ground_truth_metrics(tr, tr)
+    assert g["global_rotation_error"]["global:leftLowerArm"]["median"] < 1e-4
+    assert g["wrist_error"]["left"]["median"] < 1e-6 and g["wrist_error"]["right"]["median"] < 1e-6
+    # the baseline-style split (no hips/upperChest, rotation folded into spine) gives the same globals
+    b2 = {k: v for k, v in bones.items() if k != "hips"}
+    from mteval.metrics import _qmul
+    b2["spine"] = _qmul(bones["hips"], bones["spine"])
+    g2 = ground_truth_metrics(PoseTrack(t, b2), tr)
+    assert g2["global_rotation_error"]["global:rightHand"]["median"] < 1e-4

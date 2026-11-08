@@ -3,6 +3,7 @@
   uv run mteval evaluate SESSION [--system baseline] [--system baseline-rendered]
                          [--system name=poses.jsonl] [--system name-rendered=poses.jsonl]
                          [--system name-glide=poses.jsonl] [--out DIR] [--auto-still] [--no-calibration]
+                         [--gt ground_truth.jsonl]
 """
 
 from __future__ import annotations
@@ -26,12 +27,15 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--out", help="report directory (default: <repo>/reports/<session folder>)")
     ev.add_argument("--auto-still", action="store_true", help="detect still segments if the session has none")
     ev.add_argument("--no-calibration", action="store_true", help="skip the baseline head calibration")
+    ev.add_argument("--gt", help="ground-truth pose track (rendered synthetic sessions) for the labeled metrics")
     args = ap.parse_args(argv)
 
     session = load_session(args.session)
     systems = args.system or ["baseline", "baseline-rendered"]
     results = [run_system(s, session, calibrate=not args.no_calibration) for s in systems]
-    report = evaluate(session, results, auto_still=args.auto_still)
+    from .session import PoseTrack
+    gt = PoseTrack.load(args.gt) if args.gt else None
+    report = evaluate(session, results, auto_still=args.auto_still, gt=gt)
     out = Path(args.out) if args.out else REPO_ROOT / "reports" / session.name
     j, m = write_report(report, out)
     print(f"wrote {m} and {j}")

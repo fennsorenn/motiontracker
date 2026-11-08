@@ -13,7 +13,8 @@ from .session import Session, auto_still_segments
 from .systems import SystemResult
 
 
-def evaluate(session: Session, results: list[SystemResult], auto_still: bool = False) -> dict:
+def evaluate(session: Session, results: list[SystemResult], auto_still: bool = False, gt=None) -> dict:
+    """`gt`: optional ground-truth PoseTrack (rendered synthetic sessions) for the labeled metrics."""
     segments = list(session.segments)
     still = session.segments_labeled("still")
     still_source = "protocol"
@@ -48,6 +49,7 @@ def evaluate(session: Session, results: list[SystemResult], auto_still: bool = F
             },
             "hand_position": M.hand_position(tr, session),
             "contact": M.contact(tr, session),
+            "ground_truth": M.ground_truth_metrics(r.track, gt) if gt is not None else None,
             "per_still_segment": [
                 {
                     "segment": still_name(s),
@@ -164,6 +166,33 @@ def to_markdown(report: dict) -> str:
             cells.append(f"{np.mean(meds):.1f}" if meds else "–")
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
     lines.append("")
+    if any(report["systems"][s].get("ground_truth") for s in systems):
+        lines += ["## Against ground truth", "",
+                  "Global orientation error (deg, median over frames, mean over the bones of a group; global = "
+                  "relative to the avatar root, so chain splits don't matter), wrist position error relative to "
+                  "the shoulder on a common arm (cm), onset lag (ms) and peak-velocity ratio (arms).", "",
+                  "| Measure | " + " | ".join(systems) + " |", "|---|" + "---|" * len(systems)]
+        def gtcell(s, fn):
+            g = report["systems"][s].get("ground_truth")
+            v = fn(g) if g else None
+            return "–" if v is None else f"{v:.2f}" if abs(v) < 10 else f"{v:.1f}"
+        def grp(g, key, bones, field):
+            vals = [g[key][b][field] for b in bones if g[key].get(b) and g[key][b].get(field) is not None]
+            return float(np.mean(vals)) if vals else None
+        arm_up = [f"global:{s}UpperArm" for s in ("left", "right")]
+        arm_lo = [f"global:{s}LowerArm" for s in ("left", "right")]
+        hands = [f"global:{s}Hand" for s in ("left", "right")]
+        rows = [("head (deg)", lambda g: grp(g, "global_rotation_error", ["global:head"], "median")),
+                ("upper arms (deg)", lambda g: grp(g, "global_rotation_error", arm_up, "median")),
+                ("forearms (deg)", lambda g: grp(g, "global_rotation_error", arm_lo, "median")),
+                ("hands (deg)", lambda g: grp(g, "global_rotation_error", hands, "median")),
+                ("wrist position (cm)", lambda g: float(np.mean([g["wrist_error"][x]["median"] for x in ("left", "right") if g["wrist_error"].get(x)])) if any(g["wrist_error"].values()) else None),
+                ("wrist position p90 (cm)", lambda g: float(np.mean([g["wrist_error"][x]["p90"] for x in ("left", "right") if g["wrist_error"].get(x)])) if any(g["wrist_error"].values()) else None),
+                ("forearm onset lag (ms)", lambda g: grp(g, "onset_lag", arm_lo, "lag_ms")),
+                ("forearm peak-velocity ratio", lambda g: grp(g, "peak_velocity_ratio", arm_lo, "median"))]
+        for label, fn in rows:
+            lines.append(f"| {label} | " + " | ".join(gtcell(s, fn) for s in systems) + " |")
+        lines.append("")
     variants = sorted({v for s in systems for v in (report["systems"][s].get("contact") or {})})
     if variants:
         lines += ["## Contact (criterion 7b, cm)", "",

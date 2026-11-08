@@ -549,3 +549,59 @@ def peak_velocity_ratio(
                 ratios.append(float(ps.speed[m].max() / s))
         out[bone] = {"median": float(np.median(ratios)) if ratios else None, "peaks": len(ratios)}
     return out
+
+
+# ── against ground truth (rendered synthetic sessions) ───────────────────────────
+
+GLOBAL_CHAINS = {
+    "global:head": HEAD_CHAIN,
+    **{f"global:{side}{part}": ARM_CHAIN + tuple(f"{side}{p}" for p in ("Shoulder", "UpperArm", "LowerArm", "Hand")[
+        :("Shoulder", "UpperArm", "LowerArm", "Hand").index(part) + 1])
+       for side in ("left", "right") for part in ("UpperArm", "LowerArm", "Hand")},
+}
+
+
+def globals_track(track: PoseTrack) -> PoseTrack:
+    """Global orientations (relative to the avatar root) of the head and arm bones: products of the
+    chain bones the system outputs (missing ones identity). Systems split chains differently (the
+    baseline has no hips, upperChest or head bone), so per-bone local rotations aren't comparable
+    with ground truth; these are. Bones absent at a frame (NaN) make that frame absent."""
+    ident = np.array([0.0, 0.0, 0.0, 1.0])
+    out = {}
+    for name, chain in GLOBAL_CHAINS.items():
+        if chain[-1] not in track.bones:
+            continue
+        g = np.tile(ident, (len(track.times), 1))
+        for b in chain:
+            q = track.bones.get(b)
+            if q is not None:
+                g = _qmul(g, np.where(np.isnan(q), ident, q))
+        g[np.isnan(track.bones[chain[-1]][:, 0])] = np.nan
+        out[name] = g
+    return PoseTrack(track.times, out)
+
+
+def wrist_error_gt(pred: PoseTrack, gt: PoseTrack, lengths=(0.28, 0.25)) -> dict[str, dict | None]:
+    """Wrist position error (cm) relative to the shoulder, both systems' arm rotations on the same
+    arm (upper arm, forearm lengths in metres), at the ground-truth times."""
+    P, G = globals_track(pred), globals_track(gt)
+    out: dict[str, dict | None] = {}
+    for side, x in (("left", 1.0), ("right", -1.0)):
+        ku, kl = f"global:{side}UpperArm", f"global:{side}LowerArm"
+        if ku not in P.bones or kl not in P.bones or ku not in G.bones:
+            out[side] = None
+            continue
+        axis = np.array([x, 0.0, 0.0])
+        def wrist(tr, at):
+            u = _hold_sample(tr.times, tr.bones[ku], at)
+            lo = _hold_sample(tr.times, tr.bones[kl], at)
+            return lengths[0] * _qrot(u, axis) + lengths[1] * _qrot(lo, axis)
+        e = np.linalg.norm(wrist(P, gt.times) - wrist(G, gt.times), axis=1) * 100
+        out[side] = _stats(e, np.ones(len(e), bool))
+    return out
+
+
+def ground_truth_metrics(pred: PoseTrack, gt: PoseTrack) -> dict:
+    Pg, Gg = globals_track(pred), globals_track(gt)
+    return {"global_rotation_error": rotation_error(Pg, Gg), "onset_lag": onset_lag(Pg, Gg),
+            "peak_velocity_ratio": peak_velocity_ratio(Pg, Gg), "wrist_error": wrist_error_gt(pred, gt)}
