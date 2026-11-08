@@ -120,7 +120,13 @@ approach.
    2026-11-07: baseline CLI `--poses` filter-only mode, harness `--system m1-rendered=<poses>`;
    filtering the baseline's own solver output this way reproduces `baseline-rendered` exactly.
    m1-v2 through the filter, rest noise vs baseline-rendered: shoulders 0.5 vs 2.6, arms 2.7 vs 3.2,
-   hands 0.9 vs 6.0, torso+head 0.5 vs 0.2 deg; lag 75-100 ms like the baseline's.) Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
+   hands 0.9 vs 6.0, torso+head 0.5 vs 0.2 deg; lag 75-100 ms like the baseline's.)
+   Criteria framing changed (owner, 2026-11-08): the model replaces the filter too, so its output is
+   upsampled to 60 Hz without smoothing (`mteval.upsample.glide`, harness `--system m1-glide=<poses>`)
+   and compared against `baseline-rendered`. m1-v2 glide vs baseline-rendered: rest noise shoulders
+   0.6 vs 2.6, arms 3.0 vs 3.2, hands 1.2 vs 6.0, torso+head 0.9 vs 0.2 deg; arm twitches/min 13.1
+   vs 45 (3.8 and 22.5 in the two still segments); lag 90 vs 70-95 ms (a causal 60 Hz display of
+   10 FPS input costs at least ~50 ms on the harness's midpoint-stamped metric). Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
    write a pose track the harness accepts, apply the same render stage as `baseline-rendered`,
    and produce the harness report against the baseline.
 8. **Go/no-go write-up** in PLAN.md §6/§10 with the criteria table.

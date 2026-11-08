@@ -8,7 +8,8 @@ Any other system can be evaluated from a precomputed output file (`name=path.jso
 `{t, bones: {vrmBone: [x, y, z, w]}}` per line). A name ending in `-rendered`
 (`m1-rendered=path.jsonl`) runs the file through the same frontend render stage as
 `baseline-rendered` first (the baseline CLI's filter-only `--poses` mode), so it can be compared
-with `baseline-rendered`.
+with `baseline-rendered`. A name ending in `-glide` (`m1-glide=path.jsonl`) is upsampled to 60 Hz
+without smoothing instead (`upsample.glide`), for systems that replace the filter too.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .session import PoseTrack, Session
+from .upsample import glide
 
 REPO = Path(os.environ.get("MT_REPO", Path(__file__).resolve().parents[3]))
 BUILTIN = ("baseline", "baseline-rendered")
@@ -78,9 +80,11 @@ def run_system(spec: str, session: Session, calibrate: bool = True) -> SystemRes
         name, path = spec.split("=", 1)
         if name.endswith("-rendered"):
             return run_rendered(name, path)
+        if name.endswith("-glide"):
+            return SystemResult(name, glide(PoseTrack.load(path)), [f"precomputed from {path}, glide-upsampled to 60 Hz"])
         return SystemResult(name, PoseTrack.load(path), [f"precomputed from {path}"])
     if spec == "baseline":
         return run_baseline(session, "solver", calibrate)
     if spec == "baseline-rendered":
         return run_baseline(session, "rendered", calibrate)
-    raise ValueError(f"unknown system {spec!r}; built in: {', '.join(BUILTIN)}, or name=path.jsonl (name-rendered=path.jsonl for the render stage)")
+    raise ValueError(f"unknown system {spec!r}; built in: {', '.join(BUILTIN)}, or name=path.jsonl (name-rendered=… for the render filter, name-glide=… for 60 Hz upsampling)")

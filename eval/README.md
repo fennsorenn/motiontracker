@@ -61,7 +61,12 @@ Compare systems at the same stage, never across stages. After rendering, a 10 FP
 shows each pose change as a quick catch-up over a few 16 ms frames. That raises peak speeds
 and twitch counts for the rendered stage, even though its rest jitter and noise are lower.
 The fair comparison for a learned model is its own output against `baseline`, or its output
-through the same render filter (`name-rendered=…`) against `baseline-rendered`.
+through the same render filter (`name-rendered=…`) against `baseline-rendered`. For a model that
+replaces the filter too (the M1 go/no-go framing), `name-glide=…` upsamples its output to 60 Hz
+without smoothing: on each new pose every bone slerps to it, finishing one render frame before the
+next pose is expected (`mteval.upsample`). Compare that against `baseline-rendered`. Any causal 60 Hz
+display of a 10 FPS stream lags at least half an interval on the lag metric, which stamps speeds at
+interval midpoints.
 
 ### Known limits
 

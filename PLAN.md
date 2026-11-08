@@ -296,11 +296,11 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
   - Contact preservation (hand-face, hands-together)
   - Reprojection error on unlabeled real video
 - Test sets: held-out synthetic, ARKit-labeled face/head recordings, unlabeled real seated video.
-- **Success criteria for the M1 go/no-go**, provisional `[USER]` (2026-11-01: "confirm it for now to get going"); revisit after more seated-v2 sessions. Measured after the same render filter as `baseline-rendered`, on at least three seated-v2 sessions, holding on each session. Body bones only (shoulders, arms); hand/finger targets belong to M4.
+- **Success criteria for the M1 go/no-go**, provisional `[USER]` (2026-11-01: "confirm it for now to get going"); revisit after more seated-v2 sessions. The model is measured as a replacement for both vspark's solver and its frontend One Euro filter: its output is upsampled to 60 Hz without smoothing (glide to the latest pose; harness `--system <name>-glide=<poses>`) and compared against `baseline-rendered`, what the avatar shows today `[USER]` (2026-11-08; was: both through the same render filter). The model through the render filter (`<name>-rendered`) is reported as a secondary number. On at least three seated-v2 sessions, holding on each session. Body bones only (shoulders, arms); hand/finger targets belong to M4.
   1. Rest noise with arms below the frame: at least 50% lower than baseline.
   2. Twitches per minute at rest: under 10 (baseline ~38–49).
   3. Rest noise with elbows in view: no worse than baseline.
-  4. Added lag vs detector: no more than baseline, ideally under 50 ms (harness resolution is coarse at 10 FPS).
+  4. Added lag vs detector: no more than baseline, ideally under 50 ms (harness resolution is coarse at 10 FPS). Note: the harness stamps speeds at frame-interval midpoints, so any causal 60 Hz display of a 10 FPS stream shows at least half an interval (~50 ms); glide measures ~90 ms, about the same as `baseline-rendered` (70–95 ms).
   5. Speed p90 in slow/fast segments: at least 80% of baseline (guards against over-smoothing).
   6. Model cost: under 2 ms per frame on a laptop CPU.
   7. Hand position on the performer's own skeleton vs detected hands: at least 30% lower error than baseline.
