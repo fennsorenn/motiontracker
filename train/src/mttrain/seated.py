@@ -67,9 +67,12 @@ def rest_weights(rng, n, fps, p_rest=0.6, max_cover=0.6):
         hold = int(rng.uniform(2, 8) * fps)
         ramp = max(1, int(rng.uniform(0.4, 1.2) * fps))
         name = rng.choice(list(REST))
-        a, b = t, min(n, t + 2 * ramp + hold)
+        end = t + 2 * ramp + hold
+        a, b = t, min(n, end)
         x = np.arange(a, b) - a
-        seg = np.minimum(min_jerk(x / ramp), min_jerk((b - a - x) / ramp))
+        # a stretch cut off by the crop end continues past it (no fade-out at the crop end, where
+        # the training targets are; fixed 2026-11-08, before that targets rarely saw a full rest pose)
+        seg = np.minimum(min_jerk(x / ramp), min_jerk((end - a - x) / ramp))
         take = seg > w[a:b]
         w[a:b] = np.where(take, seg, w[a:b])
         names[a:b] = np.where(take, name, names[a:b])

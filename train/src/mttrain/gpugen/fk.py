@@ -29,42 +29,67 @@ def _axis_quat(angle, axis):
 
 
 class MhrFK(torch.nn.Module):
-    def __init__(self, character):
+    """`keep`: joint indices whose states are needed (their ancestors are computed too); the other
+    joints' states are left at zero. Default: all joints."""
+
+    def __init__(self, character, keep=None):
         super().__init__()
         sk, pt = character.skeleton, character.parameter_transform
         self.register_buffer("transform", torch.tensor(np.asarray(pt.transform), dtype=torch.float32))
         self.register_buffer("offsets", torch.tensor(np.asarray(sk.offsets), dtype=torch.float32))
         self.register_buffer("pre", torch.tensor(np.asarray(sk.pre_rotations), dtype=torch.float32))
         self.parents = [int(p) if 0 <= int(p) < len(sk.joint_names) else -1 for p in np.asarray(sk.joint_parents)]
+        self.J = len(self.parents)
+        need = set(range(self.J)) if keep is None else set()
+        for j in (keep or []):
+            while j >= 0 and j not in need:
+                need.add(j)
+                j = self.parents[j]
         # joints grouped by depth: every joint of a level only depends on earlier levels
         depth = []
         for p in self.parents:
             depth.append(0 if p < 0 else depth[p] + 1)
-        self.levels = [[j for j, d in enumerate(depth) if d == k] for k in range(max(depth) + 1)]
-        self.J = len(self.parents)
+        order = sorted(need)
+        pos = {j: i for i, j in enumerate(order)}  # full joint index -> compact index
+        self.levels = []
+        for k in range(max(depth) + 1):
+            lvl = [j for j, d in enumerate(depth) if d == k and j in need]
+            if lvl:
+                self.register_buffer(f"lvl{k}", torch.tensor([pos[j] for j in lvl]))
+                self.register_buffer(f"par{k}", torch.tensor([pos.get(self.parents[j], 0) for j in lvl]))
+                self.levels.append((k, self.parents[lvl[0]] < 0))
+        self.register_buffer("need", torch.tensor(order))
+        rows = torch.tensor([7 * j + c for j in order for c in range(7)])
+        self.register_buffer("transform_need", self.transform[rows])
+        self.register_buffer("offsets_need", self.offsets[order])
+        self.register_buffer("pre_need", self.pre[order])
 
     def forward(self, mp):
         shp = mp.shape[:-1]
-        jp = (mp.reshape(-1, mp.shape[-1]) @ self.transform.T).reshape(-1, self.J, 7)
+        need = self.need
+        Jn = len(need)
+        # joint parameters of the needed joints only; levels index into this compact set
+        jp = (mp.reshape(-1, mp.shape[-1]) @ self.transform_need.T).reshape(-1, Jn, 7)
         t, r, s = jp[..., :3], jp[..., 3:6], jp[..., 6]
         # local rotation: pre-rotation, then Euler XYZ (R = Rz Ry Rx)
         q = quat_mul(_axis_quat(r[..., 2], 2), quat_mul(_axis_quat(r[..., 1], 1), _axis_quat(r[..., 0], 0)))
-        q = quat_mul(self.pre.expand_as(q), q)
-        trans = self.offsets + t
+        q = quat_mul(self.pre_need.expand_as(q), q)
+        trans = self.offsets_need + t
         scale = torch.exp2(s)
         n = jp.shape[0]
-        gq = torch.empty(n, self.J, 4, device=mp.device, dtype=mp.dtype)
-        gt = torch.empty(n, self.J, 3, device=mp.device, dtype=mp.dtype)
-        gs = torch.empty(n, self.J, device=mp.device, dtype=mp.dtype)
-        for lvl in self.levels:
-            idx = torch.tensor(lvl, device=mp.device)
-            par = [self.parents[j] for j in lvl]
-            if par[0] < 0:
+        gq = torch.empty(n, Jn, 4, device=mp.device, dtype=mp.dtype)
+        gt = torch.empty(n, Jn, 3, device=mp.device, dtype=mp.dtype)
+        gs = torch.empty(n, Jn, device=mp.device, dtype=mp.dtype)
+        for k, is_root in self.levels:
+            idx = getattr(self, f"lvl{k}")
+            if is_root:
                 gq[:, idx], gt[:, idx], gs[:, idx] = q[:, idx], trans[:, idx], scale[:, idx]
                 continue
-            pidx = torch.tensor(par, device=mp.device)
+            pidx = getattr(self, f"par{k}")
             pq, pt_, ps = gq[:, pidx], gt[:, pidx], gs[:, pidx]
             gt[:, idx] = pt_ + ps[..., None] * quat_rotate(pq, trans[:, idx])
             gq[:, idx] = quat_mul(pq, q[:, idx])
             gs[:, idx] = ps * scale[:, idx]
-        return torch.cat([gt, gq, gs[..., None]], -1).reshape(*shp, self.J, 8)
+        out = torch.zeros(n, self.J, 8, device=mp.device, dtype=mp.dtype)
+        out[:, need] = torch.cat([gt, gq, gs[..., None]], -1)
+        return out.reshape(*shp, self.J, 8)

@@ -1,6 +1,10 @@
 """Train the M1 body lifter.
 
-    uv run python -m mttrain.train --name first [--steps 40000] [--batch 256] [--device cuda:0]
+    uv run python -m mttrain.train --name first [--steps 40000] [--batch 256] [--device cuda:1] [--gen gpu|cpu]
+
+Training data comes from the batched GPU generator (`mttrain.gpugen`) on the training device by
+default; `--gen cpu` uses the numpy generator in DataLoader worker processes (heavy on the CPU: run
+it under tools/guarded-run.sh). Validation always uses the numpy generator (fixed set).
 
 Writes data/m1/runs/<name>/: config.json, log.jsonl (train losses and validation metrics),
 best.pt / last.pt (model, limit box, config). CMU-derived: local only (license register).
@@ -32,7 +36,9 @@ def main():
     ap.add_argument("--workers", type=int, default=10)
     ap.add_argument("--val", type=int, default=4096)
     ap.add_argument("--eval-every", type=int, default=1000)
-    ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--device", default="cuda:1")
+    ap.add_argument("--gen", choices=("gpu", "cpu"), default="gpu")
+    ap.add_argument("--gen-chunk", type=int, default=4, help="GPU generator: batches generated per call")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     out = DATA / "m1" / "runs" / a.name
@@ -54,8 +60,20 @@ def main():
     warm = 1000
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / a.steps))))
-    loader = torch.utils.data.DataLoader(SampleStream("train", seed=a.seed), batch_size=a.batch,
-                                         num_workers=a.workers, persistent_workers=True, prefetch_factor=4)
+    if a.gen == "gpu":
+        from .gpugen.generator import GpuGenerator
+        torch.set_num_threads(2)
+        gg = GpuGenerator("train", dev, seed=a.seed)
+
+        def gpu_batches():
+            while True:
+                big = gg.sample(a.batch * a.gen_chunk)
+                for i in range(a.gen_chunk):
+                    yield {k: v[i * a.batch:(i + 1) * a.batch] for k, v in big.items()}
+        loader = gpu_batches()
+    else:
+        loader = torch.utils.data.DataLoader(SampleStream("train", seed=a.seed), batch_size=a.batch,
+                                             num_workers=a.workers, persistent_workers=True, prefetch_factor=4)
     log = open(out / "log.jsonl", "a")
     best = float("inf")
     run, tl = {}, time.time()
