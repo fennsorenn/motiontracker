@@ -77,52 +77,22 @@ On a feature branch, commit proactively at natural stopping points — when a co
 
 Before switching to a new task or context, run `git status`. If there are uncommitted changes, complete and commit them first rather than carrying dirty state across task boundaries.
 
-## Confirming commits
+## Committing only on AI-owned branches
 
-Always show the proposed commit message and file list before committing, and wait for confirmation. Never skip hooks (`--no-verify`).
+Claude commits without asking for confirmation, but **only on AI-owned feature branches**. Never commit to `main`, `dev`, or a branch containing manual work.
 
-# Cloud Worker Handoff
+A branch is **AI-owned** if it is a `feature/`, `bugfix/` or `claude/` branch and every commit on it since it left its base (`dev`, or `main` if there is no `dev`) carries a `Co-Authored-By:` trailer with `noreply@anthropic.com`. Check before the first commit of a session on that branch:
 
-Implementation work can be handed off from a local planning session to an interactive browser-based cloud session at claude.ai/code. Local Claude Code **cannot** spawn an interactive cloud session, so the handoff is a clickable link + a copy-pasteable instruction block that the user opens.
-
-## Workflow
-
-1. **Local (plan):** plan the change, create the feature branch, write the plan to `dev-notes/plans/<descriptive-name>.md` (use the plan template), commit, and **push the branch**. Cloud workers check out the *remote* — an unpushed plan or branch is invisible to them.
-2. **Hand off:** produce the handoff artifact below for the user.
-3. **Cloud (interactive):** the user opens the link, selects the branch, and drives the implementation, refining the plan live as needed.
-4. **Output:** the worker opens a PR into `dev` when done.
-
-## Handoff artifact
-
-Emit a markdown-formatted link (plain `https://` URLs do not reliably linkify in the chat surface; markdown links do) plus a paste-fallback block.
-
-Link format — confirmed facts:
-- Base: `https://claude.ai/code`
-- `repositories=<owner>/<repo>` selects the repo (find the slug from `git remote -v`).
-- `prompt=<url-encoded>` pre-fills the initial message.
-- **There is no branch URL parameter.** The branch must be named *in the prompt text* and selected by the user from the branch dropdown after the repo loads.
-
-Template (substitute `<owner>/<repo>`, `<branch>`, `<plan-file>`):
-
-```markdown
-**[🔗 Open cloud session — <branch>](https://claude.ai/code?repositories=<owner>/<repo>&prompt=<url-encoded prompt below>)**
-
-​```
-Repo: <owner>/<repo>
-Select branch <branch> from the branch dropdown first.
-
-Implement the plan in dev-notes/plans/<plan-file>.
-
-- The plan is a starting point, not a spec. If anything is underspecified
-  or you hit a decision the plan doesn't cover, ask me before guessing.
-- Follow the repo CLAUDE.md conventions.
-- Commit at natural stopping points with conventional-commit messages.
-- When done, open a PR into dev.
-​```
+```
+git log --format='%h%x09%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)' dev..HEAD
 ```
 
-The `prompt=` value is the URL-encoded form of the same paste block (use `%0A` for line breaks, `%2F` for `/`).
+Any commit without the Anthropic trailer means the branch has manual work. A branch with no commits since its base counts as AI-owned only if Claude created it in the current session.
 
-## Project override: commit confirmation (owner, 2026-11-01)
+If the current branch is `main`, `dev`, or not AI-owned, **branch off** first: create a new `feature/<description>` or `bugfix/<description>` from the current HEAD and commit there. Never add commits to the user's branch. Mention the new branch name to the user when you create it.
 
-Until the first stable release, the "Confirming commits" rule above does not apply: commit without asking for confirmation. Confirmation is meant for stable versions. All other git conventions (feature branches, conventional commits, PRs into `main`) still apply.
+Never skip hooks (`--no-verify`).
+
+# Handoffs
+
+Implementation work can be handed off from a planning session to another session: a cloud session at claude.ai/code (`cloud-handoff` skill) or a separate local session (`start-claude-session` skill). Handoff plans go in `dev-notes/plans/<descriptive-name>.md`, based on `dev-notes/plans/plan-template.md`.
