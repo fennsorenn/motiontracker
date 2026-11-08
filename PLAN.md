@@ -303,7 +303,7 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
   4. Added lag vs detector: no more than baseline, ideally under 50 ms (harness resolution is coarse at 10 FPS). Note: the harness stamps speeds at frame-interval midpoints, so any causal 60 Hz display of a 10 FPS stream shows at least half an interval (~50 ms); glide measures ~90 ms, about the same as `baseline-rendered` (70–95 ms).
   5. Speed p90 in slow/fast segments: at least 80% of baseline (guards against over-smoothing).
   6. Model cost: under 2 ms per frame on a laptop CPU.
-  7. Hand position on the performer's own skeleton vs detected hands: at least 30% lower error than baseline.
+  7. Hand position `[USER]` (restated 2026-11-09; was: 3D error vs detected hands at least 30% lower than baseline, which favoured the baseline: it copies the very landmarks the metric compares against, including MediaPipe's unreliable depth). (a) Wrist error on the performer's own skeleton in the camera plane, against the image landmarks: no worse than baseline; guarded by the forearm direction in the image (errors along the viewing axis barely move the wrist in 2D). (b) Contact: during the seated-v2 contact segments (palms together, hand to face; true distance about 0), the avatar's distance on the performer's skeleton is below baseline. Threshold to set once sessions exist.
   8. Joint-limit violations: near zero in all conditions, including low confidence and tracking loss.
   9. Side-by-side video check by the owner: at least as natural, especially with arms below the frame.
 

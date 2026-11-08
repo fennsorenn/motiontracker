@@ -47,6 +47,7 @@ def evaluate(session: Session, results: list[SystemResult], auto_still: bool = F
                 "lag_vs_detector": M.lag_vs_detector(tr, session),
             },
             "hand_position": M.hand_position(tr, session),
+            "contact": M.contact(tr, session),
             "per_still_segment": [
                 {
                     "segment": still_name(s),
@@ -147,11 +148,15 @@ def to_markdown(report: dict) -> str:
             if any(c != "–" for c in cells):
                 lines.append(f"| {grp} | " + " | ".join(cells) + " |")
         lines.append("")
-    lines += ["## Hand position on the performer's skeleton (cm)", "",
-              "Wrist error vs the detected wrist, median over frames (both sides pooled by mean of the per-side "
-              "medians); in view = shoulder, elbow and wrist visibility at least 0.8.", "",
-              "| Frames | " + " | ".join(systems) + " |", "|---|" + "---|" * len(systems)]
-    for key, label in (("in_view", "in view"), ("all", "all")):
+    lines += ["## Hand position on the performer's skeleton (criterion 7)", "",
+              "Mean of the per-side medians. 2D: wrist error in the camera plane against the image "
+              "landmarks (cm, main score). Forearm direction: angle in the image (deg, guard against errors "
+              "along the viewing axis). 3D: against the world landmarks (cm; MediaPipe's depth is unreliable). "
+              "In view = shoulder, elbow and wrist visibility at least 0.8.", "",
+              "| Measure | " + " | ".join(systems) + " |", "|---|" + "---|" * len(systems)]
+    for key, label in (("in_view_2d", "2D, in view (cm)"), ("all_2d", "2D, all (cm)"),
+                       ("forearm_dir_2d", "forearm direction, in view (deg)"),
+                       ("in_view", "3D, in view (cm)"), ("all", "3D, all (cm)")):
         cells = []
         for s in systems:
             hp = report["systems"][s].get("hand_position") or {}
@@ -159,6 +164,18 @@ def to_markdown(report: dict) -> str:
             cells.append(f"{np.mean(meds):.1f}" if meds else "–")
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
     lines.append("")
+    variants = sorted({v for s in systems for v in (report["systems"][s].get("contact") or {})})
+    if variants:
+        lines += ["## Contact (criterion 7b, cm)", "",
+                  "Median distance during protocol contact segments, true distance about 0 (wrists for palms "
+                  "together, wrist to nose for hand to face). MediaPipe: the same from its own landmarks.", "",
+                  "| Contact | MediaPipe | " + " | ".join(systems) + " |", "|---|---|" + "---|" * len(systems)]
+        for v in variants:
+            c = {s: (report["systems"][s].get("contact") or {}).get(v) for s in systems}
+            mp = next((x["mediapipe_cm"] for x in c.values() if x), None)
+            lines.append(f"| {v} | {'–' if mp is None else f'{mp:.1f}'} | "
+                         + " | ".join("–" if not c[s] else f"{c[s]['system_cm']:.1f}" for s in systems) + " |")
+        lines.append("")
     seg_summary = report.get("still_segment_summary", {})
     seg_names = list(next(iter(seg_summary.values()), {}))
     if len(seg_names) > 1:

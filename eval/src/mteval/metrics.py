@@ -10,10 +10,12 @@ Label-free (real recordings):
   dropout_jump        peak angular speed within 500 ms after a hand appears or disappears in the
                       input, averaged over transitions (deg/s), for that side's arm/hand bones.
   presence            fraction of output frames in which the bone is present.
-  hand_position       wrist position error (cm) on the performer's own skeleton: the output's arm
-                      rotations applied to arm lengths measured from the pose world landmarks, vs
-                      the detected wrist relative to the detected shoulder. Frames where shoulder,
-                      elbow and wrist are confidently visible ("in view") and all frames.
+  hand_position       criterion 7: wrist error (cm) on the performer's own skeleton (the output's arm
+                      rotations on arm lengths measured from the pose world landmarks), relative to
+                      the detected shoulder: in the camera plane against the image landmarks (main),
+                      forearm direction in the image (guard), and in 3D against the world landmarks.
+  contact             criterion 7b: wrist-wrist and wrist-nose distances during protocol 'contact'
+                      segments (palms together, hand to face), where the true distance is ~0.
   lag_vs_detector     delay of the output relative to the detector: cross-correlation of an input
                       landmark angular-speed signal with the matching bone's angular speed. Measures
                       what the solver and smoothing add on top of the detector, not camera latency.
@@ -26,6 +28,7 @@ Labeled (need ground truth; ready for synthetic M1 data):
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -332,15 +335,24 @@ def _qrot(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     return v + w * t + np.cross(u, t)
 
 
-def hand_position(track: PoseTrack, session: Session) -> dict[str, dict]:
-    """Wrist error (cm) on the performer's skeleton, per side. VRM normalized bones have identity
-    rest rotations in a T-pose facing +z (left arm along +x); MediaPipe world landmarks are camera
-    axes (x right, y down, z away) of the mirrored image, so the avatar frame is (x, -y, -z).
-    Output poses are sampled at the input frame times (latest output at or before each frame)."""
+def _arms_on_performer(track: PoseTrack, session: Session) -> dict:
+    """Per side: the output's arm on the performer's skeleton vs MediaPipe, at the input frame times.
+
+    VRM normalized bones have identity rest rotations in a T-pose facing +z (left arm along +x);
+    MediaPipe world landmarks are camera axes (x right, y down, z away) of the mirrored image, so the
+    avatar frame is (x, -y, -z). Output poses are sampled at the input frame times (latest output at
+    or before each frame). Arm lengths are measured from the pose world landmarks (median over
+    in-view frames). Returns side -> dict(pred_wrist, pred_elbow (T, 3) relative to the shoulder,
+    avatar frame, metres; det_wrist, det_elbow (same, from world landmarks); img_wrist, img_elbow (T, 2)
+    from the image landmarks, image axes, metres via the shoulder-width ratio; in_view, ok (T,);
+    lengths), or None when the system has no arm bones."""
     t = session.times
-    pose = session.stream("pose")
+    pose, pose2d = session.stream("pose"), session.stream("pose2d")
     ok = np.array([p is not None for p in pose])
     P = np.array([p if p is not None else np.full((33, 4), np.nan) for p in pose])
+    Q = np.array([p if p is not None else np.full((33, 4), np.nan) for p in pose2d])
+    proc = session.meta.get("processing", {})
+    aspect = np.array([1.0, proc.get("height", 240) / proc.get("width", 320)])  # image y in units of width
     flip = np.array([1.0, -1.0, -1.0])
     rot = {b: _hold_sample(track.times, track.bones[b], t) for b in track.bones}
     ident = np.tile([0.0, 0.0, 0.0, 1.0], (len(t), 1))
@@ -353,7 +365,11 @@ def hand_position(track: PoseTrack, session: Session) -> dict[str, dict]:
                 g = _qmul(g, np.where(np.isnan(q), ident, q))
         return g
 
-    out: dict[str, dict] = {}
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sw_world = np.linalg.norm(P[:, LEFT_SHOULDER, :3] - P[:, RIGHT_SHOULDER, :3], axis=1)
+        sw_img = np.linalg.norm((Q[:, LEFT_SHOULDER, :2] - Q[:, RIGHT_SHOULDER, :2]) * aspect, axis=1)
+        img_scale = (sw_world / sw_img)[:, None]  # metres per image-width unit at the shoulders
+    out: dict = {}
     for side, (sh, el, wr), x in (("left", (LEFT_SHOULDER, LEFT_ELBOW, LEFT_WRIST), 1.0),
                                   ("right", (RIGHT_SHOULDER, RIGHT_ELBOW, RIGHT_WRIST), -1.0)):
         up, low = rot.get(f"{side}UpperArm"), rot.get(f"{side}LowerArm")
@@ -365,23 +381,109 @@ def hand_position(track: PoseTrack, session: Session) -> dict[str, dict]:
         ref = in_view if in_view.sum() >= 10 else ok
         l1 = float(np.median(np.linalg.norm(P[ref, el, :3] - P[ref, sh, :3], axis=1)))
         l2 = float(np.median(np.linalg.norm(P[ref, wr, :3] - P[ref, el, :3], axis=1)))
-        g_sh = chain(ARM_CHAIN + (f"{side}Shoulder",))
-        g_up = _qmul(g_sh, up)
+        g_up = _qmul(chain(ARM_CHAIN + (f"{side}Shoulder",)), up)
         g_low = _qmul(g_up, low)
         axis = np.array([x, 0.0, 0.0])
-        pred = l1 * _qrot(g_up, axis) + l2 * _qrot(g_low, axis)
-        det = (P[:, wr, :3] - P[:, sh, :3]) * flip
-        err = np.linalg.norm(pred - det, axis=1) * 100
-        valid = ok & ~np.isnan(err)
-
-        def stats(m):
-            e = err[m]
-            return {"median": float(np.median(e)), "mean": float(np.mean(e)), "p90": float(np.percentile(e, 90)),
-                    "n": int(m.sum())} if m.any() else None
-
-        out[side] = {"in_view": stats(valid & in_view), "all": stats(valid),
-                     "arm_lengths_cm": [round(l1 * 100, 1), round(l2 * 100, 1)]}
+        d_up, d_low = _qrot(g_up, axis), _qrot(g_low, axis)
+        pred_el = l1 * d_up
+        img_el = (Q[:, el, :2] - Q[:, sh, :2]) * aspect * img_scale
+        img_wr = (Q[:, wr, :2] - Q[:, sh, :2]) * aspect * img_scale
+        # MediaPipe's world landmarks shorten the arms (upper arm ~0.77x) and its image landmarks
+        # don't; for the image comparison, lengths come from the image: the 95th percentile of each
+        # segment's image length (the segment lies about parallel to the image plane at times)
+        with warnings.catch_warnings():  # sessions without image landmarks: NaN, 2D scores empty
+            warnings.simplefilter("ignore", RuntimeWarning)
+            il1 = float(np.nanpercentile(np.linalg.norm(img_el[ref], axis=1), 95))
+            il2 = float(np.nanpercentile(np.linalg.norm((img_wr - img_el)[ref], axis=1), 95))
+        out[side] = dict(
+            pred_elbow=pred_el, pred_wrist=pred_el + l2 * d_low,
+            pred_elbow_img=il1 * d_up, pred_wrist_img=il1 * d_up + il2 * d_low,
+            det_elbow=(P[:, el, :3] - P[:, sh, :3]) * flip, det_wrist=(P[:, wr, :3] - P[:, sh, :3]) * flip,
+            img_elbow=img_el, img_wrist=img_wr,
+            in_view=in_view, ok=ok, lengths=(l1, l2), lengths_img=(il1, il2))
     return out
+
+
+def _stats(e: np.ndarray, m: np.ndarray) -> dict | None:
+    m = m & ~np.isnan(e)
+    if not m.any():
+        return None
+    return {"median": float(np.median(e[m])), "mean": float(np.mean(e[m])), "p90": float(np.percentile(e[m], 90)),
+            "n": int(m.sum())}
+
+
+def hand_position(track: PoseTrack, session: Session) -> dict[str, dict]:
+    """Criterion 7 (restated 2026-11-09), per side, frames "in_view" and "all":
+    - `*_2d`: wrist error (cm) in the camera plane against the image landmarks (main score; the
+      image is MediaPipe's most reliable output, and a viewer sees the avatar facing them);
+    - `forearm_dir_2d`: forearm direction error in the image (deg), frames where the forearm's
+      image length is at least 0.3 of its 3D length: the guard against errors along the viewing
+      axis, which barely move the wrist in 2D;
+    - `in_view` / `all`: 3D wrist error against the world landmarks (secondary: MediaPipe's depth is
+      its least reliable output, and the baseline copies it)."""
+    arms = _arms_on_performer(track, session)
+    out: dict[str, dict] = {}
+    for side, a in arms.items():
+        if a is None:
+            out[side] = None
+            continue
+        e3 = np.linalg.norm(a["pred_wrist"] - a["det_wrist"], axis=1) * 100
+        pred2 = a["pred_wrist_img"][:, :2] * [1.0, -1.0]  # avatar (x, y up) -> image (x, y down)
+        e2 = np.linalg.norm(pred2 - a["img_wrist"], axis=1) * 100
+        pf = (a["pred_wrist"] - a["pred_elbow"])[:, :2] * [1.0, -1.0]
+        df = a["img_wrist"] - a["img_elbow"]
+        ang = np.degrees(np.abs(np.angle(np.exp(1j * (np.arctan2(pf[:, 1], pf[:, 0]) - np.arctan2(df[:, 1], df[:, 0]))))))
+        long_enough = np.linalg.norm(df, axis=1) >= 0.3 * a["lengths_img"][1]
+        iv, ok = a["in_view"], a["ok"]
+        out[side] = {"in_view": _stats(e3, iv), "all": _stats(e3, ok),
+                     "in_view_2d": _stats(e2, iv), "all_2d": _stats(e2, ok),
+                     "forearm_dir_2d": _stats(ang, iv & long_enough),
+                     "arm_lengths_cm": [round(a["lengths"][0] * 100, 1), round(a["lengths"][1] * 100, 1)],
+                     "arm_lengths_img_cm": [round(a["lengths_img"][0] * 100, 1), round(a["lengths_img"][1] * 100, 1)]}
+    return out
+
+
+CONTACT_SETTLE_MS = 1500.0  # time to get into the pose after the prompt
+
+
+def contact(track: PoseTrack, session: Session) -> dict[str, dict] | None:
+    """Criterion 7b: distances on the performer's skeleton during protocol 'contact' segments, where
+    the true distance is about zero (palms pressed together; one hand touching the face). Wrists are
+    placed from the detected shoulders plus the output's arm; the face point is the detected nose.
+    For 'hand-to-face' the hand is the one MediaPipe places nearer the nose over the segment.
+    Returns variant -> {system: median distance cm, mediapipe: the same from MediaPipe's own
+    landmarks (reference), n}; None without contact segments."""
+    segs = session.segments_labeled("contact")
+    if not segs:
+        return None
+    arms = _arms_on_performer(track, session)
+    if arms.get("left") is None or arms.get("right") is None:
+        return None
+    t = session.times
+    P = np.array([p if p is not None else np.full((33, 4), np.nan) for p in session.stream("pose")])
+    flip = np.array([1.0, -1.0, -1.0])
+    sh = {"left": P[:, LEFT_SHOULDER, :3] * flip, "right": P[:, RIGHT_SHOULDER, :3] * flip}
+    nose = P[:, NOSE, :3] * flip
+    wrist = {s: sh[s] + arms[s]["pred_wrist"] for s in ("left", "right")}
+    det = {s: sh[s] + arms[s]["det_wrist"] for s in ("left", "right")}
+    out: dict[str, dict] = {}
+    for seg in segs:
+        m = (t >= seg.t0 + CONTACT_SETTLE_MS) & (t < seg.t1) & arms["left"]["ok"]
+        if not m.any():
+            continue
+        if seg.variant == "palms-together":
+            d_sys = np.linalg.norm(wrist["left"] - wrist["right"], axis=1)
+            d_mp = np.linalg.norm(det["left"] - det["right"], axis=1)
+        elif seg.variant == "hand-to-face":
+            near = min(("left", "right"), key=lambda s: np.nanmedian(np.linalg.norm(det[s][m] - nose[m], axis=1)))
+            d_sys = np.linalg.norm(wrist[near] - nose, axis=1)
+            d_mp = np.linalg.norm(det[near] - nose, axis=1)
+        else:
+            continue
+        key = seg.variant
+        out[key] = {"system_cm": float(np.nanmedian(d_sys[m]) * 100), "mediapipe_cm": float(np.nanmedian(d_mp[m]) * 100),
+                    "n": int(m.sum())}
+    return out or None
 
 
 # ── labeled metrics ──────────────────────────────────────────────────────────────
