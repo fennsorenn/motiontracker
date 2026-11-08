@@ -23,6 +23,11 @@ Two kinds of bias follow:
   the ears slightly and shorten the arms; the image landmarks don't. Applied to world landmarks
   after the camera transform.
 
+Image z (MediaPipe's relative depth in pose2d): on the session it is 0.84 x world z / shoulder width
+(correlation 0.91, arm and face landmarks); geometrically exact synthetic image z is 0.26 x. MediaPipe
+exaggerates its image depth about 3x, so synthetic image z is scaled by IMAGE_Z (found 2026-11-08:
+without it the M1 model misread resting arms by 35-40 degrees on real input).
+
 One person, one session: every factor is randomized per sequence (log-normal) so the model can't
 lean on these exact values. Recalibrate when more seated-v2 sessions exist.
 """
@@ -50,6 +55,7 @@ FACE_PLACEMENT = _sym({"left_eye_inner": 1.2, "left_eye": 1.2, "left_eye_outer":
 FACE_WORLD = _sym({"left_eye_inner": 0.49, "left_eye": 0.49, "left_eye_outer": 0.49, "mouth_left": 0.89,
                    "left_ear": 1.09})
 HIP_WIDEN = 1.4  # hip half-width factor (placement)
+IMAGE_Z = 3.0  # MediaPipe image z / geometric image z (see docstring)
 LIMB = {"upper_arm": 0.77, "forearm": 0.90, "torso": 0.99, "neck": 1.05}  # world only
 # segment start, segment end, landmarks carried with the shortening
 CHAINS = [
@@ -80,6 +86,7 @@ def _lateral(X, factors):
 @dataclass
 class Style:
     hip_widen: float = 1.0
+    image_z: float = 1.0
     face_placement: np.ndarray = field(default_factory=lambda: np.ones(33))
     face_world: np.ndarray = field(default_factory=lambda: np.ones(33))
     limb: dict = field(default_factory=lambda: {k: 1.0 for k in LIMB})
@@ -91,16 +98,17 @@ class Style:
 
     @classmethod
     def calibrated(cls):
-        return cls(HIP_WIDEN, _factors(FACE_PLACEMENT), _factors(FACE_WORLD), dict(LIMB))
+        return cls(HIP_WIDEN, IMAGE_Z, _factors(FACE_PLACEMENT), _factors(FACE_WORLD), dict(LIMB))
 
     @classmethod
-    def sample(cls, rng, spread=0.08, offset_cm=0.8):
-        """Calibrated values with per-sequence log-normal spread (face factors shared, so it stays symmetric)."""
+    def sample(cls, rng, spread=0.08, offset_cm=0.8, image_z_spread=0.25):
+        """Calibrated values with per-sequence log-normal spread (face factors shared, so it stays symmetric).
+        Image z gets a wider spread: its scale is the least certain and may differ between MediaPipe models."""
         ln = lambda: float(np.exp(rng.normal(0, spread)))
         fp, fw = _factors(FACE_PLACEMENT), _factors(FACE_WORLD)
         fp[FACE] = 1 + (fp[FACE] - 1) * ln()
         fw[FACE] *= ln()
-        return cls(HIP_WIDEN * ln(), fp, fw, {k: v * ln() for k, v in LIMB.items()},
+        return cls(HIP_WIDEN * ln(), IMAGE_Z * float(np.exp(rng.normal(0, image_z_spread))), fp, fw, {k: v * ln() for k, v in LIMB.items()},
                    rng.normal(0, offset_cm / 100, (33, 3)))
 
     def placement(self, X):

@@ -12,9 +12,9 @@ Calibrated on the first recorded session (2026-11-01, seated-v1, 10 FPS; `python
   lag toward the curve, slower falling than rising. Positions stay plausible meanwhile.
 - Far outside the frame MediaPipe guesses, and its guesses are smooth (knee ~4 mm jitter), so
   out-of-frame points get a slowly drifting offset, not more jitter.
-Synthetic vs real (`python -m mttrain.calibrate`): proportions and visibility match; synthetic
-jitter at rest is ~0.6-1x real (real still segments include body sway). Base values below are
-slightly above the measured jitter for that reason.
+Synthetic vs real (`python -m mttrain.calibrate`): proportions and visibility match. Still jitter
+was recalibrated 2026-11-08 (it had been ~0.5x real in world space; see _RECAL) and now matches real
+to ~1.2x; image z jitter (scaled with MediaPipe's image depth, see mpstyle.IMAGE_Z) matches too.
 Unknown from one session (randomized instead): how wrong the guesses are, glitch and dropout rates.
 """
 
@@ -26,6 +26,12 @@ from mtcore.landmarks import MP33
 
 # base lateral jitter (world, metres) per landmark, in frame
 _BASE = {"face": 0.0025, "shoulder": 0.0025, "elbow": 0.0035, "hand": 0.006, "hip": 0.001, "leg": 0.004}
+# Recalibration 2026-11-08 (`python -m mttrain.calibrate`, still jitter real / synthetic): synthetic world
+# jitter was ~0.5x real for face and shoulders and ~0.7x for elbows, depth ~0.45x, image ~0.9x (face)
+# to ~0.7x (elbows); wrists ~0.55x (confounded: real wrists rest at the frame edge). Per group:
+# lateral world factor, extra depth factor (on top of z_factor), image gain (on image_per_metre).
+_RECAL = {"face": (1.9, 1.25, 0.6), "shoulder": (2.0, 1.05, 0.6), "elbow": (1.7, 0.85, 1.05),
+          "hand": (1.75, 0.45, 1.1), "hip": (1.0, 1.0, 1.0), "leg": (1.0, 1.0, 1.0)}
 
 
 def _group(name):
@@ -38,7 +44,9 @@ def _group(name):
     return "leg"
 
 
-BASE_SIGMA = np.array([_BASE[_group(n)] for n in MP33])
+BASE_SIGMA = np.array([_BASE[_group(n)] * _RECAL[_group(n)][0] for n in MP33])
+Z_GAIN = np.array([_RECAL[_group(n)][1] for n in MP33])
+IMAGE_GAIN = np.array([_RECAL[_group(n)][2] for n in MP33])
 LIMB_GROUPS = [[MP33.index(n) for n in MP33 if side in n and any(k in n for k in parts)]
                for side in ("left", "right") for parts in (("elbow",), ("wrist", "pinky", "index", "thumb"))]
 
@@ -67,6 +75,7 @@ class NoiseConfig:
     glitch_rate: float = 0.003  # per frame
     glitch_sigma: float = 0.08
     dropout_rate: float = 0.005  # whole-frame detector misses
+    image_z_noise: float = 2.0  # extra image-z jitter: MediaPipe's image depth is noisier than its world depth
 
     @classmethod
     def sample(cls, rng):
@@ -80,7 +89,8 @@ class NoiseConfig:
                    vis_tau_rise=float(rng.uniform(0.1, 0.5)),
                    hip_vis_logit=float(rng.uniform(-2.5, -0.7)),
                    glitch_rate=float(rng.uniform(0.0, 0.01)),
-                   dropout_rate=float(rng.uniform(0.0, 0.02)))
+                   dropout_rate=float(rng.uniform(0.0, 0.02)),
+                   image_z_noise=float(rng.uniform(1.4, 2.8)))
 
 
 def outside_distance(image):
@@ -121,7 +131,7 @@ def observe(rng, world, image, dt, cfg=None):
     # jitter: AR(1), shared between world and image lateral axes, scaled by the edge curve
     sigma = cfg.jitter_scale * BASE_SIGMA[None] * np.interp(d, *JITTER_CURVE)  # (T, 33)
     n = _ar1(rng, dt, cfg.rho10, (33, 3)) * sigma[..., None]
-    n[..., 2] *= cfg.z_factor
+    n[..., 2] *= cfg.z_factor * Z_GAIN
 
     # far out-of-frame: smoothly drifting guesses
     w = np.clip((d - 0.15) / 0.25, 0, 1)[..., None]
@@ -135,7 +145,8 @@ def observe(rng, world, image, dt, cfg=None):
 
     W = world + n
     Im = image.copy()
-    Im[..., :2] += cfg.image_per_metre * n[..., :2] * [1.0, 4 / 3]  # y is normalized by the shorter side
-    Im[..., 2] += cfg.image_per_metre * n[..., 2]
+    g = cfg.image_per_metre * IMAGE_GAIN[:, None]
+    Im[..., :2] += g * n[..., :2] * [1.0, 4 / 3]  # y is normalized by the shorter side
+    Im[..., 2] += cfg.image_z_noise * g[:, 0] * n[..., 2]
     present = rng.random(T) >= cfg.dropout_rate
     return W, Im, vis, present

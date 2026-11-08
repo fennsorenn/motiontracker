@@ -38,5 +38,8 @@ def synthesize(rng, ch, landmark_model, mp, src_fps=30.0, fps=None, style=None, 
     world = style.world(cam.world_landmarks(X))
     dt = np.diff(t, prepend=t[0] - 1.0 / fps)
     W, Im, vis, present = observe(rng, world, image, dt, noise or NoiseConfig.sample(rng))
+    image = image.copy()
+    image[..., 2] *= style.image_z  # MediaPipe's exaggerated image depth; scales its noise too
+    Im[..., 2] *= style.image_z
     return dict(t=t, states=states, world=W, image=Im, vis=vis, present=present,
                 clean_world=world, clean_image=image, camera=cam)

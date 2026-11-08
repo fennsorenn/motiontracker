@@ -79,7 +79,7 @@ def sample_desk_camera(rng, landmarks_m):
     sw_frac = float(np.exp(rng.normal(np.log(0.25), 0.2)))  # shoulder width / frame width
     sh_y = rng.uniform(0.45, 0.72)  # shoulder height in the frame (0 = top)
     dist = fx * width / sw_frac
-    eye = chest + dist * dirn + [0.0, rng.uniform(0.0, 0.3), 0.0]
+    eye = chest + dist * dirn + [0.0, rng.uniform(0.0, 0.55), 0.0]
     # aim above or below the chest so the shoulders land at sh_y
     target = chest + [0.0, dist * (sh_y - 0.5) / (fx * 4 / 3), 0.0]
     return Camera(R=look_at(eye, target, np.radians(rng.uniform(-4, 4))), t=eye, fx=fx)
