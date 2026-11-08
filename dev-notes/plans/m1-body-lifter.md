@@ -129,6 +129,30 @@ approach.
    10 FPS input costs at least ~50 ms on the harness's midpoint-stamped metric). Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
    write a pose track the harness accepts, apply the same render stage as `baseline-rendered`,
    and produce the harness report against the baseline.
+7b. **Real-vs-synthetic gaps and fixes (2026-11-08, `m1-v4`).** New harness metrics: hand position
+   on the performer's skeleton (criterion 7), `global:head` (head orientation as the product of the
+   torso/neck/head bones; the baseline outputs fewer torso bones, so per-bone torso numbers weren't
+   comparable), and `mttrain.limitcheck` (criterion 8: IK of MHR parameters to the predicted
+   orientations, checked against [Limits], on the session and stressed copies). Found and fixed:
+   - MediaPipe's pose2d z is ~3x geometric depth; synthetic image z was unscaled. m1-v2 misread
+     resting arms by 35-40 degrees on real input (forearm vs image). `mpstyle.IMAGE_Z`.
+   - Synthetic still jitter was ~0.5x real (world); recalibrated per group, plus image-z jitter.
+   - Camera height range raised (real torso lean toward the camera 6-28 degrees).
+   - CMU head calibration offsets (per subject, up to 180 degrees) were copied into the targets;
+     head joint at its limits in 23-77% of frames. Removed per subject, neck/head prior; 1-4%.
+   - Rest postures faded out at crop ends, where the targets are: targets rarely saw a full rest
+     pose (both generators fixed).
+   - Training data now comes from a batched GPU generator (`mttrain.gpugen`, RTX 4060): 36 min per
+     40k-step run on about one CPU core (was ~90 min with 10 CPU workers; the CPU path plus an
+     unbounded refit crashed the machine). Heavy CPU jobs run under `tools/guarded-run.sh`.
+   m1-v4 on the session (glide vs baseline-rendered unless noted): forearm direction vs image 2-15
+   degrees (m1-v2 33-42, baseline 4-14); hand position in view 5.8 vs 4.7 cm (raw 5.2 vs 3.9; m1-v2
+   13.9); rest noise head_global 0.8 vs 1.1, shoulders 0.6 vs 2.6, arms 3.5 vs 3.2, hands 1.6 vs 6.0
+   deg; arm twitches 26 vs 45/min; lag 90 vs 95 ms; MHR limit violations >1 deg in 1.3% of frames
+   (m1-v2 44%), none >6 deg; arms out of frame 5.4% / 0.7%. Earlier "calm arms" partly came from
+   the model ignoring its input. Open: arm rest noise (now tracks MediaPipe's noise), criterion 7
+   (the baseline solves from the very landmarks the metric compares against; m1 outputs anatomical
+   rotations, so beating it by 30% may not be a fair target).
 8. **Go/no-go write-up** in PLAN.md §6/§10 with the criteria table.
 
 ## Acceptance / verification
