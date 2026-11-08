@@ -19,7 +19,7 @@ from .seated import clamp, seat
 from .skeleton import TargetExtractor
 from .synth import synthesize
 
-FITS = DATA / "m1" / "fits"
+FITS = DATA / "m1" / os.environ.get("MT_FITS", "fits")  # MT_FITS: another fits directory under data/m1
 SCAN = REPO_ROOT / "spikes" / "m3-mhr-vrm" / "cmu_scan.json"
 SRC_FPS = 30.0
 # whole subjects held out for validation (~10% of clips; chosen once, kept fixed)

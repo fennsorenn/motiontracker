@@ -9,6 +9,7 @@ best.pt / last.pt (model, limit box, config). CMU-derived: local only (license r
 import argparse
 import json
 import math
+import os
 import time
 
 import torch
@@ -36,7 +37,7 @@ def main():
     a = ap.parse_args()
     out = DATA / "m1" / "runs" / a.name
     out.mkdir(parents=True, exist_ok=True)
-    cfg = vars(a) | {"weights": WEIGHTS}
+    cfg = vars(a) | {"weights": WEIGHTS, "fits": os.environ.get("MT_FITS", "fits")}
     (out / "config.json").write_text(json.dumps(cfg, indent=1))
     torch.manual_seed(a.seed)
     dev = torch.device(a.device)
