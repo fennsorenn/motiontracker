@@ -2,7 +2,7 @@
 
 Learned live motion tracking for VRM 1.0 avatars: webcam → MediaPipe detectors → small causal learned heads + merger → bone rotations, root translation, blendshapes, gaze → VMC/OSC. Full context, decisions and open questions: `PLAN.md` (decision tags there are authoritative; `[CLAUDE]` items are unconfirmed).
 
-No service code exists yet. Current milestone: **M1, the body lifter in MHR space** (WIP, plan: `plans/m1-body-lifter.md`): pipeline built, first models trained, render stage for model output done; the go/no-go still needs seated-v2 sessions and two harness metrics. Done: M0 tooling plus the first measured session (seated-v1), and the M3 MHR ↔ VRM 1.0 spike (result: go for MHR as canonical skeleton). The face-cost check moves to M4.
+No service code exists yet. Current milestone: **M1, the body lifter in MHR space** (WIP, plan: `plans/m1-body-lifter.md`): pipeline, GPU training-data generator, render stage and criterion 7/8 checks done, latest model `m1-v4`; the go/no-go still needs seated-v2 sessions. Done: M0 tooling plus the first measured session (seated-v1), and the M3 MHR ↔ VRM 1.0 spike (result: go for MHR as canonical skeleton). The face-cost check moves to M4.
 
 ## Modules
 
@@ -14,7 +14,7 @@ No service code exists yet. Current milestone: **M1, the body lifter in MHR spac
 | `mhr-vrm-spike` | implemented (M3, done) | Spike (`spikes/m3-mhr-vrm/`): MHR → VRM 1.0 conversion, CMU → MHR fitting, round-trip eval. Reusable code now in `core/`. Details: `modules/mhr-vrm-spike.md`. |
 | `m1-body-lifter` | WIP (M1) | First learned model: MediaPipe pose landmarks → small causal model → MHR upper-body rotations → VRM 1.0. Go/no-go for the learned approach. Plan: `plans/m1-body-lifter.md`. |
 | `mtcore` | implemented | Shared Python package (`core/`): MHR loading/FK, CMU reader + CMU → MHR fit, MHR → VRM conversion, MediaPipe landmarks from MHR. Details: `modules/mtcore.md`. |
-| `train` | implemented (GPU data generator WIP) | uv project (`train/`, package `mttrain`, CUDA PyTorch): CMU fits, seated synthesis, synthetic landmarks + noise, model, training, inference on sessions. Details: `modules/train.md`. |
+| `train` | implemented | uv project (`train/`, package `mttrain`, CUDA PyTorch): CMU fits, seated synthesis, synthetic landmarks + noise, batched GPU data generator, model, training, inference on sessions, limit check. Details: `modules/train.md`. |
 | `retargeting` | planned (M4) | Learned layer mapping the performer's pose onto the avatar's MHR identity, then to VRM 1.0 (`PLAN.md` §3.10a). |
 
 ### baseline (implemented, frozen)
@@ -29,7 +29,7 @@ Location: `tools/recorder/`. Reproduces vspark's CameraCapture path (mirrored, 3
 
 ### eval-harness (implemented)
 Location: `eval/` (uv project, package `mteval`, CLI `mteval evaluate`). Runs systems over a session (baseline via its CLI at solver and rendered stages; any other system from a precomputed `OutputFrame` JSONL) and writes a JSON + markdown report. All metrics are time-based.
-- Label-free metrics on real recordings: rest jitter/noise, twitch rate, speed percentiles, hand-dropout peaks, lag vs detector, presence.
+- Label-free metrics on real recordings: rest jitter/noise, twitch rate, speed percentiles, hand-dropout peaks, lag vs detector, presence, hand position on the performer's skeleton (criterion 7).
 - Labeled metrics (rotation error, onset lag, peak-velocity ratio): tested on synthetic signals only, not in the report until labeled data exists (M1).
 - Compare systems at the same stage only (solver vs solver, rendered vs rendered). A learned model counts as rendered when shown through glide or the filter (see key decisions).
 - Not yet: contact preservation, reprojection error. Success thresholds remain `[OPEN]`.
@@ -41,13 +41,13 @@ Next step: record more seated-v2 sessions with the owner (alongside M1) and meas
 Location: `spikes/m3-mhr-vrm/` (uv project, CPU PyTorch, `pymomentum`, `mhr`). Converts MHR skeleton states to VRM 1.0 normalized local rotations, fits CMU mocap to MHR, and checks the round trip. Result: go for MHR as canonical skeleton (`PLAN.md` §3.10; numbers in `plans/m3-mhr-vrm-spike.md`). Its reusable code moved to `core/` (`mtcore`); the spike imports it. Data lives in gitignored `data/` (`data/cmu`, `data/mhr`). Known issue: `MHR.from_files` segfaults in pymomentum (0.1.114 CPU) when loading blendshapes; the spike loads the rig without them. Details: `modules/mhr-vrm-spike.md`.
 
 ### m1-body-lifter (WIP, M1)
-Body bones only (spine, neck, head, clavicles, arms); hands, face, merger, root translation come later. Built from `core/` (`mtcore`, implemented) and `train/` (`mttrain`, implemented); CMU-derived fits, training data and checkpoints stay in gitignored `data/m1/`. Two runs so far (`m1-first`, `m1-v2`; numbers in the plan): much calmer shoulders/hands than the baseline with no added lag, torso/head slightly noisier. Render stage for model output: done (glide primary, filter secondary; see key decisions). WIP (2026-11-08): batched GPU training-data generator (torch port of the synthesis pipeline, runs on the RTX 4060), replacing CPU DataLoader workers; see `modules/train.md`. Still open: seated-v2 recordings (owner), harness metrics for hand position (criterion 7) and exact MHR limit violations (criterion 8), consistent neck/head split in the fit, torso jitter, go/no-go on seated-v2 sessions.
+Body bones only (spine, neck, head, clavicles, arms); hands, face, merger, root translation come later. Built from `core/` (`mtcore`, implemented) and `train/` (`mttrain`, implemented); CMU-derived fits, training data and checkpoints stay in gitignored `data/m1/`. Latest model: `m1-v4` (`data/m1/runs/m1-v4`; numbers in the plan, step 7b; current fits are `data/m1/fits-v3`). Resting arms now read correctly (forearm vs image 2-15 deg, was 33-42); hand position 5.2 cm raw vs baseline 3.9; MHR limit violations in 1.3% of frames by more than 1 deg (was 44%); arm rest noise still not better than the baseline (3.5 vs 3.2 deg, glide vs `baseline-rendered`). Earlier runs: much calmer shoulders/hands than the baseline with no added lag, torso/head slightly noisier. Still open: seated-v2 recordings (owner), arm rest noise, fairness of criterion 7 (the baseline solves from the same landmarks the metric uses), go/no-go write-up.
 
 ### mtcore (implemented)
 Location: `core/`. Shared by the spike and `train/` as an editable path dependency; consumers pick their own torch build. Details: `modules/mtcore.md`.
 
-### train (implemented; GPU data generator WIP)
-Location: `train/`. Pipeline prep_fits → seated → camera → mpstyle → noise → synth → features → dataset → model → losses → train → infer, plus calibrate (real vs synthetic stats). Training runs on the RTX 4060 (`cuda:1`). WIP: the synthesis pipeline ported to torch to generate whole batches on the GPU; the numpy generator stays as the tested reference. Heavy CPU jobs (fits, training) run under `tools/guarded-run.sh`. Details: `modules/train.md`.
+### train (implemented)
+Location: `train/`. Pipeline prep_fits → seated → camera → mpstyle → noise → synth → features → dataset → model → losses → train → infer, plus calibrate (real vs synthetic stats). Training runs on the RTX 4060 (`cuda:1`) with training data generated in batches on the same GPU (`gpugen`, torch port of the synthesis pipeline; the numpy generator stays as the tested reference and builds the validation set). `limitcheck` measures MHR limit violations of a checkpoint (criterion 8). Heavy CPU jobs (fits, training) run under `tools/guarded-run.sh`. Details: `modules/train.md`.
 
 ### retargeting (planned, M4)
 Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracked on the performer's realistic MHR identity) onto the avatar's MHR identity, then to VRM 1.0. Avatar bone lengths enter only here. Trained to keep spatial accuracy (relative positions/directions between body parts, contacts included); may read earlier latents for temporal context. The M3 spike confirmed it is needed: proportion differences, not the conversion, cause contact misses on stylized avatars. No module file yet.

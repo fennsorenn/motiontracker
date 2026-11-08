@@ -9,13 +9,15 @@ uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. 
 - `quat.py` — quaternion helpers, including `slerp`.
 - `session.py` — `Session` / `Segment` (optional `variant`) / `PoseTrack` loading (recorder session dirs or bare landmarks files). A session is named after its folder, not the `name` in `session.json`. `auto_still_segments`: windowed-average landmark speed, threshold 0.12 m/s (set from one static clip, rough).
 - `metrics.py` — label-free and labeled metrics. All time-based so systems with different output rates are comparable. `xcorr_lag` linearly resamples midpoint-stamped speeds onto a common grid to stay unbiased across rates.
+  - `hand_position` (M1 criterion 7): wrist position error (cm) on the performer's own skeleton; in the report as "Hand position on the performer's skeleton". Tests: `tests/test_hand_position.py`.
+  - `with_head_global`: adds the pseudo-bone `global:head` (group `head_global`) to every system's track before metrics.
 - `systems.py` — system registry.
   - Builtins `baseline` and `baseline-rendered`: run the baseline CLI (`baseline/`, needs `pnpm install`), with head calibration captured at the middle of the first `still` segment.
   - `name=path.jsonl`: precomputed `OutputFrame` JSONL (`{t, bones:{vrmBone:[x,y,z,w]}}`).
   - `name-rendered=path.jsonl` (`run_rendered`): runs a precomputed track through the baseline CLI's filter-only mode (vspark's One Euro filter, 60 Hz; `baseline.md`). The baseline's own solver output through it reproduces `baseline-rendered` exactly (end-to-end test).
   - `name-glide=path.jsonl`: upsamples a precomputed track to 60 Hz without smoothing, via `upsample.py`.
 - `upsample.py` — `glide`: on each new pose, every bone slerps from what is currently shown to the new pose, finishing one render frame before the next pose is expected, then holds. Expected interval = mean of the last 10 input intervals (causal). Bones absent from the newest pose are absent from the output; reappearing bones snap. Tests: `tests/test_upsample.py`.
-- `report.py` — `evaluate` → JSON; summary is the median per bone group (torso/head, shoulders, arms, hands, fingers); markdown rendering.
+- `report.py` — `evaluate` → JSON; summary is the median per bone group (torso/head, shoulders, arms, hands, fingers, plus `head_global`); markdown rendering.
   - Pooled rest metrics are over all `still` segments together. Additionally `per_still_segment` per system and a top-level `still_segment_summary` break rest noise / twitches down per still segment (keyed by `variant` where present); the markdown adds a "Rest by still segment" table when a session has more than one still segment.
 - `cli.py` — `mteval evaluate`. Reports default to `<repo>/reports/<session folder>/` regardless of cwd.
 - `tests/test_metrics.py` — synthetic known-answer tests for every metric. `tests/test_end_to_end.py` — runs the real baseline on vspark's `hand_dropouts` clip.
@@ -32,6 +34,7 @@ uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. 
 - M1 go/no-go (owner, 2026-11-08, `PLAN.md` §6): the model replaces both vspark's solver and its One Euro filter, so the primary comparison is `name-glide` vs `baseline-rendered`; `name-rendered` (model through the filter) is secondary.
 - Lag floor at 60 Hz: the lag metric stamps speeds at interval midpoints, so any causal 60 Hz display of 10 FPS input measures at least ~50 ms. Glide measures ~90 ms, about the same as `baseline-rendered` (70–95 ms); read lag differences between rendered systems against this floor.
 - Lag is unreliable on short or low-motion clips; check `corr` in the JSON.
+- Hand position (criterion 7) may favour the baseline: it solves from the same landmarks the metric uses. Fairness still open (`plans/m1-body-lifter.md`).
 
 ## Measurements so far (static test clip only)
 
@@ -44,4 +47,4 @@ uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. 
 
 ## Not yet
 
-Contact preservation, reprojection error (2D landmarks are already recorded). Success thresholds are `[OPEN]` (`PLAN.md` §6).
+Contact preservation, reprojection error (2D landmarks are already recorded). MHR limit violations (criterion 8) are measured in `train/` (`mttrain.limitcheck`, `modules/train.md`), not here. Success thresholds are `[OPEN]` (`PLAN.md` §6).

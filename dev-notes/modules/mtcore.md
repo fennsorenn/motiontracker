@@ -24,7 +24,11 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 - `fit_clip(ch, subject, clip, scales, ...)`: per-frame pose for one clip with fixed subject scales, solved in chunks.
 - `PAIRS_M1` (default for the M1 functions): `PAIRS` with loosened spine/neck weights (`LOOSE_SPINE`; spike finding: spine scales leaned on their limits) plus thumb pairs (constrain hand roll, hence forearm twist).
 - Head orientation constraint from CMU's head bone (`HEAD_WEIGHT`): positions alone leave head orientation free. Without it the first M1 model never moved the head.
-- Known follow-up: the neck/head split in the targets is still arbitrary (`plans/m1-body-lifter.md`).
+- Neck/head split (2026-11-08, fits `fits-v3`):
+  - `head_offset`: per-subject CMU head calibration offset (mean thorax-to-head rotation), removed from the head target.
+  - `head_post`: `fit_subject_scales(..., head_post=True)` returns `(scales, post)`; `post` makes the subject's mean head pose relative to `c_spine3` equal MHR's neutral.
+  - `NECK_PRIOR = 0.1`: Motion prior on the neck/head parameters in `fit_clip`.
+  - Effect: head joint at its limits in 1-4% of target frames (was 23-77%). `mttrain.prep_fits` stores both per subject (`modules/train.md`).
 
 ## landmarks
 `LandmarkModel` computes MediaPipe's 33 pose landmarks from MHR joints (shoulders, elbows, wrists, hand points, hips, ...) and from mesh vertices (face points, etc.) that are carried rigidly with their joint, so no full mesh skinning is needed per frame. MediaPipe's systematic placement differences from MHR anatomy are not modelled here; that is `mttrain.mpstyle` (`modules/train.md`).
