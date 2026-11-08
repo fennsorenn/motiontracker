@@ -57,3 +57,24 @@ def test_precomputed_system(session_dir: Path, tmp_path: Path):
     out.write_text('{"t": 0, "bones": {"neck": [0, 0, 0, 1]}}\n{"t": 100, "bones": {"neck": [0, 0, 0, 1]}}\n')
     r = run_system(f"model={out}", session)
     assert r.name == "model" and list(r.track.bones) == ["neck"]
+
+
+def test_rendered_precomputed_matches_baseline_rendered(session_dir: Path, tmp_path: Path):
+    """The baseline's own solver output through the filter-only mode reproduces baseline-rendered."""
+    import numpy as np
+
+    session = load_session(session_dir)
+    solver = run_system("baseline", session)
+    out = tmp_path / "solver.jsonl"
+    names = list(solver.track.bones)
+    with open(out, "w") as f:
+        for i, t in enumerate(solver.track.times):
+            bones = {n: solver.track.bones[n][i].tolist() for n in names if not np.isnan(solver.track.bones[n][i]).any()}
+            f.write(json.dumps({"t": t, "bones": bones, "conf": {}}) + "\n")
+    ours = run_system(f"model-rendered={out}", session)
+    ref = run_system("baseline-rendered", session)
+    assert ours.name == "model-rendered"
+    np.testing.assert_array_equal(ours.track.times, ref.track.times)
+    assert set(ours.track.bones) == set(ref.track.bones)
+    for n in ref.track.bones:
+        np.testing.assert_allclose(ours.track.bones[n], ref.track.bones[n], atol=1e-12)

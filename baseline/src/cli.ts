@@ -4,6 +4,10 @@
  *   pnpm run-baseline --input frames.jsonl [--output poses.jsonl] [--stage solver|rendered]
  *                     [--render-hz 60] [--calibration calib.json] [--capture-head-at <ms>]
  *                     [--capture-fingers-at <ms>] [--no-hold-missing]
+ *   pnpm run-baseline --poses poses.jsonl --stage rendered [--output out.jsonl] [--render-hz 60]
+ *
+ * `--poses` skips the solver: it runs a precomputed pose track (any system's output, same format as
+ * this CLI's) through the frontend render stage only, so other systems get identical filtering.
  *
  * Input: one JSON object per line, `{ t, pose?, face?, leftHand?, rightHand? }`. Landmarks may be
  * objects `{x,y,z,visibility?}` or compact arrays `[x,y,z,visibility?]` (vspark fixture format).
@@ -46,6 +50,7 @@ function main(): void {
   const { values } = parseArgs({
     options: {
       input: { type: 'string' },
+      poses: { type: 'string' },
       output: { type: 'string' },
       stage: { type: 'string', default: 'solver' },
       'render-hz': { type: 'string', default: '60' },
@@ -55,9 +60,16 @@ function main(): void {
       'no-hold-missing': { type: 'boolean', default: false },
     },
   });
-  if (!values.input) throw new Error('--input is required');
   if (values.stage !== 'solver' && values.stage !== 'rendered')
     throw new Error('--stage must be "solver" or "rendered"');
+  if (values.poses !== undefined) {
+    if (values.input !== undefined) throw new Error('--input and --poses are mutually exclusive');
+    if (values.stage !== 'rendered') throw new Error('--poses needs --stage rendered');
+    const poses = readPoses(values.poses);
+    write(renderStage(poses, { hz: Number(values['render-hz']) }), values.output);
+    return;
+  }
+  if (!values.input) throw new Error('--input or --poses is required');
 
   const solver = new BaselineSolver({
     holdMissing: !values['no-hold-missing'],
@@ -88,9 +100,24 @@ function main(): void {
     }
   }
 
-  const result = values.stage === 'rendered' ? renderStage(poses, { hz: Number(values['render-hz']) }) : poses;
-  const text = result.map((p) => JSON.stringify(p)).join('\n') + '\n';
-  if (values.output) fs.writeFileSync(values.output, text);
+  write(values.stage === 'rendered' ? renderStage(poses, { hz: Number(values['render-hz']) }) : poses, values.output);
+}
+
+/** Pose track JSONL -> frames; only `t` and `bones` are kept (extra keys like `conf` are dropped). */
+export function readPoses(path: string): OutputFrame[] {
+  return fs
+    .readFileSync(path, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => {
+      const raw = JSON.parse(line);
+      return { t: Number(raw.t), bones: raw.bones };
+    });
+}
+
+function write(frames: OutputFrame[], output?: string): void {
+  const text = frames.map((p) => JSON.stringify(p)).join('\n') + '\n';
+  if (output) fs.writeFileSync(output, text);
   else process.stdout.write(text);
 }
 

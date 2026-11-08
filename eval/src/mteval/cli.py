@@ -1,7 +1,7 @@
 """mteval command line.
 
   uv run mteval evaluate SESSION [--system baseline] [--system baseline-rendered]
-                         [--system name=poses.jsonl] [--out DIR] [--auto-still] [--no-calibration]
+                         [--system name=poses.jsonl] [--system name-rendered=poses.jsonl] [--out DIR] [--auto-still] [--no-calibration]
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     ev = sub.add_parser("evaluate", help="run systems over a session and write a report")
     ev.add_argument("session", help="session directory (from the recorder) or landmarks .jsonl")
-    ev.add_argument("--system", action="append", help="baseline, baseline-rendered, or name=poses.jsonl")
+    ev.add_argument("--system", action="append", help="baseline, baseline-rendered, name=poses.jsonl, or name-rendered=poses.jsonl (through the render stage)")
     ev.add_argument("--out", help="report directory (default: <repo>/reports/<session folder>)")
     ev.add_argument("--auto-still", action="store_true", help="detect still segments if the session has none")
     ev.add_argument("--no-calibration", action="store_true", help="skip the baseline head calibration")

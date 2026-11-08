@@ -8,8 +8,8 @@ No service code exists yet. Current milestone: **M1, the body lifter in MHR spac
 
 | Module | Status | Summary |
 |---|---|---|
-| `baseline` | implemented (frozen) | Frozen snapshot of the owner's current algorithmic MediaPipe → VRM bone solver (vspark), for comparison. Details: `modules/baseline.md`. |
-| `eval-harness` | implemented | Python (`eval/`, package `mteval`): runs systems over recorded sessions and computes metrics (`PLAN.md` §6). Details: `modules/eval-harness.md`. |
+| `baseline` | implemented (frozen); filter-only mode WIP | Frozen snapshot of the owner's current algorithmic MediaPipe → VRM bone solver (vspark), for comparison. Details: `modules/baseline.md`. |
+| `eval-harness` | implemented; rendered stage for named systems WIP | Python (`eval/`, package `mteval`): runs systems over recorded sessions and computes metrics (`PLAN.md` §6). Details: `modules/eval-harness.md`. |
 | `recorder` | implemented | Static browser page (`tools/recorder/`) that records test sessions: raw video + MediaPipe landmarks + protocol segments. Details: `modules/recorder.md`. |
 | `mhr-vrm-spike` | implemented (M3, done) | Spike (`spikes/m3-mhr-vrm/`): MHR → VRM 1.0 conversion, CMU → MHR fitting, round-trip eval. Reusable code now in `core/`. Details: `modules/mhr-vrm-spike.md`. |
 | `m1-body-lifter` | WIP (M1) | First learned model: MediaPipe pose landmarks → small causal model → MHR upper-body rotations → VRM 1.0. Go/no-go for the learned approach. Plan: `plans/m1-body-lifter.md`. |
@@ -22,6 +22,7 @@ Location: `baseline/` (own pnpm/TypeScript package). Byte-identical copies of vs
 
 - Frozen: the reference the learned pipeline must beat. Never edit `vendor/` to improve it.
 - Notable reproduced quirk: vspark holds the last hand/face landmarks when a stream drops out (on by default, `holdMissing`).
+- WIP (2026-11-07): filter-only CLI mode that passes a precomputed `OutputFrame` pose track (e.g. M1 output from `mttrain` infer) through vspark's frontend One Euro filter at 60 Hz, exactly like the `baseline-rendered` stage. Reuses the vendored filter; no change to `vendor/`.
 
 ### recorder (implemented)
 Location: `tools/recorder/`. Reproduces vspark's CameraCapture path (mirrored, 320x240, 10 FPS, MediaPipe tasks-vision 0.10.17 HolisticLandmarker, VIDEO mode). Writes one session directory (`session.json` + `landmarks.jsonl` + `video.webm`) into gitignored `sessions/`. Can also replay a video file instead of the webcam. Usage and fidelity notes: `tools/recorder/README.md`.
@@ -32,6 +33,7 @@ Location: `eval/` (uv project, package `mteval`, CLI `mteval evaluate`). Runs sy
 - Labeled metrics (rotation error, onset lag, peak-velocity ratio): tested on synthetic signals only, not in the report until labeled data exists (M1).
 - Compare systems at the same stage only (solver vs solver, rendered vs rendered).
 - Not yet: contact preservation, reprojection error. Success thresholds remain `[OPEN]`.
+- WIP (2026-11-07): run a named precomputed system through the baseline's filter-only render stage, so learned models can be compared against `baseline-rendered` (`PLAN.md` §6 criteria are measured after this filter).
 
 Next step: record more seated-v2 sessions with the owner (alongside M1) and measure the baseline on them. Usage and metric definitions: `eval/README.md`.
 
@@ -39,7 +41,7 @@ Next step: record more seated-v2 sessions with the owner (alongside M1) and meas
 Location: `spikes/m3-mhr-vrm/` (uv project, CPU PyTorch, `pymomentum`, `mhr`). Converts MHR skeleton states to VRM 1.0 normalized local rotations, fits CMU mocap to MHR, and checks the round trip. Result: go for MHR as canonical skeleton (`PLAN.md` §3.10; numbers in `plans/m3-mhr-vrm-spike.md`). Its reusable code moved to `core/` (`mtcore`); the spike imports it. Data lives in gitignored `data/` (`data/cmu`, `data/mhr`). Known issue: `MHR.from_files` segfaults in pymomentum (0.1.114 CPU) when loading blendshapes; the spike loads the rig without them. Details: `modules/mhr-vrm-spike.md`.
 
 ### m1-body-lifter (WIP, M1)
-Body bones only (spine, neck, head, clavicles, arms); hands, face, merger, root translation come later. Built from `core/` (`mtcore`, implemented) and `train/` (`mttrain`, implemented); CMU-derived fits, training data and checkpoints stay in gitignored `data/m1/`. Two runs so far (`m1-first`, `m1-v2`; numbers in the plan): much calmer shoulders/hands than the baseline with no added lag, torso/head slightly noisier. Still open: render stage for model output, consistent neck/head split in the fit, go/no-go on seated-v2 sessions.
+Body bones only (spine, neck, head, clavicles, arms); hands, face, merger, root translation come later. Built from `core/` (`mtcore`, implemented) and `train/` (`mttrain`, implemented); CMU-derived fits, training data and checkpoints stay in gitignored `data/m1/`. Two runs so far (`m1-first`, `m1-v2`; numbers in the plan): much calmer shoulders/hands than the baseline with no added lag, torso/head slightly noisier. Still open: render stage for model output (WIP via baseline filter-only mode + eval-harness rendered systems), consistent neck/head split in the fit, go/no-go on seated-v2 sessions.
 
 ### mtcore (implemented)
 Location: `core/`. Shared by the spike and `train/` as an editable path dependency; consumers pick their own torch build. Details: `modules/mtcore.md`.
@@ -65,6 +67,7 @@ Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracke
   - Data: low-root-travel CMU clips weighted toward upper-body activity; seated motion from CMU upper bodies on a seated lower body; performer proportions varied within MHR limits.
   - Code layout: new `train/` uv project (CUDA PyTorch); reused spike code moved into the shared package `core/` (`mtcore`).
   - Per-bone confidence output from the start (uncertainty-weighted loss); the model predicts all four MHR spine joints, folded onto VRM's spine bones by the conversion.
+- Render stage for learned-model output reuses vspark's frontend One Euro filter code via the baseline CLI, not a Python reimplementation (owner, 2026-11-07).
 
 ## Licensing
 `docs/LICENSES-REGISTER.md` tracks source, license and usage of every asset, dataset, model and recording. The vendored vspark code has no declared license; the owner must relicense it before any public release.

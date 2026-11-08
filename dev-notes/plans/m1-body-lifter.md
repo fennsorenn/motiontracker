@@ -116,7 +116,11 @@ approach.
    hands 0 vs 15 / 54; lag 0 ms; 0.26 ms/frame. Follow-ups: consistent neck/head split in the fit,
    torso jitter, render filter for model output, hand-position and exact limit metrics in the
    harness, seated-v2 sessions for the go/no-go.
-7. **Inference on sessions.** (`mttrain.infer` writes harness pose tracks; render stage still open.) Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
+7. **Inference on sessions.** (`mttrain.infer` writes harness pose tracks. Render stage done
+   2026-11-07: baseline CLI `--poses` filter-only mode, harness `--system m1-rendered=<poses>`;
+   filtering the baseline's own solver output this way reproduces `baseline-rendered` exactly.
+   m1-v2 through the filter, rest noise vs baseline-rendered: shoulders 0.5 vs 2.6, arms 2.7 vs 3.2,
+   hands 0.9 vs 6.0, torso+head 0.5 vs 0.2 deg; lag 75-100 ms like the baseline's.) Run the model on `sessions/*/landmarks.jsonl`, convert MHR → VRM,
    write a pose track the harness accepts, apply the same render stage as `baseline-rendered`,
    and produce the harness report against the baseline.
 8. **Go/no-go write-up** in PLAN.md §6/§10 with the criteria table.
@@ -131,8 +135,8 @@ approach.
 
 ## Open questions (ask before deciding)
 
-- How the `baseline-rendered` render stage is applied to model output (reuse the baseline's
-  Node renderer with a rotation-track input, or reimplement).
+- ~~How the `baseline-rendered` render stage is applied to model output~~: reuse the baseline's
+  Node renderer with a pose-track input (owner, 2026-11-07).
 
 ## Output
 

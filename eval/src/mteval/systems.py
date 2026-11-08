@@ -5,7 +5,10 @@ Built in:
   baseline-rendered  + vspark's frontend One Euro filter at a simulated 60 Hz render rate
 
 Any other system can be evaluated from a precomputed output file (`name=path.jsonl`, one
-`{t, bones: {vrmBone: [x, y, z, w]}}` per line).
+`{t, bones: {vrmBone: [x, y, z, w]}}` per line). A name ending in `-rendered`
+(`m1-rendered=path.jsonl`) runs the file through the same frontend render stage as
+`baseline-rendered` first (the baseline CLI's filter-only `--poses` mode), so it can be compared
+with `baseline-rendered`.
 """
 
 from __future__ import annotations
@@ -56,12 +59,28 @@ def run_baseline(session: Session, stage: str = "solver", calibrate: bool = True
         return SystemResult("baseline" if stage == "solver" else "baseline-rendered", PoseTrack.load(out), notes)
 
 
+def run_rendered(name: str, path: str | Path) -> SystemResult:
+    """A precomputed pose track through vspark's frontend One Euro filter at 60 Hz."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "poses.jsonl"
+        cmd = [
+            "pnpm", "--dir", str(REPO / "baseline"), "-s", "run-baseline",
+            "--poses", str(Path(path).resolve()),
+            "--output", str(out),
+            "--stage", "rendered",
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        return SystemResult(name, PoseTrack.load(out), [f"precomputed from {path}, through the render stage"])
+
+
 def run_system(spec: str, session: Session, calibrate: bool = True) -> SystemResult:
     if "=" in spec:
         name, path = spec.split("=", 1)
+        if name.endswith("-rendered"):
+            return run_rendered(name, path)
         return SystemResult(name, PoseTrack.load(path), [f"precomputed from {path}"])
     if spec == "baseline":
         return run_baseline(session, "solver", calibrate)
     if spec == "baseline-rendered":
         return run_baseline(session, "rendered", calibrate)
-    raise ValueError(f"unknown system {spec!r}; built in: {', '.join(BUILTIN)}, or name=path.jsonl")
+    raise ValueError(f"unknown system {spec!r}; built in: {', '.join(BUILTIN)}, or name=path.jsonl (name-rendered=path.jsonl for the render stage)")

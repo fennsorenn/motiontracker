@@ -12,6 +12,7 @@ uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. 
 - `systems.py` — system registry.
   - Builtins `baseline` and `baseline-rendered`: run the baseline CLI (`baseline/`, needs `pnpm install`), with head calibration captured at the middle of the first `still` segment.
   - `name=path.jsonl`: precomputed `OutputFrame` JSONL (`{t, bones:{vrmBone:[x,y,z,w]}}`).
+  - WIP (2026-11-07): option to run a named system file through the baseline CLI's filter-only render stage (vspark's One Euro filter, 60 Hz), for comparison against `baseline-rendered`. Interface not yet documented. Depends on the baseline filter-only mode (`baseline.md`).
 - `report.py` — `evaluate` → JSON; summary is the median per bone group (torso/head, shoulders, arms, hands, fingers); markdown rendering.
   - Pooled rest metrics are over all `still` segments together. Additionally `per_still_segment` per system and a top-level `still_segment_summary` break rest noise / twitches down per still segment (keyed by `variant` where present); the markdown adds a "Rest by still segment" table when a session has more than one still segment.
 - `cli.py` — `mteval evaluate`. Reports default to `<repo>/reports/<session folder>/` regardless of cwd.
