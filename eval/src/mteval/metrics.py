@@ -10,6 +10,10 @@ Label-free (real recordings):
   dropout_jump        peak angular speed within 500 ms after a hand appears or disappears in the
                       input, averaged over transitions (deg/s), for that side's arm/hand bones.
   presence            fraction of output frames in which the bone is present.
+  hand_position       wrist position error (cm) on the performer's own skeleton: the output's arm
+                      rotations applied to arm lengths measured from the pose world landmarks, vs
+                      the detected wrist relative to the detected shoulder. Frames where shoulder,
+                      elbow and wrist are confidently visible ("in view") and all frames.
   lag_vs_detector     delay of the output relative to the detector: cross-correlation of an input
                       landmark angular-speed signal with the matching bone's angular speed. Measures
                       what the solver and smoothing add on top of the detector, not camera latency.
@@ -45,7 +49,29 @@ from .session import (
 FINGER_PARTS = ("Thumb", "Index", "Middle", "Ring", "Little")
 
 
+HEAD_CHAIN = ("hips", "spine", "chest", "upperChest", "neck", "head")
+HEAD_GLOBAL = "global:head"
+
+
+def with_head_global(track: PoseTrack) -> PoseTrack:
+    """Adds `global:head`, the head's orientation relative to the avatar root: the product of the
+    torso/neck/head chain bones the system outputs (missing bones count as identity). Systems split
+    the same head pose differently across these bones (the baseline has no hips, upperChest or head
+    bone), so per-bone torso numbers aren't comparable across systems; this is."""
+    if not any(b in track.bones for b in HEAD_CHAIN):
+        return track
+    ident = np.array([0.0, 0.0, 0.0, 1.0])
+    g = np.tile(ident, (len(track.times), 1))
+    for b in HEAD_CHAIN:
+        q = track.bones.get(b)
+        if q is not None:
+            g = _qmul(g, np.where(np.isnan(q), ident, q))
+    return PoseTrack(track.times, {**track.bones, HEAD_GLOBAL: g})
+
+
 def bone_group(name: str) -> str:
+    if name == HEAD_GLOBAL:
+        return "head_global"
     if any(p in name for p in FINGER_PARTS):
         return "fingers"
     if name in ("leftHand", "rightHand"):
@@ -286,6 +312,75 @@ def lag_vs_detector(track: PoseTrack, session: Session) -> dict[str, dict]:
         if bone not in track.bones:
             continue
         out[bone] = xcorr_lag(_direction_speed(t, vecs), angular_speed(track.times, track.bones[bone]))
+    return out
+
+
+ARM_CHAIN = ("hips", "spine", "chest", "upperChest")
+VIS_IN_VIEW = 0.8
+
+
+def _qmul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    ax, ay, az, aw = np.moveaxis(a, -1, 0)
+    bx, by, bz, bw = np.moveaxis(b, -1, 0)
+    return np.stack([aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+                     aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz], -1)
+
+
+def _qrot(q: np.ndarray, v: np.ndarray) -> np.ndarray:
+    u, w = q[..., :3], q[..., 3:]
+    t = 2.0 * np.cross(u, v)
+    return v + w * t + np.cross(u, t)
+
+
+def hand_position(track: PoseTrack, session: Session) -> dict[str, dict]:
+    """Wrist error (cm) on the performer's skeleton, per side. VRM normalized bones have identity
+    rest rotations in a T-pose facing +z (left arm along +x); MediaPipe world landmarks are camera
+    axes (x right, y down, z away) of the mirrored image, so the avatar frame is (x, -y, -z).
+    Output poses are sampled at the input frame times (latest output at or before each frame)."""
+    t = session.times
+    pose = session.stream("pose")
+    ok = np.array([p is not None for p in pose])
+    P = np.array([p if p is not None else np.full((33, 4), np.nan) for p in pose])
+    flip = np.array([1.0, -1.0, -1.0])
+    rot = {b: _hold_sample(track.times, track.bones[b], t) for b in track.bones}
+    ident = np.tile([0.0, 0.0, 0.0, 1.0], (len(t), 1))
+
+    def chain(names):
+        g = ident.copy()
+        for b in names:
+            q = rot.get(b)
+            if q is not None:
+                g = _qmul(g, np.where(np.isnan(q), ident, q))
+        return g
+
+    out: dict[str, dict] = {}
+    for side, (sh, el, wr), x in (("left", (LEFT_SHOULDER, LEFT_ELBOW, LEFT_WRIST), 1.0),
+                                  ("right", (RIGHT_SHOULDER, RIGHT_ELBOW, RIGHT_WRIST), -1.0)):
+        up, low = rot.get(f"{side}UpperArm"), rot.get(f"{side}LowerArm")
+        if up is None or low is None or not ok.any():
+            out[side] = None
+            continue
+        vis = np.nanmin(P[:, [sh, el, wr], 3], axis=1)
+        in_view = ok & (vis >= VIS_IN_VIEW)
+        ref = in_view if in_view.sum() >= 10 else ok
+        l1 = float(np.median(np.linalg.norm(P[ref, el, :3] - P[ref, sh, :3], axis=1)))
+        l2 = float(np.median(np.linalg.norm(P[ref, wr, :3] - P[ref, el, :3], axis=1)))
+        g_sh = chain(ARM_CHAIN + (f"{side}Shoulder",))
+        g_up = _qmul(g_sh, up)
+        g_low = _qmul(g_up, low)
+        axis = np.array([x, 0.0, 0.0])
+        pred = l1 * _qrot(g_up, axis) + l2 * _qrot(g_low, axis)
+        det = (P[:, wr, :3] - P[:, sh, :3]) * flip
+        err = np.linalg.norm(pred - det, axis=1) * 100
+        valid = ok & ~np.isnan(err)
+
+        def stats(m):
+            e = err[m]
+            return {"median": float(np.median(e)), "mean": float(np.mean(e)), "p90": float(np.percentile(e, 90)),
+                    "n": int(m.sum())} if m.any() else None
+
+        out[side] = {"in_view": stats(valid & in_view), "all": stats(valid),
+                     "arm_lengths_cm": [round(l1 * 100, 1), round(l2 * 100, 1)]}
     return out
 
 

@@ -33,7 +33,7 @@ def evaluate(session: Session, results: list[SystemResult], auto_still: bool = F
         "systems": {},
     }
     for r in results:
-        tr = r.track
+        tr = M.with_head_global(r.track)
         report["systems"][r.name] = {
             "notes": r.notes,
             "output_frames": len(tr.times),
@@ -46,6 +46,7 @@ def evaluate(session: Session, results: list[SystemResult], auto_still: bool = F
                 "dropout_jump": M.dropout_jump(tr, session),
                 "lag_vs_detector": M.lag_vs_detector(tr, session),
             },
+            "hand_position": M.hand_position(tr, session),
             "per_still_segment": [
                 {
                     "segment": still_name(s),
@@ -115,7 +116,7 @@ METRIC_LABELS = [
     ("lag_ms", "Lag vs detector (ms)"),
     ("presence", "Presence"),
 ]
-GROUP_ORDER = ["torso_head", "shoulders", "arms", "hands", "fingers"]
+GROUP_ORDER = ["head_global", "torso_head", "shoulders", "arms", "hands", "fingers"]
 
 
 def to_markdown(report: dict) -> str:
@@ -126,7 +127,10 @@ def to_markdown(report: dict) -> str:
         f"Still segments: {report['still_source']}.",
         "",
         "Values are the median over the bones in each group. Lag is only counted where the "
-        "correlation with the detector signal is at least 0.3. See eval/README.md for definitions.",
+        "correlation with the detector signal is at least 0.3. head_global is the head's orientation "
+        "relative to the avatar root (product of the torso, neck and head bones); compare torso and "
+        "head across systems with it, since systems split the chain differently. See eval/README.md "
+        "for definitions.",
         "",
     ]
     for name, sys in report["systems"].items():
@@ -143,6 +147,18 @@ def to_markdown(report: dict) -> str:
             if any(c != "–" for c in cells):
                 lines.append(f"| {grp} | " + " | ".join(cells) + " |")
         lines.append("")
+    lines += ["## Hand position on the performer's skeleton (cm)", "",
+              "Wrist error vs the detected wrist, median over frames (both sides pooled by mean of the per-side "
+              "medians); in view = shoulder, elbow and wrist visibility at least 0.8.", "",
+              "| Frames | " + " | ".join(systems) + " |", "|---|" + "---|" * len(systems)]
+    for key, label in (("in_view", "in view"), ("all", "all")):
+        cells = []
+        for s in systems:
+            hp = report["systems"][s].get("hand_position") or {}
+            meds = [hp[side][key]["median"] for side in ("left", "right") if hp.get(side) and hp[side].get(key)]
+            cells.append(f"{np.mean(meds):.1f}" if meds else "–")
+        lines.append(f"| {label} | " + " | ".join(cells) + " |")
+    lines.append("")
     seg_summary = report.get("still_segment_summary", {})
     seg_names = list(next(iter(seg_summary.values()), {}))
     if len(seg_names) > 1:
