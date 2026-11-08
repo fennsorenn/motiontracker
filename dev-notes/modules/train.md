@@ -1,4 +1,4 @@
-# train (implemented; M1 itself WIP)
+# train (implemented; GPU data generator WIP; M1 itself WIP)
 
 Location: `train/` (uv project, package `mttrain`, CUDA PyTorch). Builds M1 training data from CMU, trains the body lifter and runs it on recorded sessions. Depends on `mtcore` (`modules/mtcore.md`); its output is evaluated with the harness (`modules/eval-harness.md`). Plan, decisions and run results: `plans/m1-body-lifter.md`.
 
@@ -21,6 +21,12 @@ All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) 
 | `train` | Training loop; runs in `data/m1/runs/<name>`. |
 | `infer` | Session → harness pose track; writes only the VRM bones the model drives. |
 | `calibrate` | Real vs synthetic landmark statistics. Rerun after new sessions are recorded. |
+
+## GPU data generator (WIP, 2026-11-08)
+Batched torch port of the synthesis pipeline that builds whole training batches on the RTX 4060 (`cuda:1`, where training also runs) instead of CPU DataLoader workers. Ported stages: seated motion (`seated`), MHR forward kinematics in torch, the `mtcore.landmarks` landmark model, camera sampling and projection (`camera`), MediaPipe style biases (`mpstyle`), noise (`noise`), features (`features`) and targets (`skeleton`). The numpy generator stays as the reference; tests compare the torch generator against it. Why: CPU generation (~4.5 ms/sample, mostly Python overhead) needed ~10 worker processes, pymomentum's solver threads overloaded the machine and it crashed; the model step alone is ~11.7 ms and 128 MiB. Module names and file layout not documented yet.
+
+## Running heavy jobs
+Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap.
 
 ## Extending
 - Anything inference needs (feature construction, scaling) must stay in `features` so training and inference cannot diverge.

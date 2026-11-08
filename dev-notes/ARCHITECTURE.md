@@ -14,7 +14,7 @@ No service code exists yet. Current milestone: **M1, the body lifter in MHR spac
 | `mhr-vrm-spike` | implemented (M3, done) | Spike (`spikes/m3-mhr-vrm/`): MHR → VRM 1.0 conversion, CMU → MHR fitting, round-trip eval. Reusable code now in `core/`. Details: `modules/mhr-vrm-spike.md`. |
 | `m1-body-lifter` | WIP (M1) | First learned model: MediaPipe pose landmarks → small causal model → MHR upper-body rotations → VRM 1.0. Go/no-go for the learned approach. Plan: `plans/m1-body-lifter.md`. |
 | `mtcore` | implemented | Shared Python package (`core/`): MHR loading/FK, CMU reader + CMU → MHR fit, MHR → VRM conversion, MediaPipe landmarks from MHR. Details: `modules/mtcore.md`. |
-| `train` | implemented | uv project (`train/`, package `mttrain`, CUDA PyTorch): CMU fits, seated synthesis, synthetic landmarks + noise, model, training, inference on sessions. Details: `modules/train.md`. |
+| `train` | implemented (GPU data generator WIP) | uv project (`train/`, package `mttrain`, CUDA PyTorch): CMU fits, seated synthesis, synthetic landmarks + noise, model, training, inference on sessions. Details: `modules/train.md`. |
 | `retargeting` | planned (M4) | Learned layer mapping the performer's pose onto the avatar's MHR identity, then to VRM 1.0 (`PLAN.md` §3.10a). |
 
 ### baseline (implemented, frozen)
@@ -41,13 +41,13 @@ Next step: record more seated-v2 sessions with the owner (alongside M1) and meas
 Location: `spikes/m3-mhr-vrm/` (uv project, CPU PyTorch, `pymomentum`, `mhr`). Converts MHR skeleton states to VRM 1.0 normalized local rotations, fits CMU mocap to MHR, and checks the round trip. Result: go for MHR as canonical skeleton (`PLAN.md` §3.10; numbers in `plans/m3-mhr-vrm-spike.md`). Its reusable code moved to `core/` (`mtcore`); the spike imports it. Data lives in gitignored `data/` (`data/cmu`, `data/mhr`). Known issue: `MHR.from_files` segfaults in pymomentum (0.1.114 CPU) when loading blendshapes; the spike loads the rig without them. Details: `modules/mhr-vrm-spike.md`.
 
 ### m1-body-lifter (WIP, M1)
-Body bones only (spine, neck, head, clavicles, arms); hands, face, merger, root translation come later. Built from `core/` (`mtcore`, implemented) and `train/` (`mttrain`, implemented); CMU-derived fits, training data and checkpoints stay in gitignored `data/m1/`. Two runs so far (`m1-first`, `m1-v2`; numbers in the plan): much calmer shoulders/hands than the baseline with no added lag, torso/head slightly noisier. Render stage for model output: done (glide primary, filter secondary; see key decisions). Still open: seated-v2 recordings (owner), harness metrics for hand position (criterion 7) and exact MHR limit violations (criterion 8), consistent neck/head split in the fit, torso jitter, go/no-go on seated-v2 sessions.
+Body bones only (spine, neck, head, clavicles, arms); hands, face, merger, root translation come later. Built from `core/` (`mtcore`, implemented) and `train/` (`mttrain`, implemented); CMU-derived fits, training data and checkpoints stay in gitignored `data/m1/`. Two runs so far (`m1-first`, `m1-v2`; numbers in the plan): much calmer shoulders/hands than the baseline with no added lag, torso/head slightly noisier. Render stage for model output: done (glide primary, filter secondary; see key decisions). WIP (2026-11-08): batched GPU training-data generator (torch port of the synthesis pipeline, runs on the RTX 4060), replacing CPU DataLoader workers; see `modules/train.md`. Still open: seated-v2 recordings (owner), harness metrics for hand position (criterion 7) and exact MHR limit violations (criterion 8), consistent neck/head split in the fit, torso jitter, go/no-go on seated-v2 sessions.
 
 ### mtcore (implemented)
 Location: `core/`. Shared by the spike and `train/` as an editable path dependency; consumers pick their own torch build. Details: `modules/mtcore.md`.
 
-### train (implemented)
-Location: `train/`. Pipeline prep_fits → seated → camera → mpstyle → noise → synth → features → dataset → model → losses → train → infer, plus calibrate (real vs synthetic stats). Details: `modules/train.md`.
+### train (implemented; GPU data generator WIP)
+Location: `train/`. Pipeline prep_fits → seated → camera → mpstyle → noise → synth → features → dataset → model → losses → train → infer, plus calibrate (real vs synthetic stats). Training runs on the RTX 4060 (`cuda:1`). WIP: the synthesis pipeline ported to torch to generate whole batches on the GPU; the numpy generator stays as the tested reference. Heavy CPU jobs (fits, training) run under `tools/guarded-run.sh`. Details: `modules/train.md`.
 
 ### retargeting (planned, M4)
 Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracked on the performer's realistic MHR identity) onto the avatar's MHR identity, then to VRM 1.0. Avatar bone lengths enter only here. Trained to keep spatial accuracy (relative positions/directions between body parts, contacts included); may read earlier latents for temporal context. The M3 spike confirmed it is needed: proportion differences, not the conversion, cause contact misses on stylized avatars. No module file yet.
@@ -68,6 +68,7 @@ Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracke
   - Code layout: new `train/` uv project (CUDA PyTorch); reused spike code moved into the shared package `core/` (`mtcore`).
   - Per-bone confidence output from the start (uncertainty-weighted loss); the model predicts all four MHR spine joints, folded onto VRM's spine bones by the conversion.
 - Render stage for learned-model output reuses vspark's frontend One Euro filter code via the baseline CLI, not a Python reimplementation (owner, 2026-11-07).
+- M1 training data is generated in batches on the GPU (torch port), not by CPU DataLoader workers (owner, 2026-11-08): CPU generation (~4.5 ms/sample, mostly Python overhead) needed ~10 workers, pymomentum's solver threads overloaded the machine and it crashed; the model step alone is ~11.7 ms and 128 MiB on the 4060.
 - M1 go/no-go treats the model as a replacement for both vspark's solver and its One Euro filter: model output goes through glide and is compared against `baseline-rendered`; model through the filter (`-rendered`) is a secondary number (owner, 2026-11-08, `PLAN.md` §6).
 
 ## Licensing
