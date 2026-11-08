@@ -50,6 +50,35 @@ IMAGE_GAIN = np.array([_RECAL[_group(n)][2] for n in MP33])
 LIMB_GROUPS = [[MP33.index(n) for n in MP33 if side in n and any(k in n for k in parts)]
                for side in ("left", "right") for parts in (("elbow",), ("wrist", "pinky", "index", "thumb"))]
 
+# Coherent arm noise (2026-11-08, still segments, residuals around a ±250 ms mean): MediaPipe moves an
+# arm's landmarks together. Correlation real / previous synthetic: shoulder-elbow 0.32 / 0.0,
+# elbow-wrist 0.52 / 0.0, wrist-hand points 0.99 / 0.0. With independent synthetic jitter the model
+# learned that coordinated arm motion is real, so real arm noise passed through. MIX (33, 33) mixes
+# unit-variance noise per landmark into this chain structure (rows have unit norm, so per-landmark
+# sigmas are unchanged).
+ARM_CORR = {"shoulder_elbow": 0.32, "elbow_wrist": 0.52, "wrist_hand": 0.99}
+
+
+def _arm_mix():
+    M = np.eye(33)
+    c1, c2, c3 = ARM_CORR["shoulder_elbow"], ARM_CORR["elbow_wrist"], ARM_CORR["wrist_hand"]
+    for side in ("left", "right"):
+        sh, el, wr = (MP33.index(f"{side}_{p}") for p in ("shoulder", "elbow", "wrist"))
+        M[el] = 0.0
+        M[el, sh], M[el, el] = c1, np.sqrt(1 - c1 * c1)
+        # wrist: Markov along the chain (shoulder-wrist = c1 * c2), elbow-wrist = c2
+        a, b = c1 * c2, c2 * np.sqrt(1 - c1 * c1)
+        M[wr] = 0.0
+        M[wr, sh], M[wr, el], M[wr, wr] = a, b, np.sqrt(1 - a * a - b * b)
+        for p in ("pinky", "index", "thumb"):
+            h = MP33.index(f"{side}_{p}")
+            M[h] = c3 * M[wr]
+            M[h, h] += np.sqrt(1 - c3 * c3)
+    return M
+
+
+MIX = _arm_mix()
+
 # seated hips sit just below the frame (~0.04 outside) yet get visibility 0.16-0.33, not the curve's
 # ~0.67: the desk and the seated pose hide them. Logit offset per landmark (randomized per sequence).
 HIP_VIS_LOGIT = -1.6
@@ -130,12 +159,12 @@ def observe(rng, world, image, dt, cfg=None):
 
     # jitter: AR(1), shared between world and image lateral axes, scaled by the edge curve
     sigma = cfg.jitter_scale * BASE_SIGMA[None] * np.interp(d, *JITTER_CURVE)  # (T, 33)
-    n = _ar1(rng, dt, cfg.rho10, (33, 3)) * sigma[..., None]
+    n = np.einsum("kj,tjc->tkc", MIX, _ar1(rng, dt, cfg.rho10, (33, 3))) * sigma[..., None]
     n[..., 2] *= cfg.z_factor * Z_GAIN
 
     # far out-of-frame: smoothly drifting guesses
     w = np.clip((d - 0.15) / 0.25, 0, 1)[..., None]
-    n += w * cfg.guess_sigma * _ar1(rng, dt, cfg.guess_rho10, (33, 3))
+    n += w * cfg.guess_sigma * np.einsum("kj,tjc->tkc", MIX, _ar1(rng, dt, cfg.guess_rho10, (33, 3)))
 
     # glitches: a limb jumps for 1-3 frames
     for t in np.flatnonzero(rng.random(T) < cfg.glitch_rate):

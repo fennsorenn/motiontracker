@@ -67,10 +67,11 @@ def observe(gen, world, image, dt, cfg):
     zg = torch.tensor(nz.Z_GAIN, dtype=torch.float32, device=dev)
     ig = torch.tensor(nz.IMAGE_GAIN, dtype=torch.float32, device=dev)
     sigma = c["jitter_scale"][..., None] * base * interp(d, nz.JITTER_CURVE)
-    n = Z[..., 33:132].reshape(B, T, 33, 3) * sigma[..., None]
+    mix = torch.tensor(nz.MIX, dtype=torch.float32, device=dev)
+    n = torch.einsum("kj,btjc->btkc", mix, Z[..., 33:132].reshape(B, T, 33, 3)) * sigma[..., None]
     n[..., 2] = n[..., 2] * c["z_factor"][..., None] * zg
     w = ((d - 0.15) / 0.25).clamp(0, 1)[..., None]
-    n = n + w * c["guess_sigma"][..., None, None] * Z[..., 132:].reshape(B, T, 33, 3)
+    n = n + w * c["guess_sigma"][..., None, None] * torch.einsum("kj,btjc->btkc", mix, Z[..., 132:].reshape(B, T, 33, 3))
 
     # glitches: a limb jumps for 1-3 frames
     groups = torch.zeros(len(nz.LIMB_GROUPS), 33, device=dev)
