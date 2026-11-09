@@ -11,7 +11,7 @@ All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) 
 | `seated` | Standing → seated: seated legs, damped pelvis lean/turn, breathing/sway, per-arm rest postures (lap/desk/hanging), clamped to MHR limits. `rest_weights` no longer fades rest stretches out at the crop end (fixed 2026-11-08). |
 | `camera` | Desk-webcam camera (height up to 0.55 m), framing sampled around the recorded session. vspark mirrors the image, so labels match an unmirrored synthetic camera. World landmarks are camera-aligned, hip-centred, metres. |
 | `mpstyle` | MediaPipe-style landmark placement: biases applied in both spaces vs world-only distortions, calibrated against the fitted CMU population, randomized per sequence. `IMAGE_Z = 3.0` scales image-landmark depth, with a log-normal spread. |
-| `noise` | Observation model: AR(1) jitter, visibility by distance outside the frame (with lag), drifting guesses, glitches, dropouts, lower visibility for seated hips. Per-group recalibration `_RECAL` (`Z_GAIN`, `IMAGE_GAIN`); `NoiseConfig.image_z_noise`. |
+| `noise` | Observation model: AR(1) jitter, visibility by distance outside the frame (with lag), drifting guesses, glitches, dropouts, lower visibility for seated hips. Per-group recalibration `_RECAL` (`Z_GAIN`, `IMAGE_GAIN`); `NoiseConfig.image_z_noise`. Coherent arm noise (2026-11-09): `MIX`, a 33x33 mixing matrix built from `ARM_CORR` (shoulder-elbow 0.32, elbow-wrist 0.52, wrist-hand 0.99), correlates the jitter and the out-of-frame guesses along each arm; mirrored in `gpugen/observe.py`. |
 | `synth` | Ties the above together: fitted MHR sequence → synthetic landmark frames (world + image + visibility) at the target frame times. |
 | `features` | Shared by training and inference: causal shoulder-width scale, history at time offsets 0–1.6 s. |
 | `skeleton` | Target extraction from MHR poses and torch FK for the position loss. |
@@ -21,6 +21,7 @@ All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) 
 | `train` | Training loop; runs in `data/m1/runs/<name>`. `--gen gpu` (default) uses `gpugen` on `--device` (default `cuda:1`), `--gen-chunk 4` batches per generator call; `--gen cpu` keeps the DataLoader path. |
 | `infer` | Session → harness pose track; writes only the VRM bones the model drives. |
 | `calibrate` | Real vs synthetic landmark statistics. Rerun after new sessions are recorded. |
+| `render` | Rendered synthetic sessions with exact ground truth (see below). |
 | `limitcheck` | Criterion 8: `python -m mttrain.limitcheck <ckpt> <session>`. IK of MHR parameters to the predicted orientations with limits off, checked against `[Limits]` (angles wrapped). Runs on the session plus stressed copies (tracking loss, low confidence, extra noise, arms out of frame, glitches) and on synthetic ground truth for validation. |
 
 ## GPU data generator (`gpugen`, implemented 2026-11-08)
@@ -39,6 +40,17 @@ Differences from the numpy generator: fixed 97-frame source crop (clips shorter 
 
 Extending: any change to a numpy synthesis stage must be mirrored in `gpugen` (and vice versa), with the comparison test kept passing; the numpy pipeline is the reference.
 
+## Rendered sessions (`render`, implemented 2026-11-09)
+`python -m mttrain.render prepare|video|replay --out data/m1/renders/<set> [--n] [--seconds] [--seed] [--rest]`, with `tools/render/render_blender.py` (Blender 5.2 EEVEE, `blender -b`). Pipeline:
+1. `prepare`: held-out CMU clips (distinct clips) through the seated pipeline at 30 fps; camera from the training desk-camera sampler; writes `gt.jsonl` (camera-relative ground-truth VRM track).
+2. Blender renders frames: MHR mesh skinned with pymomentum, plain skin material, wall, key light.
+3. `video`: ffmpeg → mirrored VP9 video.
+4. `replay`: recorder replay in headless Chrome (`tools/recorder/test/drive_headless.mjs`, optional timeout argument) → landmarks from the exact live MediaPipe build (`modules/recorder.md`).
+
+`--rest`: held posture with both arms in rest templates (`seated.seat(force_rest=...)`). Evaluate with `mteval evaluate --gt gt.jsonl` (`modules/eval-harness.md`). Heavy steps run under `tools/guarded-run.sh`. Renders are CMU-derived: `data/m1/renders`, never committed. Sets so far: `v1` (motion, 8 x 20 s), `rest1` (6 x 15 s); results in the plan, step 7c.
+
+Known limits: the seated idle motion is a rough AR(1), so rest ground truth is never still (smoothing it is an open owner decision). MediaPipe's world landmarks flatten depth (see Open).
+
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
 
@@ -47,4 +59,4 @@ Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l
 - New observation effects belong in `noise` (sensor-like) or `mpstyle` (systematic MediaPipe placement); check them with `calibrate` against real sessions.
 
 ## Open
-Arm rest noise (not yet better than the baseline), fairness of criterion 7 and the go/no-go on seated-v2 sessions: see the plan (step 7b).
+Latest run `m1-v5` (coherent noise; `m1-v4` kept). Arm rest noise (not yet better than the baseline) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7c). Rendered sessions show MediaPipe's world landmarks flatten depth (toward-camera slope ~0.42 upper arm, ~0.32 forearm vs truth) and the models inherit it; whether to model this in synthesis, wait for real multi-view data, or move to render-then-detect training (M6) is an open owner decision.
