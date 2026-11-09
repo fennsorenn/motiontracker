@@ -16,6 +16,7 @@ No service code exists yet. Current milestone: **M1, the body lifter in MHR spac
 | `mtcore` | implemented | Shared Python package (`core/`): MHR loading/FK, CMU reader + CMU → MHR fit, MHR → VRM conversion, MediaPipe landmarks from MHR. Details: `modules/mtcore.md`. |
 | `train` | implemented | uv project (`train/`, package `mttrain`, CUDA PyTorch): CMU fits, seated synthesis, synthetic landmarks + noise, batched GPU data generator, contact choreography, model, training, inference on sessions, limit check. Details: `modules/train.md`. |
 | `render` | implemented | Rendered synthetic sessions with exact ground truth: `mttrain.render` + `tools/render/render_blender.py` (Blender EEVEE) → video → recorder replay → real MediaPipe landmarks + `gt.jsonl`. Details: `modules/train.md` (Rendered sessions). |
+| `mp-depth-probe` | WIP (spike) | Spike (`spikes/mp-depth-probe/`, approved 2026-11-09): locate where MediaPipe's pose landmark model (Holistic .task, float16 v1) encodes hand-vs-face depth (hand touching the face lands 8-26 cm in front of the nose, like real near-misses). Methods: contrast pairs (touch vs ~10 cm hover) comparing intermediate activations layer by layer (ai-edge-litert); occlusion sensitivity. Informs: closed-form edit of the output head (keeps the standard MediaPipe runtime) vs deeper fine-tuning. Temporal cues stay in the lifter, not MediaPipe. |
 | `retargeting` | planned (M4) | Learned layer mapping the performer's pose onto the avatar's MHR identity, then to VRM 1.0 (`PLAN.md` §3.10a). |
 
 ### baseline (implemented, frozen)
