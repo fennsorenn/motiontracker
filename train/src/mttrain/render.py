@@ -1,6 +1,6 @@
 """Rendered synthetic sessions: exact ground truth for the whole system with the real detector.
 
-    uv run python -m mttrain.render prepare --out data/m1/renders/v1 [--n 6] [--seconds 20] [--seed 0]
+    uv run python -m mttrain.render prepare --out data/m1/renders/v1 [--n 6] [--seconds 20] [--seed 0] [--rest]
     uv run python -m mttrain.render video   --out data/m1/renders/v1      # Blender + ffmpeg
     uv run python -m mttrain.render replay  --out data/m1/renders/v1      # headless recorder -> landmarks
 
@@ -37,7 +37,7 @@ from mtcore.vrm import load_vrm
 from .camera import sample_desk_camera
 from .dataset import FITS, clip_table
 from .infer import OUTPUT_BONES, R0, mat_to_quat
-from .seated import seat
+from .seated import REST, seat
 from .skeleton import quat_to_mat
 
 FPS = 30.0
@@ -46,7 +46,9 @@ SCRIPT = REPO_ROOT / "tools" / "render" / "render_blender.py"
 DRIVER = REPO_ROOT / "tools" / "recorder" / "test" / "drive_headless.mjs"
 
 
-def prepare(out, n, seconds, seed, avatar="AvatarSample_D"):
+def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest=False):
+    """`rest`: a held CMU posture with both arms in rest postures (lap, desk, hanging; random per arm)
+    plus the seated idle motion (breathing, sway): nearly still ground truth, for noise at rest."""
     rng = np.random.default_rng(seed)
     ch = load()
     pn = list(ch.parameter_transform.names)
@@ -61,10 +63,18 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D"):
     keys = [k for k, _ in rows if len(mps[k]) >= T]
     w = np.array([w for k, w in rows if k in keys])
     faces = np.asarray(ch.mesh.faces, dtype=np.int32)
+    # distinct clips (weighted like training), repeating only if there are fewer clips than sequences
+    order = rng.choice(len(keys), size=min(n, len(keys)), replace=False, p=w / w.sum())
+    print(f"{len(keys)} held-out clips are at least {seconds:.0f} s long", flush=True)
     for i in range(n):
-        key = keys[rng.choice(len(keys), p=w / w.sum())]
+        key = keys[order[i % len(order)]]
         s0 = rng.integers(0, len(mps[key]) - T + 1)
-        mp = seat(rng, pn, mps[key][s0:s0 + T], FPS, lim)
+        if rest:
+            held = np.repeat(mps[key][s0 + rng.integers(T)][None], T, 0)
+            pair = tuple(rng.choice(list(REST), 2))
+            mp = seat(rng, pn, held, FPS, lim, force_rest=pair)
+        else:
+            mp = seat(rng, pn, mps[key][s0:s0 + T], FPS, lim)
         states = skeleton_state(ch, mp)
         cam = sample_desk_camera(rng, lm(states) / 100.0)
         verts = np.asarray(ch.skin_points(states.astype(np.float32))) / 100.0
@@ -84,7 +94,7 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D"):
             for k in range(T):
                 f.write(json.dumps({"t": round(k / FPS * 1000, 1),
                                     "bones": {b: bones[b][k].round(6).tolist() for b in OUTPUT_BONES if b in bones}}) + "\n")
-        print(f"{d.name}: clip {key} from frame {s0}, {T} frames", flush=True)
+        print(f"{d.name}: clip {key} from frame {s0}, {T} frames" + (f", rest {pair}" if rest else ""), flush=True)
 
 
 def video(out, threads=8):
@@ -137,9 +147,10 @@ def main():
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--threads", type=int, default=8)
+    ap.add_argument("--rest", action="store_true", help="held posture, arms resting (noise at rest)")
     a = ap.parse_args()
     if a.step == "prepare":
-        prepare(a.out, a.n, a.seconds, a.seed)
+        prepare(a.out, a.n, a.seconds, a.seed, rest=a.rest)
     elif a.step == "video":
         video(a.out, a.threads)
     else:
