@@ -11,6 +11,8 @@ and §8 before adding anything. The project's own license is still open (PLAN.md
 | MediaPipe Holistic Landmarker (indirectly) | Google, via vspark's camera code | Apache 2.0 (per model card; verify) | Produced the recorded landmarks | Not bundled here. |
 | MediaPipe tasks-vision 0.10.17 (JS + WASM) | https://www.npmjs.com/package/@mediapipe/tasks-vision, loaded from jsDelivr by `tools/recorder` | Apache 2.0 | Landmark detection in the recorder | Not bundled. |
 | MediaPipe Holistic Landmarker model, float16 v1 | storage.googleapis.com/mediapipe-models/holistic_landmarker/... (MD5 `3ZywDp2ZM9rHmI2M40e6ew==`) | Apache 2.0 (per model card; verify) | Recorder detection | Not bundled. |
+| ai-edge-litert 2.3.0 (LiteRT Python interpreter) | https://pypi.org/project/ai-edge-litert/ | Apache 2.0 (PyPI classifier) | `spikes/mp-depth-probe`: runs MediaPipe's pose landmark model with intermediate tensors | Spike dependency only. |
+| MediaPipe pose landmark model (from the Holistic bundle above) | extracted from `holistic_landmarker.task` (same MD5) into `data/spikes/mp-depth/model/` | Apache 2.0 (per model card; verify) | `spikes/mp-depth-probe`: activation probes | Not committed. A fine-tuned or edited derivative would need the model card license verified first. |
 | MediaPipe test image `male_full_height_hands.jpg` | storage.googleapis.com/mediapipe-assets/ | Apache 2.0 (MediaPipe test assets; verify) | Recorder headless test builds a video from it at run time | Not committed. |
 | numpy | https://numpy.org | BSD-3-Clause | `eval/` metrics | |
 | pytest (dev) | https://pytest.org | MIT | `eval/` tests | |
