@@ -177,6 +177,35 @@ approach.
    - Also found: seated idle motion (AR(1) signals) is rough frame to frame (arm parameters ~7 deg/s
      each, 16-20 deg/s per arm), so the rest set's ground truth is never still and training targets
      carry the roughness; real idle motion is smooth. Not fixed yet.
+7d. **Depth flattening in the synthesis (2026-11-09).** Owner: train the model to undo the flattening
+   (vspark compensates with `ikCalibration.zScale = 3` on world-landmark depth, IK mode only).
+   - Calibration (renders, MediaPipe vs synthesis of the true pose, per segment, camera depth):
+     MediaPipe = gain x true + bias, segment length kept. Gains: upper arm 0.37, forearm 0.33, hand
+     0.18, shoulders 0.60, hips 0.47, torso 0.42 (bias -10 cm: leans toward the camera), head 0.25
+     (-11 cm), head yaw 0.47. Image z is ~3x world z on every segment, so the old synthesis (true world
+     depth, image z 3x geometric) was ~3x too deep in both spaces. Extra depth error during motion
+     4-7 cm (~0.5 s), under 1.5 cm at rest: not modelled.
+   - `m1-v6` (flattening at the render strength): renders much better than m1-v5 (motion set, arms in
+     view: forearm 29.3 -> 22.8 deg, wrist 18.0 -> 14.4 cm; rest set wrist 35.6 -> 24.7 cm), but the
+     real session worse (2D wrist 6.0 -> 9.1 cm). On the real session MediaPipe's forearm depth matches
+     the image foreshortening (world and image in-plane fractions 0.68/0.68, 0.59/0.57); on renders the
+     world forearm is stretched in-plane: real video looks less flattened than the plain renders.
+   - FOV experiment (`render prepare --fovs`, 3 clips x 50/65/80/95 deg, constant framing, camera on the
+     same line from the chest, 1.5-0.64 m): closer cameras flatten more (upper arm gain 0.24 -> 0.10,
+     forearm 0.18 -> -0.03, torso 0.48 -> 0.36, neck 0.62 -> 0.44; left-right depth slightly less).
+     Does not explain the real/render gap (the real session used the ~90 deg camera).
+   - `m1-v7`: cameras FOV 50-130 deg (owner), distance 0.45-1.6 m, shoulder width 10-50% of the frame;
+     gains change with camera distance (`DEPTH_SLOPE`) and a per-sequence relax factor (uniform 0-1)
+     blends toward no flattening, so the model infers the strength. Real session (glide vs
+     baseline-rendered): 2D wrist 6.7 vs 7.2 cm (m1-v5 6.0, m1-v6 9.1), forearm direction 7.1 vs 8.8 deg,
+     arm rest noise 3.7 vs 3.2 deg (m1-v5 3.5), arm twitches 31.9 vs 45/min (m1-v5 22.5), lag 90 ms.
+     Renders, arms in view, forearm deg / wrist cm (m1-v5 / m1-v6 / m1-v7): motion 29.3/18.0, 22.8/14.4,
+     23.9/14.9; rest 44.7/35.6, 36.6/24.7, 27.9/19.9; FOV 50: 25.7/19.6, 23.8/19.7, 21.7/17.9; FOV 95:
+     33.7/22.3, 30.2/22.4, 31.8/22.8. All systems get worse with closer cameras (MediaPipe forearm 30
+     -> 41 deg).
+   - Open: synthetic noise doesn't grow when the person is small in the frame (now down to 10% shoulder
+     width); pinhole projection only (wide lenses add barrel distortion); real-video flattening strength
+     needs ground truth (multi-view recordings).
 8. **Go/no-go write-up** in PLAN.md §6/§10 with the criteria table.
 
 ## Acceptance / verification
