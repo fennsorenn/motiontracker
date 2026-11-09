@@ -34,7 +34,7 @@ def _setup():
 
 
 def test_geometry_matches_numpy():
-    from mttrain.camera import Camera, sample_desk_camera
+    from mttrain.camera import Camera, sample_desk_camera, shoulder_distance
     from mttrain.gpugen import geom
     from mttrain.mpstyle import Style
     from mttrain.skeleton import TargetExtractor
@@ -58,13 +58,15 @@ def test_geometry_matches_numpy():
     t = torch.tensor(np.stack([c.t for c in cams]), dtype=torch.float32)
     fx = torch.tensor([c.fx for c in cams], dtype=torch.float32)
     im = geom.project(P, R, t, fx)
-    flat = st.flatten(geom.world_landmarks(P, R, t))
+    dist = geom.shoulder_distance(P, R, t)
+    flat = st.flatten(geom.world_landmarks(P, R, t), dist)
     fz = geom.flat_image_z(P, R, t, fx, flat)
     W = st.world(flat)
     for b in range(B):
         Xp = styles[b].placement(X[b])
-        assert np.abs(im[b].numpy() - cams[b].project(Xp)[0]).max() < 1e-4
-        fl = styles[b].flatten(cams[b].world_landmarks(Xp))
+        assert np.allclose(im[b].numpy(), cams[b].project(Xp)[0], rtol=1e-5, atol=1e-4)  # float32, far off-frame points
+        assert abs(dist[b].item() - shoulder_distance(cams[b], Xp)) < 1e-4
+        fl = styles[b].flatten(cams[b].world_landmarks(Xp), shoulder_distance(cams[b], Xp))
         assert np.abs(flat[b].numpy() - fl).max() < 1e-5
         assert np.abs(fz[b].numpy() - cams[b].flat_image_z(Xp, fl)).max() < 1e-4
         assert np.abs(W[b].numpy() - styles[b].world(fl)).max() < 1e-5

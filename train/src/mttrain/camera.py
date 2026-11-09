@@ -66,12 +66,18 @@ def look_at(eye, target, roll=0.0):
     return np.stack([r, d, f])
 
 
-def sample_desk_camera(rng, landmarks_m, fov=None):
-    """Desk-webcam framing for a clip, from its landmarks (T, 33, 3) in MHR metres.
+FOV_RANGE = (50.0, 130.0)  # horizontal, degrees (owner's cameras: about 70 and 90)
+DIST_RANGE = (0.45, 1.6)  # camera to shoulders, metres (log-uniform)
+SW_RANGE = (0.10, 0.50)  # shoulder width / frame width: distance is clamped to keep the framing in it
 
-    Samples the framing itself, centred on the recorded session (shoulders at 58% of the frame
-    height, shoulder width 25% of the frame width), then derives distance and aim; plus random
-    yaw, camera height, roll and field of view. The camera faces the performer's average front.
+
+def sample_desk_camera(rng, landmarks_m, fov=None):
+    """Desk-webcam camera for a clip, from its landmarks (T, 33, 3) in MHR metres.
+
+    Field of view, distance and framing vary: horizontal FOV uniform in FOV_RANGE, distance to the
+    shoulders log-uniform in DIST_RANGE but clamped so the shoulder width covers SW_RANGE of the frame
+    width, shoulders at 40-75% of the frame height; plus random yaw, camera height above the chest,
+    roll. The camera faces the performer's average front.
     `fov` (horizontal, degrees) overrides the sampled one; the random stream is unchanged, so the
     same rng state gives the same camera apart from field of view and distance: the camera moves along
     the same line from the chest (height scaled with distance), so the viewing angle and the framing
@@ -86,15 +92,20 @@ def sample_desk_camera(rng, landmarks_m, fov=None):
     yaw = np.radians(rng.uniform(-25, 25))
     c, s = np.cos(yaw), np.sin(yaw)
     dirn = np.array([c * front[0] + s * front[2], 0.0, -s * front[0] + c * front[2]])
-    fov_sampled = rng.uniform(55, 80)
-    fx = 0.5 / np.tan(np.radians(fov if fov is not None else fov_sampled) / 2)
-    sw_frac = float(np.exp(rng.normal(np.log(0.25), 0.2)))  # shoulder width / frame width
-    sh_y = rng.uniform(0.45, 0.72)  # shoulder height in the frame (0 = top)
-    dist = fx * width / sw_frac
-    lift = rng.uniform(0.0, 0.55)
-    if fov is not None:
-        lift *= fx / (0.5 / np.tan(np.radians(fov_sampled) / 2))  # dist / dist at the sampled fov
+    fov_sampled = rng.uniform(*FOV_RANGE)
+    fx_s = 0.5 / np.tan(np.radians(fov_sampled) / 2)
+    dist = float(np.exp(rng.uniform(np.log(DIST_RANGE[0]), np.log(DIST_RANGE[1]))))
+    dist = float(np.clip(dist, fx_s * width / SW_RANGE[1], fx_s * width / SW_RANGE[0]))
+    fx = fx_s if fov is None else 0.5 / np.tan(np.radians(fov) / 2)
+    dist *= fx / fx_s  # same framing at an overridden fov
+    sh_y = rng.uniform(0.40, 0.75)  # shoulder height in the frame (0 = top)
+    lift = rng.uniform(0.0, 0.55) * fx / fx_s
     eye = chest + dist * dirn + [0.0, lift, 0.0]
     # aim above or below the chest so the shoulders land at sh_y
     target = chest + [0.0, dist * (sh_y - 0.5) / (fx * 4 / 3), 0.0]
     return Camera(R=look_at(eye, target, np.radians(rng.uniform(-4, 4))), t=eye, fx=fx)
+
+
+def shoulder_distance(cam, X):
+    """Median camera-frame depth of the shoulder midpoint over a clip's landmarks X (T, 33, 3), metres."""
+    return float(np.median(cam.to_camera(X)[:, [L_SH, R_SH], 2].mean(1)))

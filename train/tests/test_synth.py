@@ -30,7 +30,7 @@ def test_depth_flattening():
     W = W - 0.5 * (W[:, I("left_hip")] + W[:, I("right_hip")])[:, None]
     assert np.allclose(Style.identity().flatten(W), W)
     s = Style.calibrated()
-    F = s.flatten(W)
+    F = s.flatten(W)  # at the reference distance: the calibrated table
     g, b = dict(zip(DEPTH_KEYS, s.depth_gain)), dict(zip(DEPTH_KEYS, s.depth_bias))
     for seg, (p, q) in {"upper_arm": ("left_shoulder", "left_elbow"), "forearm": ("right_elbow", "right_wrist"),
                         "ears": ("right_ear", "left_ear"), "hand": ("left_wrist", "left_index")}.items():
@@ -45,6 +45,12 @@ def test_depth_flattening():
     assert np.allclose(F[:, I("left_ankle")] - F[:, I("left_knee")], W[:, I("left_ankle")] - W[:, I("left_knee")])
     mid = lambda X: 0.5 * (X[:, I("left_hip")] + X[:, I("right_hip")])
     assert np.allclose(mid(F), 0.0)
+    # relaxed fully: no flattening at any distance; closer cameras flatten the forearm more
+    s.depth_relax = 1.0
+    assert np.allclose(s.flatten(W, 0.5), W)
+    s.depth_relax = 0.0
+    k = DEPTH_KEYS.index("forearm")
+    assert s.depth_at(0.6)[0][k] < s.depth_at(1.1)[0][k] < s.depth_at(1.5)[0][k]
 
 
 def test_calibrated_style_factors():

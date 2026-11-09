@@ -4,7 +4,7 @@ import numpy as np
 
 from mtcore.mhr import skeleton_state
 
-from .camera import sample_desk_camera
+from .camera import sample_desk_camera, shoulder_distance
 from .mpstyle import Style
 from .noise import NoiseConfig, observe
 
@@ -35,7 +35,7 @@ def synthesize(rng, ch, landmark_model, mp, src_fps=30.0, fps=None, style=None, 
     X = style.placement(X)
     cam = camera or sample_desk_camera(rng, X)
     image, _ = cam.project(X)
-    flat = style.flatten(cam.world_landmarks(X))
+    flat = style.flatten(cam.world_landmarks(X), shoulder_distance(cam, X))
     image[..., 2] = cam.flat_image_z(X, flat)
     world = style.world(flat)
     dt = np.diff(t, prepend=t[0] - 1.0 / fps)

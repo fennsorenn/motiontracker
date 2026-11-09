@@ -81,6 +81,12 @@ DEPTH = {"torso": (0.42, -0.097), "shoulders": (0.60, 0.010), "hips": (0.47, -0.
          "ears": (0.47, 0.004), "face": (0.43, -0.047), "upper_arm": (0.37, 0.009), "forearm": (0.33, -0.057),
          "hand": (0.18, -0.041)}
 DEPTH_KEYS = list(DEPTH)
+# perspective: gain change per metre of camera distance (FOV experiment 2026-11-09: the same motion at
+# 50-95 deg with constant framing, 0.64-1.5 m; closer cameras flatten the arms, torso and neck more and
+# the left-right depth slightly less); DEPTH holds the gains at DEPTH_REF_DIST. Face and hips: not measured.
+DEPTH_SLOPE = {"torso": 0.13, "shoulders": -0.12, "hips": 0.0, "neck": 0.20, "ears": -0.10, "face": 0.0,
+               "upper_arm": 0.14, "forearm": 0.24, "hand": 0.09}
+DEPTH_REF_DIST = 1.1  # metres, camera to shoulders (median of the calibration renders)
 
 
 def _depth_steps():
@@ -156,6 +162,7 @@ class Style:
     offset: np.ndarray = field(default_factory=lambda: np.zeros((33, 3)))  # world metres, per landmark
     depth_gain: np.ndarray = field(default_factory=lambda: np.ones(len(DEPTH)))  # per DEPTH_KEYS
     depth_bias: np.ndarray = field(default_factory=lambda: np.zeros(len(DEPTH)))  # metres
+    depth_relax: float = 0.0  # 0: render-calibrated flattening, 1: none (see depth_at)
 
     @classmethod
     def identity(cls):
@@ -170,7 +177,9 @@ class Style:
     def sample(cls, rng, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25):
         """Calibrated values with per-sequence log-normal spread (face factors shared, so it stays symmetric).
         Image z gets a wider spread: its scale is the least certain and may differ between MediaPipe models.
-        Depth gains: log-normal depth_spread, clipped to [0.05, 1]; biases: normal, 1 cm + 30% of the bias."""
+        Depth gains: log-normal depth_spread, clipped to [0.05, 1]; biases: normal, 1 cm + 30% of the bias;
+        depth_relax uniform in [0, 1]: real video may be flattened less than the renders it was calibrated
+        on (2026-11-09), so the strength is left for the model to infer."""
         ln = lambda: float(np.exp(rng.normal(0, spread)))
         fp, fw = _factors(FACE_PLACEMENT), _factors(FACE_WORLD)
         fp[FACE] = 1 + (fp[FACE] - 1) * ln()
@@ -179,7 +188,7 @@ class Style:
         return cls(HIP_WIDEN * ln(), IMAGE_Z * float(np.exp(rng.normal(0, image_z_spread))), fp, fw, {k: v * ln() for k, v in LIMB.items()},
                    rng.normal(0, offset_cm / 100, (33, 3)),
                    np.clip(g0 * np.exp(rng.normal(0, depth_spread, len(g0))), 0.05, 1.0),
-                   b0 + rng.normal(0, 1, len(b0)) * (0.01 + 0.3 * np.abs(b0)))
+                   b0 + rng.normal(0, 1, len(b0)) * (0.01 + 0.3 * np.abs(b0)), float(rng.uniform(0, 1)))
 
     def placement(self, X):
         """3D landmarks (..., 33, 3), any frame and unit: where MediaPipe places its points."""
@@ -189,9 +198,17 @@ class Style:
             X[..., I[n], :] = mid + self.hip_widen * (X[..., I[n], :] - mid)
         return X
 
-    def flatten(self, W):
-        """Hip-centred camera-frame landmarks (..., 33, 3), metres -> MediaPipe's flattened depth (both spaces)."""
-        return flatten(W, self.depth_gain, self.depth_bias)
+    def depth_at(self, dist):
+        """Effective (gain, bias) per DEPTH_KEYS for a camera `dist` metres from the shoulders: the
+        perspective slope, then blended toward no flattening by depth_relax."""
+        slope = np.array([DEPTH_SLOPE[k] for k in DEPTH_KEYS])
+        g = np.clip(self.depth_gain + slope * (dist - DEPTH_REF_DIST), 0.02, 1.0)
+        return g + self.depth_relax * (1 - g), self.depth_bias * (1 - self.depth_relax)
+
+    def flatten(self, W, dist=DEPTH_REF_DIST):
+        """Hip-centred camera-frame landmarks (..., 33, 3), metres -> MediaPipe's flattened depth (both
+        spaces), for a camera `dist` metres from the shoulders."""
+        return flatten(W, *self.depth_at(dist))
 
     def world(self, W):
         """World landmarks (..., 33, 3), metres, hip-midpoint origin, already flattened: MediaPipe's

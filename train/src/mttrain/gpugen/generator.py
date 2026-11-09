@@ -21,7 +21,7 @@ from ..dataset import FITS, SRC_FPS, clip_table
 from ..features import OFFSETS
 from . import features as GF
 from .fk import MhrFK
-from .geom import Landmarks, Style, Targets, flat_image_z, project, sample_desk_camera, world_landmarks
+from .geom import Landmarks, Style, Targets, flat_image_z, project, sample_desk_camera, shoulder_distance, world_landmarks
 from .motion import Seater
 from .observe import observe, sample_config
 
@@ -89,9 +89,10 @@ class GpuGenerator:
         X = self.lm(states) / 100.0
         style = Style.sample(B, self.gen, dev)
         X = style.placement(X)
-        R, t, fx = sample_desk_camera(torch.where(valid[..., None, None], X, torch.full_like(X, math.nan)), self.gen)
+        Xn = torch.where(valid[..., None, None], X, torch.full_like(X, math.nan))
+        R, t, fx = sample_desk_camera(Xn, self.gen)
         image = project(X, R, t, fx)
-        flat = style.flatten(world_landmarks(X, R, t))
+        flat = style.flatten(world_landmarks(X, R, t), shoulder_distance(Xn, R, t))
         image[..., 2] = flat_image_z(X, R, t, fx, flat)
         world = style.world(flat)
         dt = torch.diff(tz, dim=1, prepend=(tz[:, :1] - 1.0 / fps[:, None]))

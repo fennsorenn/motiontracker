@@ -13,7 +13,7 @@ import torch
 from mtcore.landmarks import MP33
 
 from .. import mpstyle as ms
-from ..camera import L_HIP, L_SH, R_HIP, R_SH
+from ..camera import DIST_RANGE, FOV_RANGE, L_HIP, L_SH, R_HIP, R_SH, SW_RANGE
 from ..skeleton import OUT_JOINTS, PARENT_IDX
 from .fk import quat_rotate
 
@@ -51,12 +51,14 @@ class Landmarks(torch.nn.Module):
 class Style:
     """Per-sequence MediaPipe biases, as mpstyle.Style but with (B, ...) tensors."""
 
-    def __init__(self, hip_widen, image_z, face_placement, face_world, limb, offset, depth_gain, depth_bias):
+    def __init__(self, hip_widen, image_z, face_placement, face_world, limb, offset, depth_gain, depth_bias,
+                 depth_relax):
         self.hip_widen, self.image_z = hip_widen, image_z  # (B,)
         self.face_placement, self.face_world = face_placement, face_world  # (B, 33)
         self.limb = limb  # name -> (B,)
         self.offset = offset  # (B, 33, 3) metres
         self.depth_gain, self.depth_bias = depth_gain, depth_bias  # (B, K) per ms.DEPTH_KEYS, bias metres
+        self.depth_relax = depth_relax  # (B,)
 
     @classmethod
     def from_numpy(cls, styles, device=None):
@@ -64,7 +66,8 @@ class Style:
         return cls(t([s.hip_widen for s in styles]), t([s.image_z for s in styles]),
                    t([s.face_placement for s in styles]), t([s.face_world for s in styles]),
                    {k: t([s.limb[k] for s in styles]) for k in ms.LIMB}, t([s.offset for s in styles]),
-                   t([s.depth_gain for s in styles]), t([s.depth_bias for s in styles]))
+                   t([s.depth_gain for s in styles]), t([s.depth_bias for s in styles]),
+                   t([s.depth_relax for s in styles]))
 
     @classmethod
     def sample(cls, B, gen, device, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25):
@@ -81,7 +84,8 @@ class Style:
         b0 = torch.tensor([b for _, b in ms.DEPTH.values()], device=device)
         gain = (g0 * torch.exp(torch.randn(B, K, generator=gen, device=device) * depth_spread)).clamp(0.05, 1.0)
         bias = b0 + torch.randn(B, K, generator=gen, device=device) * (0.01 + 0.3 * b0.abs())
-        return cls(ms.HIP_WIDEN * ln(B), image_z, fp, fw, limb, offset, gain, bias)
+        relax = torch.rand(B, generator=gen, device=device)
+        return cls(ms.HIP_WIDEN * ln(B), image_z, fp, fw, limb, offset, gain, bias, relax)
 
     @staticmethod
     def _lateral(X, factors):
@@ -102,14 +106,23 @@ class Style:
             X[..., I[n], :] = mid + hw * (X[..., I[n], :] - mid)
         return X
 
-    def flatten(self, W):
-        """mpstyle.flatten, batched: hip-centred camera-frame landmarks (B, T, 33, 3), metres."""
+    def depth_at(self, dist):
+        """mpstyle.Style.depth_at, batched: dist (B,) metres -> gain, bias (B, K)."""
+        slope = torch.tensor([ms.DEPTH_SLOPE[k] for k in ms.DEPTH_KEYS], device=dist.device)
+        g = (self.depth_gain + slope * (dist[:, None] - ms.DEPTH_REF_DIST)).clamp(0.02, 1.0)
+        r = self.depth_relax[:, None]
+        return g + r * (1 - g), self.depth_bias * (1 - r)
+
+    def flatten(self, W, dist):
+        """mpstyle.Style.flatten, batched: hip-centred camera-frame landmarks (B, T, 33, 3), metres;
+        dist (B,) camera to shoulders, metres."""
+        gain, bias = self.depth_at(dist)
         W = W.clone()
         for key, a, b, moved, w in ms.DEPTH_STEPS:
             k = ms.DEPTH_KEYS.index(key)
             d = W[..., b, :].mean(-2) - W[..., a, :].mean(-2)
             L = d.norm(dim=-1)
-            ez = torch.maximum(torch.minimum(self.depth_gain[:, k, None] * d[..., 2] + self.depth_bias[:, k, None], L), -L)
+            ez = torch.maximum(torch.minimum(gain[:, k, None] * d[..., 2] + bias[:, k, None], L), -L)
             xy = d[..., :2].norm(dim=-1)
             s = ((L * L - ez * ez).clamp_min(0).sqrt() / xy.clamp_min(1e-9)).clamp(max=ms.FLAT_MAX_STRETCH)
             e = torch.cat([d[..., :2] * s[..., None], ez[..., None]], -1)
@@ -164,10 +177,10 @@ def sample_desk_camera(X, gen):
     yaw = torch.deg2rad(u(-25, 25))
     c, s = torch.cos(yaw), torch.sin(yaw)
     dirn = torch.stack([c * front[:, 0] + s * front[:, 2], torch.zeros_like(c), -s * front[:, 0] + c * front[:, 2]], -1)
-    fx = 0.5 / torch.tan(torch.deg2rad(u(55, 80)) / 2)
-    sw_frac = torch.exp(math.log(0.25) + 0.2 * torch.randn(B, generator=gen, device=dev))
-    sh_y = u(0.45, 0.72)
-    dist = fx * width / sw_frac
+    fx = 0.5 / torch.tan(torch.deg2rad(u(*FOV_RANGE)) / 2)
+    dist = torch.exp(u(math.log(DIST_RANGE[0]), math.log(DIST_RANGE[1])))
+    dist = torch.maximum(torch.minimum(dist, fx * width / SW_RANGE[0]), fx * width / SW_RANGE[1])
+    sh_y = u(0.40, 0.75)
     lift = torch.zeros(B, 3, device=dev)
     lift[:, 1] = u(0.0, 0.55)
     eye = chest + dist[:, None] * dirn + lift
@@ -175,6 +188,12 @@ def sample_desk_camera(X, gen):
     aim[:, 1] = dist * (sh_y - 0.5) / (fx * 4 / 3)
     R = look_at(eye, chest + aim, torch.deg2rad(u(-4, 4)))
     return R, eye, fx
+
+
+def shoulder_distance(X, R, t):
+    """camera.shoulder_distance, batched: X (B, T, 33, 3) with padded frames NaN -> (B,) metres."""
+    z = to_camera(X[:, :, [L_SH, R_SH]], R, t)[..., 2].mean(-1)
+    return z.nanmedian(1).values
 
 
 def to_camera(X, R, t):
