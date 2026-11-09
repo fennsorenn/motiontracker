@@ -83,6 +83,23 @@ systematic error. Noise averages out over the lifter's history; a bias wouldn't.
 (for hand-minus-face depth) would come the same way from the face landmarks with a per-person face
 size; not tested here. The detection rate is the main risk.
 
+### Orientation and the elbow (owner's questions)
+
+- **Orientation matters.** The simple size estimate (3D spread of the model's world landmarks vs
+  2D spread) is unbiased on average but edge-on hands read too far: median |error| 9.3 cm with the
+  palm edge-on, 3.5-4.2 cm when it faces the camera. Fitting the hand's orientation (2x3 projection
+  from world to image landmarks, scale from its singular values) lowers the within-configuration
+  error to 2.7 cm but reads 8-12 cm too close: the hand model's own 3D hand shape is not accurate
+  enough for a hand-made estimator. Better to give the lifter the 21 landmarks and let it learn.
+- **The elbow is a strong geometric cue.** From contact to 14 cm the forearm turns toward the camera
+  (out-of-plane angle +20 -> +40 deg, median) and its 2D length shrinks by 24%, more than the hand's
+  apparent size changes. The lifter already gets elbow and wrist image positions. But MediaPipe's 2D
+  keeps only part of it: 15% shrink instead of 24%, within-configuration correlation 0.38 (elbow 13
+  px, wrist 16 px off on an 83 px forearm). It also needs the forearm length (per person) and can't
+  tell toward from away by itself.
+- So near the face all three cues are degraded in MediaPipe in ways our synthesis doesn't model:
+  world depth biased toward the camera, 2D foreshortening damped, hand landmarks often missing.
+
 ## Caveats
 
 - Renders only: plain MHR body, EEVEE lighting, no clothes or hair; real images may carry cues the

@@ -49,6 +49,16 @@ def scale(p_img, P_world, idx):
     return np.sqrt(((a - a.mean(0)) ** 2).sum() / ((b - b.mean(0)) ** 2).sum())
 
 
+def affine_scale(p_img, P_world):
+    """Weak-perspective scale with the hand's orientation fitted: (p - p_mean) = M (P - P_mean),
+    M 2x3 least squares; for a scaled orthographic projection both singular values of M equal the
+    scale, so their mean is orientation-free. Also returns their ratio (1 = consistent fit)."""
+    A, B = P_world - P_world.mean(0), p_img - p_img.mean(0)
+    M = np.linalg.lstsq(A, B, rcond=None)[0].T
+    sv = np.linalg.svd(M, compute_uv=False)
+    return sv.mean(), sv[1] / sv[0], sv[0]
+
+
 def main():
     it = Interpreter(model_path=str(MODEL))
     it.allocate_tensors()
@@ -74,10 +84,20 @@ def main():
             p = to_img(lm[:, :2])
             z_true = 0.5 * (meta["cam_xyz"][g, pi] + meta["cam_xyz"][g, ix])[2]
             err2d = np.linalg.norm(p[0] - p2[wr])
+            sa, ratio, smax = affine_scale(p, world)
+            # how edge-on the palm is: |normal . view axis| from the world landmarks' palm plane, rotated
+            # into the camera with the fitted M (3rd axis = cross of its rows)
+            A, B = world - world.mean(0), p - p.mean(0)
+            M = np.linalg.lstsq(A, B, rcond=None)[0].T
+            r1, r2 = M[0] / np.linalg.norm(M[0]), M[1] / np.linalg.norm(M[1])
+            view = np.cross(r1, r2); view /= np.linalg.norm(view)
+            pa = world[PALM] - world[PALM].mean(0)
+            normal = np.linalg.svd(pa)[2][-1]
+            facing = abs(normal @ view)  # 1 = palm faces the camera, 0 = edge-on
             rows.append((d.name, meta["gaps"][g], pres, z_true, fx_px / scale(p, world, list(range(21))),
-                         fx_px / scale(p, world, PALM), err2d))
+                         fx_px / scale(p, world, PALM), err2d, fx_px / sa, facing, fx_px / smax))
     cfg = np.array([r[0] for r in rows])
-    gap, pres, zt, z3, zp, e2 = (np.array([r[i] for r in rows], dtype=float) for i in range(1, 7))
+    gap, pres, zt, z3, zp, e2, za, facing, zx = (np.array([r[i] for r in rows], dtype=float) for i in range(1, 10))
     print(f"{len(rows)} frames; presence > 0.5: {(pres > 0.5).mean():.0%}; wrist 2D vs true pose wrist: median {np.median(e2):.0f} px")
     ok = pres > 0.5
     keep = np.array([ok[cfg == c].all() for c in cfg])  # configurations with the hand found at every gap
@@ -93,7 +113,7 @@ def main():
     for g in np.unique(gap):
         m = keep & (gap == g)
         print(f"{g:7.1f} {np.median(zt[m]) * 100:12.1f} {np.median(z3[m]) * 100:9.1f} {np.median(zp[m]) * 100:11.1f}")
-    for name, z in (("3D spread", z3), ("palm", zp)):
+    for name, z in (("3D spread", z3), ("palm", zp), ("fitted orientation", za), ("fitted, largest extent", zx)):
         t, e = within(zt)[keep] * 100, within(z)[keep] * 100
         slope = (t * e).sum() / (t * t).sum()
         r = np.corrcoef(t, e)[0, 1]
@@ -103,6 +123,15 @@ def main():
     print(f"\nabsolute hand distance, all frames with the hand found (n={m.sum()}): median |error| 3D {np.median(np.abs(z3 - zt)[m]) * 100:.1f} cm, "
           f"palm {np.median(np.abs(zp - zt)[m]) * 100:.1f} cm; median signed 3D {np.median((z3 - zt)[m]) * 100:+.1f} cm; "
           f"relative |error| {np.median(np.abs(z3 / zt - 1)[m]):.1%}")
+    print(f"orientation-fitted: median |error| {np.median(np.abs(za - zt)[m]) * 100:.1f} cm, signed {np.median((za - zt)[m]) * 100:+.1f} cm")
+    print(f"fitted, largest extent: median |error| {np.median(np.abs(zx - zt)[m]) * 100:.1f} cm, signed {np.median((zx - zt)[m]) * 100:+.1f} cm")
+    print("median |error| cm by palm facing (|cos| palm normal vs view axis), 3D spread / orientation-fitted / largest extent:")
+    for lo, hi in ((0, 0.4), (0.4, 0.7), (0.7, 1.01)):
+        b = m & (facing >= lo) & (facing < hi)
+        if b.any():
+            print(f"  {lo:.1f}-{hi:.1f} (n={b.sum():3d}): {np.median(np.abs(z3 - zt)[b]) * 100:5.1f} / {np.median(np.abs(za - zt)[b]) * 100:5.1f}"
+                  f" / {np.median(np.abs(zx - zt)[b]) * 100:5.1f}   signed {np.median((z3 - zt)[b]) * 100:+5.1f} / "
+                  f"{np.median((za - zt)[b]) * 100:+5.1f} / {np.median((zx - zt)[b]) * 100:+5.1f}")
     print("hand found, by gap: " + ", ".join(f"{g:.1f} cm {ok[gap == g].mean():.0%}" for g in np.unique(gap)))
     print("true within-configuration depth range (max - min), median: "
           f"{np.median([np.ptp(zt[cfg == c]) for c in np.unique(cfg)]) * 100:.1f} cm")
