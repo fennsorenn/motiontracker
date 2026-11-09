@@ -32,6 +32,8 @@ def evaluate(session: Session, results: list[SystemResult], auto_still: bool = F
         "segments": [{"label": s.label, "variant": s.variant, "t0": s.t0, "t1": s.t1} for s in segments],
         "still_source": still_source,
         "systems": {},
+        # rendered sessions: the same 7b distances from the true pose (not 0: wrists sit behind the palms)
+        "contact_truth": M.contact(M.with_head_global(gt), session) if gt is not None else None,
     }
     for r in results:
         tr = M.with_head_global(r.track)
@@ -197,12 +199,15 @@ def to_markdown(report: dict) -> str:
     if variants:
         lines += ["## Contact (criterion 7b, cm)", "",
                   "Median distance during protocol contact segments, true distance about 0 (wrists for palms "
-                  "together, wrist to nose for hand to face). MediaPipe: the same from its own landmarks.", "",
-                  "| Contact | MediaPipe | " + " | ".join(systems) + " |", "|---|---|" + "---|" * len(systems)]
+                  "together, wrist to nose for hand to face). MediaPipe: the same from its own landmarks. "
+                  "Ground truth (rendered sessions): the same from the true pose; compare against it.", "",
+                  "| Contact | ground truth | MediaPipe | " + " | ".join(systems) + " |", "|---|---|---|" + "---|" * len(systems)]
+        truth = report.get("contact_truth") or {}
         for v in variants:
             c = {s: (report["systems"][s].get("contact") or {}).get(v) for s in systems}
             mp = next((x["mediapipe_cm"] for x in c.values() if x), None)
-            lines.append(f"| {v} | {'–' if mp is None else f'{mp:.1f}'} | "
+            gtv = truth.get(v)
+            lines.append(f"| {v} | {'–' if gtv is None else f'{gtv['system_cm']:.1f}'} | {'–' if mp is None else f'{mp:.1f}'} | "
                          + " | ".join("–" if not c[s] else f"{c[s]['system_cm']:.1f}" for s in systems) + " |")
         lines.append("")
     seg_summary = report.get("still_segment_summary", {})

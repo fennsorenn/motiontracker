@@ -68,6 +68,11 @@ def test_contact_distances(tmp_path):
     (tmp_path / "exact").mkdir()
     s = load_session(_session(tmp_path / "exact", n=30, segments=segs))
     assert contact(PoseTrack(t, bones), s)["palms-together"]["n"] == 30
+    # several segments of a variant are pooled
+    two = [dict(segs[0], t0=0, t1=1000), dict(segs[0], t0=2000, t1=3000)]
+    (tmp_path / "two").mkdir()
+    s = load_session(_session(tmp_path / "two", n=30, segments=two))
+    assert contact(PoseTrack(t, bones), s)["palms-together"]["n"] == 20
 
 
 def test_ground_truth_metrics_zero_for_identical_tracks():

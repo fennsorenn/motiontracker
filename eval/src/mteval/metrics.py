@@ -452,7 +452,7 @@ def contact(track: PoseTrack, session: Session) -> dict[str, dict] | None:
     placed from the detected shoulders plus the output's arm; the face point is the detected nose.
     For 'hand-to-face' the hand is the one MediaPipe places nearer the nose over the segment.
     Returns variant -> {system: median distance cm, mediapipe: the same from MediaPipe's own
-    landmarks (reference), n}; None without contact segments."""
+    landmarks (reference), n}, pooled over all segments of a variant; None without contact segments."""
     segs = session.segments_labeled("contact")
     if not segs:
         return None
@@ -466,7 +466,7 @@ def contact(track: PoseTrack, session: Session) -> dict[str, dict] | None:
     nose = P[:, NOSE, :3] * flip
     wrist = {s: sh[s] + arms[s]["pred_wrist"] for s in ("left", "right")}
     det = {s: sh[s] + arms[s]["det_wrist"] for s in ("left", "right")}
-    out: dict[str, dict] = {}
+    vals: dict[str, tuple[list, list]] = {}
     for seg in segs:
         settle = CONTACT_SETTLE_MS if seg.settle_ms is None else seg.settle_ms  # rendered sessions: exact, 0
         m = (t >= seg.t0 + settle) & (t < seg.t1) & arms["left"]["ok"]
@@ -481,9 +481,11 @@ def contact(track: PoseTrack, session: Session) -> dict[str, dict] | None:
             d_mp = np.linalg.norm(det[near] - nose, axis=1)
         else:
             continue
-        key = seg.variant
-        out[key] = {"system_cm": float(np.nanmedian(d_sys[m]) * 100), "mediapipe_cm": float(np.nanmedian(d_mp[m]) * 100),
-                    "n": int(m.sum())}
+        sys_, mp_ = vals.setdefault(seg.variant, ([], []))  # all segments of a variant are pooled
+        sys_.append(d_sys[m])
+        mp_.append(d_mp[m])
+    out = {v: {"system_cm": float(np.nanmedian(np.concatenate(a)) * 100), "mediapipe_cm": float(np.nanmedian(np.concatenate(b)) * 100),
+               "n": int(sum(len(x) for x in a))} for v, (a, b) in vals.items()}
     return out or None
 
 
