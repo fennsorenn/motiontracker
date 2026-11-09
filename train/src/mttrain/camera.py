@@ -66,12 +66,16 @@ def look_at(eye, target, roll=0.0):
     return np.stack([r, d, f])
 
 
-def sample_desk_camera(rng, landmarks_m):
+def sample_desk_camera(rng, landmarks_m, fov=None):
     """Desk-webcam framing for a clip, from its landmarks (T, 33, 3) in MHR metres.
 
     Samples the framing itself, centred on the recorded session (shoulders at 58% of the frame
     height, shoulder width 25% of the frame width), then derives distance and aim; plus random
-    yaw, camera height, roll and field of view. The camera faces the performer's average front."""
+    yaw, camera height, roll and field of view. The camera faces the performer's average front.
+    `fov` (horizontal, degrees) overrides the sampled one; the random stream is unchanged, so the
+    same rng state gives the same camera apart from field of view and distance: the camera moves along
+    the same line from the chest (height scaled with distance), so the viewing angle and the framing
+    stay and only the perspective changes."""
     sh = landmarks_m[:, [L_SH, R_SH]].mean(1)  # (T, 3)
     chest = np.median(sh, 0)
     across = np.median(landmarks_m[:, L_SH] - landmarks_m[:, R_SH], 0)  # toward the person's left
@@ -82,11 +86,15 @@ def sample_desk_camera(rng, landmarks_m):
     yaw = np.radians(rng.uniform(-25, 25))
     c, s = np.cos(yaw), np.sin(yaw)
     dirn = np.array([c * front[0] + s * front[2], 0.0, -s * front[0] + c * front[2]])
-    fx = 0.5 / np.tan(np.radians(rng.uniform(55, 80)) / 2)
+    fov_sampled = rng.uniform(55, 80)
+    fx = 0.5 / np.tan(np.radians(fov if fov is not None else fov_sampled) / 2)
     sw_frac = float(np.exp(rng.normal(np.log(0.25), 0.2)))  # shoulder width / frame width
     sh_y = rng.uniform(0.45, 0.72)  # shoulder height in the frame (0 = top)
     dist = fx * width / sw_frac
-    eye = chest + dist * dirn + [0.0, rng.uniform(0.0, 0.55), 0.0]
+    lift = rng.uniform(0.0, 0.55)
+    if fov is not None:
+        lift *= fx / (0.5 / np.tan(np.radians(fov_sampled) / 2))  # dist / dist at the sampled fov
+    eye = chest + dist * dirn + [0.0, lift, 0.0]
     # aim above or below the chest so the shoulders land at sh_y
     target = chest + [0.0, dist * (sh_y - 0.5) / (fx * 4 / 3), 0.0]
     return Camera(R=look_at(eye, target, np.radians(rng.uniform(-4, 4))), t=eye, fx=fx)

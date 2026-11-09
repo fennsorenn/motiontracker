@@ -1,6 +1,7 @@
 """Rendered synthetic sessions: exact ground truth for the whole system with the real detector.
 
     uv run python -m mttrain.render prepare --out data/m1/renders/v1 [--n 6] [--seconds 20] [--seed 0] [--rest]
+                                           [--fovs 50,65,80,95]   # each sequence once per field of view
     uv run python -m mttrain.render video   --out data/m1/renders/v1      # Blender + ffmpeg
     uv run python -m mttrain.render replay  --out data/m1/renders/v1      # headless recorder -> landmarks
 
@@ -46,9 +47,11 @@ SCRIPT = REPO_ROOT / "tools" / "render" / "render_blender.py"
 DRIVER = REPO_ROOT / "tools" / "recorder" / "test" / "drive_headless.mjs"
 
 
-def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False):
+def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fovs=None):
     """`rest_mode`: a held CMU posture with both arms in rest postures (lap, desk, hanging; random per arm)
-    plus the seated idle motion (breathing, sway): nearly still ground truth, for noise at rest."""
+    plus the seated idle motion (breathing, sway): nearly still ground truth, for noise at rest.
+    `fovs`: horizontal fields of view (deg); each sequence is written once per value (seqNN_fovFF), same
+    motion, appearance and camera yaw, height, roll and framing; the distance follows the field of view."""
     rng = np.random.default_rng(seed)
     ch = load()
     pn = list(ch.parameter_transform.names)
@@ -76,25 +79,36 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False):
         else:
             mp = seat(rng, pn, mps[key][s0:s0 + T], FPS, lim)
         states = skeleton_state(ch, mp)
+        cam_state = rng.bit_generator.state
         cam = sample_desk_camera(rng, lm(states) / 100.0)
         verts = np.asarray(ch.skin_points(states.astype(np.float32))) / 100.0
-        d = Path(out) / f"seq{i:02d}"
-        d.mkdir(parents=True, exist_ok=True)
         skin = np.clip(np.array([0.80, 0.60, 0.48]) * rng.uniform(0.55, 1.1) + rng.normal(0, 0.03, 3), 0.05, 1.0)
         wall = rng.uniform(0.45, 0.9, 3)
-        np.savez_compressed(d / "seq.npz", verts=verts.astype(np.float32), faces=faces, R=cam.R, t=cam.t,
-                            fx=cam.fx, mp=mp.astype(np.float32), fps=FPS, skin=skin, wall=wall, clip=key)
-        # ground truth, camera-relative like the model's output: G' = R0^T R_cam G
-        G = quat_to_mat(states[..., 3:7])
-        Gc = R0.T @ cam.R @ G
-        st = states.copy()
-        st[..., 3:7] = mat_to_quat(Gc)
-        bones = conv.locals(st)
-        with open(d / "gt.jsonl", "w") as f:
-            for k in range(T):
-                f.write(json.dumps({"t": round(k / FPS * 1000, 1),
-                                    "bones": {b: bones[b][k].round(6).tolist() for b in OUTPUT_BONES if b in bones}}) + "\n")
-        print(f"{d.name}: clip {key} from frame {s0}, {T} frames" + (f", rest {pair}" if rest_mode else ""), flush=True)
+        for fov in (fovs or [None]):
+            if fov is not None:
+                crng = np.random.default_rng()
+                crng.bit_generator.state = cam_state
+                cam = sample_desk_camera(crng, lm(states) / 100.0, fov=fov)
+            name = f"seq{i:02d}" + (f"_fov{fov:.0f}" if fov is not None else "")
+            _write(Path(out) / name, verts, faces, cam, mp, skin, wall, key, states, conv, T)
+        print(f"seq{i:02d}: clip {key} from frame {s0}, {T} frames" + (f", rest {pair}" if rest_mode else "")
+              + (f", fov {fovs}" if fovs else ""), flush=True)
+
+
+def _write(d, verts, faces, cam, mp, skin, wall, key, states, conv, T):
+    d.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(d / "seq.npz", verts=verts.astype(np.float32), faces=faces, R=cam.R, t=cam.t,
+                        fx=cam.fx, mp=mp.astype(np.float32), fps=FPS, skin=skin, wall=wall, clip=key)
+    # ground truth, camera-relative like the model's output: G' = R0^T R_cam G
+    G = quat_to_mat(states[..., 3:7])
+    Gc = R0.T @ cam.R @ G
+    st = states.copy()
+    st[..., 3:7] = mat_to_quat(Gc)
+    bones = conv.locals(st)
+    with open(d / "gt.jsonl", "w") as f:
+        for k in range(T):
+            f.write(json.dumps({"t": round(k / FPS * 1000, 1),
+                                "bones": {b: bones[b][k].round(6).tolist() for b in OUTPUT_BONES if b in bones}}) + "\n")
 
 
 def video(out, threads=8):
@@ -148,9 +162,11 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--rest", action="store_true", help="held posture, arms resting (noise at rest)")
+    ap.add_argument("--fovs", type=lambda v: [float(x) for x in v.split(",")], default=None,
+                    help="comma-separated horizontal fields of view (deg): each sequence once per value")
     a = ap.parse_args()
     if a.step == "prepare":
-        prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest)
+        prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest, fovs=a.fovs)
     elif a.step == "video":
         video(a.out, a.threads)
     else:
