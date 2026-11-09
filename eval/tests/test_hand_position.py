@@ -63,6 +63,11 @@ def test_contact_distances(tmp_path):
     assert abs(c["palms-together"]["system_cm"] - 140) < 1e-3
     assert abs(c["palms-together"]["mediapipe_cm"] - 140) < 1e-3
     assert c["palms-together"]["n"] == 15  # frames after the settle time
+    # rendered sessions mark exact contacts: settleMs 0 counts every frame of the segment
+    segs[0]["settleMs"] = 0
+    (tmp_path / "exact").mkdir()
+    s = load_session(_session(tmp_path / "exact", n=30, segments=segs))
+    assert contact(PoseTrack(t, bones), s)["palms-together"]["n"] == 30
 
 
 def test_ground_truth_metrics_zero_for_identical_tracks():

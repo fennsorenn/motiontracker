@@ -468,7 +468,8 @@ def contact(track: PoseTrack, session: Session) -> dict[str, dict] | None:
     det = {s: sh[s] + arms[s]["det_wrist"] for s in ("left", "right")}
     out: dict[str, dict] = {}
     for seg in segs:
-        m = (t >= seg.t0 + CONTACT_SETTLE_MS) & (t < seg.t1) & arms["left"]["ok"]
+        settle = CONTACT_SETTLE_MS if seg.settle_ms is None else seg.settle_ms  # rendered sessions: exact, 0
+        m = (t >= seg.t0 + settle) & (t < seg.t1) & arms["left"]["ok"]
         if not m.any():
             continue
         if seg.variant == "palms-together":

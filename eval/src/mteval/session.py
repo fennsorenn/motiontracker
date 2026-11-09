@@ -30,6 +30,7 @@ class Segment:
     t0: float  # ms
     t1: float  # ms
     variant: str | None = None  # e.g. 'arms-below-frame' for still segments (seated-v2)
+    settle_ms: float | None = None  # time to get into the pose; None: the metric's default
 
     def contains(self, t: np.ndarray) -> np.ndarray:
         return (t >= self.t0) & (t < self.t1)
@@ -73,7 +74,7 @@ def load_session(path: str | Path) -> Session:
         meta = json.loads((path / "session.json").read_text())
         lm = path / meta.get("landmarks", {}).get("file", "landmarks.jsonl")
         segments = [
-            Segment(s["label"], float(s["t0"]), float(s["t1"]), s.get("variant"))
+            Segment(s["label"], float(s["t0"]), float(s["t1"]), s.get("variant"), s.get("settleMs"))
             for s in meta.get("segments", [])
         ]
         name = path.name  # the folder name is unique (timestamped); meta["name"] is a free label
