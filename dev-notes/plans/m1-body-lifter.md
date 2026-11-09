@@ -206,6 +206,31 @@ approach.
    - Open: synthetic noise doesn't grow when the person is small in the frame (now down to 10% shoulder
      width); pinhole projection only (wide lenses add barrel distortion); real-video flattening strength
      needs ground truth (multi-view recordings).
+7e. **Contacts (2026-11-09).** Owner: a contact render set, also the basis for follow-along recordings
+   later; then contact-aware training.
+   - `mttrain.choreo`: designed seated choreography (prayer palms, fingertip or palm on chin, cheek,
+     forehead or mouth, near misses 8-14 cm), arm poses by MHR IK, min-jerk approach/hold/release; the
+     holds are exact contact intervals. Rendered set `contact1` (8 x 20 s, held-out bodies). The
+     contact metric (7b) on the true poses: palms 16.6 cm apart on MediaPipe's skeleton although the
+     palms touch on the true body (the proportion problem in miniature).
+   - Contact-aware training (`m1-v8`): a choreography pool on training bodies (1000 x 30 s; 100 on
+     validation bodies) is 20% of the samples; contact loss `con` on the vectors between contact
+     points (hands, nose) after FK on the true body, weighted exp(-(d/15 cm)^2). Synthetic validation:
+     near pairs 3.5 cm (m1-v7 7.3).
+   - `contact1`, 7b on MediaPipe's skeleton, |error| vs truth (m1-v7 / m1-v8): palms 3.9 / 4.9 cm
+     (palms now too close on that skeleton), hand-to-face 11.1 / 7.9 cm (MediaPipe 7.7). On the true
+     body (scratch `truebody.py`): palms 10.0 / 6.8 cm, hand-to-face 29.7 / 25.2 cm, near pairs
+     (all frames) 23.4 / 14.2 cm.
+   - **Hand-to-face is a depth problem from MediaPipe**: the error is almost all along the viewing
+     axis (hand 30-37 cm toward the camera). During true contacts (hand within +-5 cm of the nose's
+     depth) MediaPipe puts the hand 8-26 cm in front of the nose (world) and 22-100 cm (image z), the
+     same as for near misses that really are 5-19 cm in front. The synthesis has no such bias, so the
+     model takes the hand to be far in front, then undoes flattening on top. Unverified on real video:
+     the recorded session has no contact segments (needs seated-v2).
+   - Elsewhere m1-v8 is about level with m1-v7: motion renders arms in view 25.2 deg / 15.4 cm (m1-v7
+     23.9 / 14.9), FOV 50 22.2 / 18.6, FOV 95 34.2 / 23.7; real session glide 2D wrist 6.4 cm
+     (6.7), forearm 7.6 deg (7.1), arm rest noise 3.8 deg (3.7), arm twitches 30 / min (31.9). The
+     rest set's arms-in-view figure is one arm in one sequence (seq02): 46.1 / 30.7 vs 27.9 / 19.9.
 8. **Go/no-go write-up** in PLAN.md §6/§10 with the criteria table.
 
 ## Acceptance / verification
