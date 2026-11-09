@@ -153,6 +153,30 @@ approach.
    the model ignoring its input. Open: arm rest noise (now tracks MediaPipe's noise), criterion 7
    (the baseline solves from the very landmarks the metric compares against; m1 outputs anatomical
    rotations, so beating it by 30% may not be a fair target).
+7c. **Coherent noise, criterion 7, rendered sessions (2026-11-09).**
+   - Real MediaPipe rest noise is coherent within an arm (shoulder-elbow 0.32, elbow-wrist 0.52,
+     wrist-hand 0.99; synthetic was 0): `noise.MIX`. `m1-v5` trained with it. On the real session vs
+     m1-v4 (glide): forearm direction 6.6 vs 8.9 deg, arm twitches 22.5 vs 26.2/min, arm rest noise
+     unchanged (3.5 deg), hands slightly noisier (2.4 vs 1.6 deg).
+   - Criterion 7 restated (PLAN.md §6, owner): 2D wrist error vs image landmarks (arm lengths from the
+     image; MediaPipe's world landmarks shorten arms ~30%), forearm direction guard, contact segments
+     (palms together, hand to face) added to seated-v2. m1-v4 vs baseline-rendered: 2D 5.2 vs 7.2 cm,
+     forearm direction 8.9 vs 8.8 deg.
+   - Rendered sessions (`mttrain.render`, Blender EEVEE, MHR mesh, held-out CMU motion, replayed through
+     the recorder headless; landmarks verified to match the training projection and left/right
+     convention). Motion set (8 x 20 s, very active clips) and rest set (6 x 15 s, held posture,
+     arms resting). Arm direction errors vs truth (median; MediaPipe raw / baseline / m1-v4 / m1-v5):
+     motion: forearm 37.6 / 37.4 / 32.5 / 34.1 deg, wrist 22.9 / 23.8 / 21.1 / 21.5 cm (upper arm in the
+     image plane only ~7 deg: the error is depth); rest: upper arm 32 deg for all, forearm 39 / 39 /
+     35 / 38, wrist 29 / 29 / 28 / 30 cm.
+   - Finding: MediaPipe's world landmarks flatten depth. Per axis vs truth (shoulder-width units):
+     image plane slopes 0.9-1.1 (r 0.85-0.93); toward the camera 0.42 (upper arm, r 0.70) and 0.32
+     (forearm, r 0.33); lengths kept, so the in-plane part is stretched. Synthesis assumes MediaPipe's
+     world depth is right (plus noise): the models inherit the flattening. Caveats: plain mannequin
+     renders (no clothes, hair, texture), 3 held-out body shapes; real people may differ.
+   - Also found: seated idle motion (AR(1) signals) is rough frame to frame (arm parameters ~7 deg/s
+     each, 16-20 deg/s per arm), so the rest set's ground truth is never still and training targets
+     carry the roughness; real idle motion is smooth. Not fixed yet.
 8. **Go/no-go write-up** in PLAN.md §6/§10 with the criteria table.
 
 ## Acceptance / verification
