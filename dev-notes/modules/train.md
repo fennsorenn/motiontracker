@@ -1,4 +1,4 @@
-# train (implemented; M1 itself WIP; contact-aware training WIP)
+# train (implemented; M1 itself WIP)
 
 Location: `train/` (uv project, package `mttrain`, CUDA PyTorch). Builds M1 training data from CMU, trains the body lifter and runs it on recorded sessions. Depends on `mtcore` (`modules/mtcore.md`); its output is evaluated with the harness (`modules/eval-harness.md`). Plan, decisions and run results: `plans/m1-body-lifter.md`.
 
@@ -76,7 +76,7 @@ Known limits / not modelled:
 - The extra depth error during motion (4-7 cm residual, ~0.5 s timescale; <1.5 cm at rest).
 - Real-video flattening strength is unmeasured; it needs multi-view ground truth (owner is setting up two cameras).
 
-## Contacts (choreography implemented; contact-aware training WIP)
+## Contacts (choreography and contact-aware training implemented)
 Motivation: on `contact1` every system leaves the hand 11-14 cm too far from the face; palms together `m1-v7` is best (3.9 cm |err|).
 
 Choreography (`choreo`, implemented, commits 546e137, 8fffdcf):
@@ -84,13 +84,18 @@ Choreography (`choreo`, implemented, commits 546e137, 8fffdcf):
 - Rendered test set: `render.py prepare --contact` → `data/m1/renders/contact1`; segments have `settleMs` 0 and `trueCm`. The harness pools all segments of a variant and shows a ground-truth contact column (`modules/eval-harness.md`).
 - Training pool (commit 0ed4a2b): `MT_FITS=fits-v3 uv run python -m mttrain.choreo --split train --n 1000` (and `--split val --n 100 --seed 101`) → `data/m1/choreo/<split>/cNNNN.npz` (MediaPipe landmarks at 30 fps + segments JSON). CMU-derived, local only. <1 s per 30 s sequence; run under `tools/guarded-run.sh`.
 
-Contact-aware training (WIP, commit 0ed4a2b; first model `m1-v8`, 40k steps on GPU):
+Contact-aware training (implemented, commit 0ed4a2b; first model `m1-v8`, 40k steps on GPU):
 - `dataset.source_table(split, p_choreo)`: the pool is a training source with `p_choreo` of the total weight (default 0.2, `train.py --p-choreo`). Pool sequences are already seated and skip the seater, in both the numpy `Generator` and `gpugen.GpuGenerator`.
 - `skeleton.CONTACT_POINTS`: `l_hand` / `r_hand` = midpoint of the index and pinky knuckle landmarks (parent wrist), `nose` (parent `c_head`). Stored as offsets `cof` in the parent's rest-relative frame (`TargetExtractor.contact_offsets`, `gpugen` `Targets.contact_offsets`); `contact_points(G, P, cof)` places them.
 - `losses` `con` (weight 5): vector error between contact-point differences (hand-hand, each hand-nose), after FK on the true body, weighted `exp(-(d_true / 0.15 m)^2)`. Validation metrics `cm_contact_near` / `frac_contact_near` (pairs closer than 15 cm).
 - Extending: a new contact point goes into `CONTACT_POINTS` with a parent joint, and both target extractors (numpy and `gpugen`) must produce its offset.
 
-Still open: `m1-v8` results.
+Results (`m1-v8` vs `m1-v7`, plan step 7e; full numbers there):
+- Synthetic validation, near pairs: 3.5 cm (7.3).
+- `contact1`, 7b on MediaPipe's skeleton: hand-to-face 7.9 cm (11.1); palms 4.9 cm (3.9), now too close on that skeleton. On the true body: palms 6.8 cm (10.0), hand-to-face 25.2 cm (29.7).
+- Elsewhere (motion/FOV/rest renders, real session) about level with `m1-v7`.
+
+Open: hand-to-face is a MediaPipe depth problem. During true contacts MediaPipe places the hand 8-26 cm in front of the nose (world z), the same as for real near-misses; the synthetic observation model (`mpstyle`/`noise`) has no such bias, so every model puts the hand ~30 cm toward the camera. Unverified on real video: needs seated-v2 recordings with contact segments.
 
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
@@ -100,4 +105,4 @@ Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l
 - New observation effects belong in `noise` (sensor-like) or `mpstyle` (systematic MediaPipe placement); check them with `calibrate` against real sessions.
 
 ## Open
-Current best run `m1-v7` (depth flattening; `m1-v5`, `m1-v6` kept); contact-aware `m1-v8` training. Arm rest noise (not yet better than the baseline), the rough seated idle motion, real flattening strength (multi-view) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7d) and the depth flattening limits above.
+Current best run `m1-v7` (depth flattening; `m1-v5`, `m1-v6` kept); contact-aware `m1-v8` level elsewhere, better at contacts. The MediaPipe hand-to-face depth bias (Contacts). Arm rest noise (not yet better than the baseline), the rough seated idle motion, real flattening strength (multi-view) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7e) and the depth flattening limits above.
