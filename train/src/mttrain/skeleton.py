@@ -11,6 +11,8 @@ Rotations are 3x3 matrices here (numpy); the model uses 6D (first two columns).
 
 import numpy as np
 
+from mtcore.landmarks import MP33
+
 OUT_JOINTS = ["root", "c_spine0", "c_spine1", "c_spine2", "c_spine3", "c_neck", "c_head"]
 for _s in "lr":
     OUT_JOINTS += [f"{_s}_clavicle", f"{_s}_uparm", f"{_s}_lowarm", f"{_s}_wrist_twist", f"{_s}_wrist"]
@@ -26,6 +28,14 @@ POS_JOINTS = ["c_head", "l_uparm", "r_uparm", "l_lowarm", "r_lowarm", "l_wrist",
 GROUPS = {"spine": ["root", "c_spine0", "c_spine1", "c_spine2", "c_spine3"], "head": ["c_neck", "c_head"],
           "shoulder": ["l_clavicle", "r_clavicle"], "upper_arm": ["l_uparm", "r_uparm"],
           "forearm": ["l_lowarm", "r_lowarm", "l_wrist_twist", "r_wrist_twist"], "wrist": ["l_wrist", "r_wrist"]}
+
+# contact points (contact loss): MediaPipe landmarks carried rigidly by an output joint, as offsets in
+# that joint's rest-relative frame. Hands: the middle of the index and pinky knuckles (palm front).
+CONTACT_POINTS = [("l_hand", "l_wrist", ("left_index", "left_pinky")), ("r_hand", "r_wrist", ("right_index", "right_pinky")),
+                  ("nose", "c_head", ("nose",))]
+CONTACT_PARENT = [OUT_JOINTS.index(p) for _, p, _ in CONTACT_POINTS]
+CONTACT_LM = [[MP33.index(n) for n in lms] for _, _, lms in CONTACT_POINTS]
+CONTACT_PAIRS = [(0, 1), (0, 2), (1, 2)]  # hand-hand, left hand-nose, right hand-nose
 
 
 def quat_to_mat(q):
@@ -61,6 +71,22 @@ class TargetExtractor:
             if p >= 0:
                 off[:, k] = np.einsum("tji,tj->ti", Gc[:, p], pos[:, k] - pos[:, p])
         return rot, pos, off
+
+    def contact_offsets(self, states, cam_R, landmarks):
+        """Contact points' offsets (T, 3, 3) in their parent joint's rest-relative frame (camera axes,
+        metres), from the true body's landmarks (T, 33, 3) cm."""
+        G = cam_R @ quat_to_mat(states[:, self.idx, 3:7]) @ np.swapaxes(self.rest_g, -1, -2)
+        root = states[:, self.idx[0], :3]
+        out = np.zeros((len(states), len(CONTACT_POINTS), 3))
+        for c, (p, lms) in enumerate(zip(CONTACT_PARENT, CONTACT_LM)):
+            d = (landmarks[:, lms].mean(1) - states[:, self.idx[p], :3]) / 100.0 @ cam_R.T
+            out[:, c] = np.einsum("tji,tj->ti", G[:, p], d)
+        return out
+
+
+def contact_points(G, P, cof):
+    """Contact points (..., 3, 3) from FK's global rotations and positions and their offsets."""
+    return P[..., CONTACT_PARENT, :] + (G[..., CONTACT_PARENT, :, :] @ cof[..., None])[..., 0]
 
 
 def fk(rot, off):

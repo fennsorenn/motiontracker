@@ -14,7 +14,7 @@ from mtcore.landmarks import MP33
 
 from .. import mpstyle as ms
 from ..camera import DIST_RANGE, FOV_RANGE, L_HIP, L_SH, R_HIP, R_SH, SW_RANGE
-from ..skeleton import OUT_JOINTS, PARENT_IDX
+from ..skeleton import CONTACT_LM, CONTACT_PARENT, OUT_JOINTS, PARENT_IDX
 from .fk import quat_rotate
 
 I = ms.I
@@ -252,3 +252,12 @@ class Targets(torch.nn.Module):
             if p >= 0:
                 off[:, :, k] = torch.einsum("btji,btj->bti", Gc[:, :, p], pos[:, :, k] - pos[:, :, p])
         return rot, pos, off
+
+    def contact_offsets(self, states, cam_R, landmarks):
+        """skeleton.TargetExtractor.contact_offsets, batched: landmarks (B, K, 33, 3) cm -> (B, K, 3, 3)."""
+        G = cam_R[:, None, None] @ quat_to_mat(states[:, :, self.idx, 3:7]) @ self.rest_g.transpose(-1, -2)
+        out = []
+        for p, lms in zip(CONTACT_PARENT, CONTACT_LM):
+            d = torch.einsum("bij,btj->bti", cam_R, (landmarks[:, :, lms].mean(2) - states[:, :, self.idx[p], :3]) / 100.0)
+            out.append(torch.einsum("btji,btj->bti", G[:, :, p], d))
+        return torch.stack(out, 2)

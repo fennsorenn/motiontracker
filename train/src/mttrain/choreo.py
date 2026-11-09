@@ -16,7 +16,22 @@ for recordings. The held-out CMU motion has almost no contacts, so the motion is
   the arms and head are fixed relative to the torso, so the torso's idle motion keeps the contact.
 
 Contact intervals are the holds. `generate` checks every hold frame against its targets afterwards.
+
+Training pool (contact-aware training, owner 2026-11-09): sequences on the bodies of a split's
+subjects, drawn by the training generators like fitted clips (`dataset.CHOREO`):
+
+    MT_FITS=fits-v3 uv run python -m mttrain.choreo --split train --n 1000 [--seconds 30] [--seed 100]
+    MT_FITS=fits-v3 uv run python -m mttrain.choreo --split val --n 100 --seed 101
+
+(bodies from the same fits as training: set MT_FITS alike)
+
+writes data/m1/choreo/<split>/cNNNN.npz (mp (T, P) float32 at 30 fps, segments as JSON). CMU-derived
+(body proportions): local only. Runs pymomentum's IK on the CPU: use tools/guarded-run.sh.
 """
+
+import argparse
+import json
+import time
 
 import numpy as np
 import pymomentum.solver as S
@@ -178,3 +193,47 @@ def generate(rng, ch, lm, pn, base, T, fps, limits):
             drift = (held - nose_h[:, None]) - (ref - nose_m)[None]
         worst.append(float(np.linalg.norm(drift, axis=-1).max()))
     return out, segs, worst
+
+
+def pool(split, n, seconds, seed, fps=30.0):
+    """Training pool: n sequences on the bodies of random clips of `split` (weighted like training)."""
+    from mtcore.landmarks import LandmarkModel
+    from mtcore.mhr import limits, load
+
+    from .dataset import CHOREO, FITS, clip_table
+    ch = load()
+    pn = list(ch.parameter_transform.names)
+    lm = LandmarkModel(ch, skeleton_state(ch, np.zeros(len(pn))))
+    lim = limits()
+    rows = clip_table(split)
+    w = np.array([w for _, w in rows])
+    out = CHOREO / split
+    out.mkdir(parents=True, exist_ok=True)
+    T = int(seconds * fps)
+    t0 = time.time()
+    for i in range(n):
+        f = out / f"c{i:04d}.npz"
+        r = np.random.default_rng([seed, i])  # per sequence: resumable
+        if f.exists():
+            continue
+        key = rows[r.choice(len(rows), p=w / w.sum())][0]
+        mps = np.load(FITS / f"{key}.npz")["mp"]
+        mp, segs, worst = generate(r, ch, lm, pn, mps[r.integers(len(mps))].astype(np.float64), T, fps, lim)
+        np.savez_compressed(f, mp=mp.astype(np.float32), segments=json.dumps(segs), clip=key)
+        hold = sum(g["t1"] - g["t0"] for g in segs) / 1000
+        print(f"c{i:04d}: body {key}, {len(segs)} events, {hold:.1f} s held, worst drift {max(worst, default=0):.2f} cm, "
+              f"{time.time() - t0:.0f} s", flush=True)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--split", choices=("train", "val"), required=True)
+    ap.add_argument("--n", type=int, default=600)
+    ap.add_argument("--seconds", type=float, default=30.0)
+    ap.add_argument("--seed", type=int, default=100)
+    a = ap.parse_args()
+    pool(a.split, a.n, a.seconds, a.seed)
+
+
+if __name__ == "__main__":
+    main()

@@ -24,7 +24,7 @@ from .dataset import SampleStream, fixed_set
 from .losses import limit_box, losses, metrics
 from .model import Lifter
 
-WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 10.0}
+WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 10.0, "con": 5.0}
 
 
 def main():
@@ -40,6 +40,7 @@ def main():
     ap.add_argument("--gen", choices=("gpu", "cpu"), default="gpu")
     ap.add_argument("--gen-chunk", type=int, default=4, help="GPU generator: batches generated per call")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--p-choreo", type=float, default=0.2, help="share of samples from the contact choreography pool")
     a = ap.parse_args()
     out = DATA / "m1" / "runs" / a.name
     out.mkdir(parents=True, exist_ok=True)
@@ -49,8 +50,8 @@ def main():
     dev = torch.device(a.device)
 
     t0 = time.time()
-    val = {k: v.to(dev) for k, v in fixed_set("val", a.val).items()}
-    ref = fixed_set("train", 4096, seed=999)
+    val = {k: v.to(dev) for k, v in fixed_set("val", a.val, p_choreo=a.p_choreo).items()}
+    ref = fixed_set("train", 4096, seed=999, p_choreo=a.p_choreo)
     box = limit_box(ref["rot"].flatten(0, 1)).to(dev)
     print(f"validation set and limit box ready in {time.time() - t0:.0f}s", flush=True)
 
@@ -63,7 +64,7 @@ def main():
     if a.gen == "gpu":
         from .gpugen.generator import GpuGenerator
         torch.set_num_threads(2)
-        gg = GpuGenerator("train", dev, seed=a.seed)
+        gg = GpuGenerator("train", dev, seed=a.seed, p_choreo=a.p_choreo)
 
         def gpu_batches():
             while True:
@@ -72,7 +73,7 @@ def main():
                     yield {k: v[i * a.batch:(i + 1) * a.batch] for k, v in big.items()}
         loader = gpu_batches()
     else:
-        loader = torch.utils.data.DataLoader(SampleStream("train", seed=a.seed), batch_size=a.batch,
+        loader = torch.utils.data.DataLoader(SampleStream("train", seed=a.seed, p_choreo=a.p_choreo), batch_size=a.batch,
                                              num_workers=a.workers, persistent_workers=True, prefetch_factor=4)
     log = open(out / "log.jsonl", "a")
     best = float("inf")

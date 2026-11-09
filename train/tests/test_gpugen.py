@@ -77,6 +77,19 @@ def test_geometry_matches_numpy():
         assert np.abs(rot[b].numpy() - r).max() < 1e-4
         assert np.abs(pos[b].numpy() - p).max() < 1e-5
         assert np.abs(off[b].numpy() - o).max() < 1e-5
+    # contact points: offsets match numpy, and FK of the true rotations reproduces the landmarks
+    from mttrain.skeleton import CONTACT_LM, contact_points, fk
+    lmc = lm(states)
+    cof = geom.Targets(jn, rest).contact_offsets(torch.tensor(states, dtype=torch.float32), R,
+                                                torch.tensor(lmc, dtype=torch.float32))
+    for b in range(B):
+        c = te.contact_offsets(states[b], cams[b].R, lmc[b])
+        assert np.abs(cof[b].numpy() - c).max() < 1e-5
+        r, p, o = te(states[b], cams[b].R)
+        Q = contact_points(*fk(r, o), c)
+        root = states[b][:, jn.index("root"), :3]
+        want = np.stack([(lmc[b][:, i].mean(1) - root) / 100.0 @ cams[b].R.T for i in CONTACT_LM], 1)
+        assert np.abs(Q - want).max() < 1e-5  # metres; float32 skeleton states
     # look_at against the numpy camera construction
     from mttrain.camera import look_at
     eye, tgt, roll = rng.normal(size=(B, 3)), rng.normal(size=(B, 3)), rng.normal(size=B) * 0.1

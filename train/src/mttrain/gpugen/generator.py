@@ -7,6 +7,9 @@ Differences from the numpy generator, all distribution-level:
   1.6 s + K frames + 0.6 s per sequence as before, padded to a common length.
 - Random streams differ (torch generator), and a few per-template draws are shared per arm rather
   than per template occurrence (see motion.py).
+
+The choreography pool (dataset.source_table) is drawn like the clips; its sequences are already
+seated, so the seater leaves them alone, and they count as seated.
 """
 
 import math
@@ -17,7 +20,7 @@ import torch
 from mtcore.landmarks import LandmarkModel
 from mtcore.mhr import limits, load, skeleton_state
 
-from ..dataset import FITS, SRC_FPS, clip_table
+from ..dataset import SRC_FPS, source_table
 from ..features import OFFSETS
 from . import features as GF
 from .fk import MhrFK
@@ -27,7 +30,7 @@ from .observe import observe, sample_config
 
 
 class GpuGenerator:
-    def __init__(self, split, device, K=8, p_seated=0.75, seed=0, min_fps=8.0, max_fps=30.0):
+    def __init__(self, split, device, K=8, p_seated=0.75, seed=0, min_fps=8.0, max_fps=30.0, p_choreo=0.2):
         self.dev = torch.device(device)
         self.K, self.p_seated, self.min_fps, self.max_fps = K, p_seated, min_fps, max_fps
         self.gen = torch.Generator(device=self.dev)
@@ -44,12 +47,12 @@ class GpuGenerator:
         self.max_dur = OFFSETS[-1] + K / min_fps + 0.6
         self.N = int(math.ceil(self.max_dur * SRC_FPS)) + 1  # source frames per crop
         self.Tmax = int(math.ceil(self.max_dur * max_fps)) + 2  # detector frames, padded
-        rows = [(k, w) for k, w in clip_table(split)]
-        mps = {k: np.load(FITS / f"{k}.npz")["mp"] for k, _ in rows}
-        rows = [(k, w) for k, w in rows if len(mps[k]) >= self.N]
-        self.keys = [k for k, _ in rows]
-        w = torch.tensor([w for _, w in rows], dtype=torch.float32)
+        rows = [r for r in source_table(split, p_choreo) if len(r[1]) >= self.N]
+        mps = {k: mp for k, mp, _, _ in rows}
+        self.keys = [k for k, _, _, _ in rows]
+        w = torch.tensor([p for _, _, p, _ in rows], dtype=torch.float32)
         self.p = (w / w.sum()).to(self.dev)
+        self.is_choreo = torch.tensor([c for _, _, _, c in rows], device=self.dev)
         lens = torch.tensor([len(mps[k]) for k in self.keys])
         self.start = torch.cat([torch.zeros(1, dtype=torch.long), lens.cumsum(0)[:-1]]).to(self.dev)
         self.lens = lens.to(self.dev)
@@ -80,7 +83,9 @@ class GpuGenerator:
         s0 = torch.floor(torch.rand(B, generator=self.gen, device=dev) * (self.lens[clip] - self.N + 1)).long()
         rows = self.start[clip, None] + s0[:, None] + torch.arange(self.N, device=dev)[None]
         seated = torch.rand(B, generator=self.gen, device=dev) < self.p_seated
-        mp = self.seater(self.gen, self.mp[rows], seated, SRC_FPS)
+        choreo = self.is_choreo[clip]
+        mp = self.seater(self.gen, self.mp[rows], seated & ~choreo, SRC_FPS)
+        seated = seated | choreo
 
         times, valid = self.frame_times(fps, dur)
         tz = torch.where(valid, times, torch.zeros_like(times))
@@ -105,6 +110,7 @@ class GpuGenerator:
         tgt = (n_valid[:, None] - K + torch.arange(K, device=dev)[None]).clamp_min(0)
         st_t = states.gather(1, tgt[..., None, None].expand(B, K, *states.shape[2:]))
         rot, pos, off = self.targets(st_t, R)
+        cof = self.targets.contact_offsets(st_t, R, self.lm(st_t))
         feats = GF.frame_features(times, W, Im, vis, present, valid)
         idx, age = GF.history_indices(times, tgt)
         # session start: no history before a random point, for 10% of samples
@@ -118,4 +124,4 @@ class GpuGenerator:
         prev = tz.gather(1, (tgt[:, :1] - 1).clamp_min(0))
         tt = tz.gather(1, tgt)
         dt_out = torch.diff(tt, dim=1, prepend=prev)
-        return dict(x=x, rot=rot, pos=pos, off=off, dt=dt_out, seated=seated.float())
+        return dict(x=x, rot=rot, pos=pos, off=off, cof=cof, dt=dt_out, seated=seated.float())
