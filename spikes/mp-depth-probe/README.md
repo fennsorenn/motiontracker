@@ -64,6 +64,25 @@ only in the same mid layers (mean cosine 0.11-0.18; ~0 elsewhere).
    the more promising depth cue, fed to the lifter (which already sees history, so it can use the
    scale change over time too).
 
+## Follow-up: hand size as a depth cue (`hand.py`)
+
+MediaPipe's hand landmark model (Holistic bundle) on its own 224 px hand crop, tracked from the true
+pose hand and then from its own landmarks. Its world landmarks are metric and its image landmarks are
+pixels, so the hand's scale gives its distance (z ~ fx / pixels-per-metre, weak perspective).
+
+- **Detection:** the hand was found (presence > 0.5) in 40% of frames, 39% at contact; only 12 of
+  80 configurations at all four gaps. Bare render hands against the face are hard for it; the real
+  session had hands in about half of all frames.
+- **When found, the distance is unbiased:** median |error| 5.0 cm (7.7%) at ~60 cm, median signed
+  +0.4 cm. Compare the pose model: 10.5 cm off at contact, and systematic.
+- **Within configurations it follows the gap the right way, but noisily:** slope +1.4, correlation
+  +0.38, R2 0.15, within error 3.4 cm, against a true depth range of 8 cm per configuration.
+
+So the hand's apparent size is a real, unbiased but noisy depth cue, unlike the pose model's
+systematic error. Noise averages out over the lifter's history; a bias wouldn't. The face's distance
+(for hand-minus-face depth) would come the same way from the face landmarks with a per-person face
+size; not tested here. The detection rate is the main risk.
+
 ## Caveats
 
 - Renders only: plain MHR body, EEVEE lighting, no clothes or hair; real images may carry cues the
