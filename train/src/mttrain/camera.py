@@ -41,6 +41,13 @@ class Camera:
         d = self.fx * (C[..., 2] - hip_z) / hip_z
         return np.stack([u, v, d], -1), C[..., 2] > 0.05
 
+    def flat_image_z(self, X, flat):
+        """pose2d z from hip-centred camera-frame depths `flat` (..., 33, 3) instead of the true ones
+        (project's z is fx * (z - hip_z) / hip_z, and world_landmarks' z is z - hip_z)."""
+        C = self.to_camera(X)
+        hip_z = np.maximum(0.5 * (C[..., L_HIP, 2] + C[..., R_HIP, 2]), 1e-3)[..., None]
+        return self.fx * flat[..., 2] / hip_z
+
     def world_landmarks(self, X):
         """MediaPipe world landmarks: camera-aligned, metres, hip-midpoint origin."""
         C = self.to_camera(X)

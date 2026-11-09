@@ -28,6 +28,16 @@ Image z (MediaPipe's relative depth in pose2d): on the session it is 0.84 x worl
 exaggerates its image depth about 3x, so synthetic image z is scaled by IMAGE_Z (found 2026-11-08:
 without it the M1 model misread resting arms by 35-40 degrees on real input).
 
+Depth flattening (found 2026-11-09 on rendered sessions with exact ground truth, mttrain.render):
+MediaPipe's world landmarks compress depth. Per segment, the camera-depth component of the segment
+vector is about gain x true + bias, while the segment length is kept (the image-plane part is
+stretched). Gains 0.2-0.6 (upper arm 0.37, forearm 0.33, torso 0.42, head yaw 0.47), biases up to
+-10 cm (torso leaning toward the camera, head forward). Image z is about 3x the world z on every
+segment, so the synthetic image z is derived from the flattened depth (then x IMAGE_Z). Without the
+flattening, synthetic depth was about 3x MediaPipe's in both spaces, and the model inherited the
+flattening on real input. Not modelled yet: an extra depth error during motion (4-7 cm, about
+0.5 s timescale; under 1.5 cm at rest).
+
 One person, one session: every factor is randomized per sequence (log-normal) so the model can't
 lean on these exact values. Recalibrate when more seated-v2 sessions exist.
 """
@@ -40,6 +50,7 @@ from mtcore.landmarks import MP33
 
 I = {n: k for k, n in enumerate(MP33)}
 FACE = [I[n] for n in MP33[:11]]
+UPPER = [k for k in range(33) if k not in (I[n] for n in MP33[23:])]  # everything above the hips
 
 
 def _sym(d):
@@ -65,6 +76,35 @@ CHAINS = [
     ("forearm", "right_elbow", "right_wrist", ["right_wrist", "right_pinky", "right_index", "right_thumb"]),
 ]
 
+# depth flattening: segment -> (gain, bias in metres) on the camera-depth component; see docstring
+DEPTH = {"torso": (0.42, -0.097), "shoulders": (0.60, 0.010), "hips": (0.47, -0.006), "neck": (0.25, -0.039),
+         "ears": (0.47, 0.004), "face": (0.43, -0.047), "upper_arm": (0.37, 0.009), "forearm": (0.33, -0.057),
+         "hand": (0.18, -0.041)}
+DEPTH_KEYS = list(DEPTH)
+
+
+def _depth_steps():
+    """(key, start points, end points, moved indices, weights): applied in order; each step only
+    translates the points below it, so every segment's final vector depends on its own step only."""
+    i = lambda *ns: [I[n] for n in ns]
+    arm = lambda s: i(f"{s}_shoulder", f"{s}_elbow", f"{s}_wrist", f"{s}_pinky", f"{s}_index", f"{s}_thumb")
+    leg = lambda s: i(f"{s}_hip", f"{s}_knee", f"{s}_ankle", f"{s}_heel", f"{s}_foot_index")
+    lface = i("left_eye_inner", "left_eye", "left_eye_outer", "mouth_left")
+    rface = i("right_eye_inner", "right_eye", "right_eye_outer", "mouth_right")
+    ears = i("left_ear", "right_ear")
+    hips, shoulders = i("left_hip", "right_hip"), i("left_shoulder", "right_shoulder")
+    steps = [("torso", hips, shoulders, UPPER, [1.0] * len(UPPER)),
+             ("shoulders", i("right_shoulder"), i("left_shoulder"), arm("left") + arm("right"), [0.5] * 6 + [-0.5] * 6),
+             ("hips", i("right_hip"), i("left_hip"), leg("left") + leg("right"), [0.5] * 5 + [-0.5] * 5),
+             ("neck", shoulders, ears, FACE, [1.0] * len(FACE)),
+             ("ears", i("right_ear"), i("left_ear"), ears, [0.5, -0.5])]
+    steps += [("face", ears, [p], [p], [1.0]) for p in i("nose") + lface + rface]
+    for s in ("left", "right"):
+        steps += [("upper_arm", i(f"{s}_shoulder"), i(f"{s}_elbow"), arm(s)[1:], [1.0] * 5),
+                  ("forearm", i(f"{s}_elbow"), i(f"{s}_wrist"), arm(s)[2:], [1.0] * 4)]
+        steps += [("hand", i(f"{s}_wrist"), [p], [p], [1.0]) for p in i(f"{s}_pinky", f"{s}_index", f"{s}_thumb")]
+    return steps
+
 
 def _factors(d):
     f = np.ones(33)
@@ -83,6 +123,29 @@ def _lateral(X, factors):
     return X
 
 
+DEPTH_STEPS = _depth_steps()
+
+
+FLAT_MAX_STRETCH = 4.0  # cap on the image-plane stretch (segments pointing nearly at the camera)
+
+
+def flatten(W, gain, bias):
+    """MediaPipe's depth flattening on hip-centred camera-frame landmarks W (..., 33, 3), metres.
+    gain, bias: (K,) per DEPTH_KEYS (bias in metres). Per step, the segment's depth component becomes
+    gain * depth + bias and its image-plane part stretches (direction kept) so the length stays."""
+    W = W.copy()
+    for key, a, b, moved, w in DEPTH_STEPS:
+        k = DEPTH_KEYS.index(key)
+        d = W[..., b, :].mean(-2) - W[..., a, :].mean(-2)
+        L = np.linalg.norm(d, axis=-1)
+        ez = np.clip(gain[k] * d[..., 2] + bias[k], -L, L)
+        xy = np.linalg.norm(d[..., :2], axis=-1)
+        s = np.minimum(np.sqrt(np.maximum(L * L - ez * ez, 0.0)) / np.maximum(xy, 1e-9), FLAT_MAX_STRETCH)
+        e = np.concatenate([d[..., :2] * s[..., None], ez[..., None]], -1)
+        W[..., moved, :] += np.asarray(w)[:, None] * (e - d)[..., None, :]
+    return W
+
+
 @dataclass
 class Style:
     hip_widen: float = 1.0
@@ -91,6 +154,8 @@ class Style:
     face_world: np.ndarray = field(default_factory=lambda: np.ones(33))
     limb: dict = field(default_factory=lambda: {k: 1.0 for k in LIMB})
     offset: np.ndarray = field(default_factory=lambda: np.zeros((33, 3)))  # world metres, per landmark
+    depth_gain: np.ndarray = field(default_factory=lambda: np.ones(len(DEPTH)))  # per DEPTH_KEYS
+    depth_bias: np.ndarray = field(default_factory=lambda: np.zeros(len(DEPTH)))  # metres
 
     @classmethod
     def identity(cls):
@@ -98,18 +163,23 @@ class Style:
 
     @classmethod
     def calibrated(cls):
-        return cls(HIP_WIDEN, IMAGE_Z, _factors(FACE_PLACEMENT), _factors(FACE_WORLD), dict(LIMB))
+        return cls(HIP_WIDEN, IMAGE_Z, _factors(FACE_PLACEMENT), _factors(FACE_WORLD), dict(LIMB),
+                   depth_gain=np.array([g for g, _ in DEPTH.values()]), depth_bias=np.array([b for _, b in DEPTH.values()]))
 
     @classmethod
-    def sample(cls, rng, spread=0.08, offset_cm=0.8, image_z_spread=0.25):
+    def sample(cls, rng, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25):
         """Calibrated values with per-sequence log-normal spread (face factors shared, so it stays symmetric).
-        Image z gets a wider spread: its scale is the least certain and may differ between MediaPipe models."""
+        Image z gets a wider spread: its scale is the least certain and may differ between MediaPipe models.
+        Depth gains: log-normal depth_spread, clipped to [0.05, 1]; biases: normal, 1 cm + 30% of the bias."""
         ln = lambda: float(np.exp(rng.normal(0, spread)))
         fp, fw = _factors(FACE_PLACEMENT), _factors(FACE_WORLD)
         fp[FACE] = 1 + (fp[FACE] - 1) * ln()
         fw[FACE] *= ln()
+        g0, b0 = np.array([g for g, _ in DEPTH.values()]), np.array([b for _, b in DEPTH.values()])
         return cls(HIP_WIDEN * ln(), IMAGE_Z * float(np.exp(rng.normal(0, image_z_spread))), fp, fw, {k: v * ln() for k, v in LIMB.items()},
-                   rng.normal(0, offset_cm / 100, (33, 3)))
+                   rng.normal(0, offset_cm / 100, (33, 3)),
+                   np.clip(g0 * np.exp(rng.normal(0, depth_spread, len(g0))), 0.05, 1.0),
+                   b0 + rng.normal(0, 1, len(b0)) * (0.01 + 0.3 * np.abs(b0)))
 
     def placement(self, X):
         """3D landmarks (..., 33, 3), any frame and unit: where MediaPipe places its points."""
@@ -119,11 +189,16 @@ class Style:
             X[..., I[n], :] = mid + self.hip_widen * (X[..., I[n], :] - mid)
         return X
 
+    def flatten(self, W):
+        """Hip-centred camera-frame landmarks (..., 33, 3), metres -> MediaPipe's flattened depth (both spaces)."""
+        return flatten(W, self.depth_gain, self.depth_bias)
+
     def world(self, W):
-        """World landmarks (..., 33, 3), metres, hip-midpoint origin: MediaPipe's world-space distortions."""
+        """World landmarks (..., 33, 3), metres, hip-midpoint origin, already flattened: MediaPipe's
+        world-only distortions."""
         W = W.copy()
         # torso: everything above the hips moves along the hip-to-shoulder-midpoint vector
-        upper = [k for k in range(33) if k not in (I[n] for n in MP33[23:])]
+        upper = UPPER
         sh_mid = 0.5 * (W[..., I["left_shoulder"], :] + W[..., I["right_shoulder"], :])
         W[..., upper, :] -= ((1 - self.limb["torso"]) * sh_mid)[..., None, :]
         # neck: face along the shoulder-midpoint-to-nose vector

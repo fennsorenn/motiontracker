@@ -3,7 +3,7 @@ import pytest
 
 from mtcore.landmarks import MP33
 from mtcore.paths import MHR_ASSETS
-from mttrain.mpstyle import Style
+from mttrain.mpstyle import DEPTH_KEYS, Style
 from mttrain.noise import NoiseConfig, observe, outside_distance
 
 I = MP33.index
@@ -22,6 +22,29 @@ def test_identity_style_is_a_no_op():
     W = lm(np.random.default_rng(0))
     s = Style.identity()
     assert np.allclose(s.world(W), W) and np.allclose(s.placement(W), W)
+
+
+def test_depth_flattening():
+    rng = np.random.default_rng(3)
+    W = lm(rng)
+    W = W - 0.5 * (W[:, I("left_hip")] + W[:, I("right_hip")])[:, None]
+    assert np.allclose(Style.identity().flatten(W), W)
+    s = Style.calibrated()
+    F = s.flatten(W)
+    g, b = dict(zip(DEPTH_KEYS, s.depth_gain)), dict(zip(DEPTH_KEYS, s.depth_bias))
+    for seg, (p, q) in {"upper_arm": ("left_shoulder", "left_elbow"), "forearm": ("right_elbow", "right_wrist"),
+                        "ears": ("right_ear", "left_ear"), "hand": ("left_wrist", "left_index")}.items():
+        d, e = W[:, I(q)] - W[:, I(p)], F[:, I(q)] - F[:, I(p)]
+        L = np.linalg.norm(d, axis=-1)
+        assert np.allclose(e[:, 2], np.clip(g[seg] * d[:, 2] + b[seg], -L, L))  # depth: gain x true + bias
+        ok = np.linalg.norm(d[:, :2], axis=-1) > 0.3 * L  # not pointing at the camera (stretch cap)
+        assert np.allclose(np.linalg.norm(e, axis=-1)[ok], L[ok])  # length kept
+        cos = (e[:, :2] * d[:, :2]).sum(-1) / np.linalg.norm(e[:, :2], axis=-1) / np.linalg.norm(d[:, :2], axis=-1)
+        assert np.allclose(cos[ok], 1.0)  # image-plane direction kept
+    # legs below the hips: only the hip step translates them
+    assert np.allclose(F[:, I("left_ankle")] - F[:, I("left_knee")], W[:, I("left_ankle")] - W[:, I("left_knee")])
+    mid = lambda X: 0.5 * (X[:, I("left_hip")] + X[:, I("right_hip")])
+    assert np.allclose(mid(F), 0.0)
 
 
 def test_calibrated_style_factors():

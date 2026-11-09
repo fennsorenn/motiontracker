@@ -51,21 +51,23 @@ class Landmarks(torch.nn.Module):
 class Style:
     """Per-sequence MediaPipe biases, as mpstyle.Style but with (B, ...) tensors."""
 
-    def __init__(self, hip_widen, image_z, face_placement, face_world, limb, offset):
+    def __init__(self, hip_widen, image_z, face_placement, face_world, limb, offset, depth_gain, depth_bias):
         self.hip_widen, self.image_z = hip_widen, image_z  # (B,)
         self.face_placement, self.face_world = face_placement, face_world  # (B, 33)
         self.limb = limb  # name -> (B,)
         self.offset = offset  # (B, 33, 3) metres
+        self.depth_gain, self.depth_bias = depth_gain, depth_bias  # (B, K) per ms.DEPTH_KEYS, bias metres
 
     @classmethod
     def from_numpy(cls, styles, device=None):
         t = lambda v: torch.tensor(np.asarray(v), dtype=torch.float32, device=device)
         return cls(t([s.hip_widen for s in styles]), t([s.image_z for s in styles]),
                    t([s.face_placement for s in styles]), t([s.face_world for s in styles]),
-                   {k: t([s.limb[k] for s in styles]) for k in ms.LIMB}, t([s.offset for s in styles]))
+                   {k: t([s.limb[k] for s in styles]) for k in ms.LIMB}, t([s.offset for s in styles]),
+                   t([s.depth_gain for s in styles]), t([s.depth_bias for s in styles]))
 
     @classmethod
-    def sample(cls, B, gen, device, spread=0.08, offset_cm=0.8, image_z_spread=0.25):
+    def sample(cls, B, gen, device, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25):
         ln = lambda *shape: torch.exp(torch.randn(*shape, generator=gen, device=device) * spread)
         fp = torch.tensor(ms._factors(ms.FACE_PLACEMENT), dtype=torch.float32, device=device).repeat(B, 1)
         fw = torch.tensor(ms._factors(ms.FACE_WORLD), dtype=torch.float32, device=device).repeat(B, 1)
@@ -74,7 +76,12 @@ class Style:
         image_z = ms.IMAGE_Z * torch.exp(torch.randn(B, generator=gen, device=device) * image_z_spread)
         limb = {k: v * ln(B) for k, v in ms.LIMB.items()}
         offset = torch.randn(B, 33, 3, generator=gen, device=device) * (offset_cm / 100)
-        return cls(ms.HIP_WIDEN * ln(B), image_z, fp, fw, limb, offset)
+        K = len(ms.DEPTH)
+        g0 = torch.tensor([g for g, _ in ms.DEPTH.values()], device=device)
+        b0 = torch.tensor([b for _, b in ms.DEPTH.values()], device=device)
+        gain = (g0 * torch.exp(torch.randn(B, K, generator=gen, device=device) * depth_spread)).clamp(0.05, 1.0)
+        bias = b0 + torch.randn(B, K, generator=gen, device=device) * (0.01 + 0.3 * b0.abs())
+        return cls(ms.HIP_WIDEN * ln(B), image_z, fp, fw, limb, offset, gain, bias)
 
     @staticmethod
     def _lateral(X, factors):
@@ -95,8 +102,24 @@ class Style:
             X[..., I[n], :] = mid + hw * (X[..., I[n], :] - mid)
         return X
 
+    def flatten(self, W):
+        """mpstyle.flatten, batched: hip-centred camera-frame landmarks (B, T, 33, 3), metres."""
+        W = W.clone()
+        for key, a, b, moved, w in ms.DEPTH_STEPS:
+            k = ms.DEPTH_KEYS.index(key)
+            d = W[..., b, :].mean(-2) - W[..., a, :].mean(-2)
+            L = d.norm(dim=-1)
+            ez = torch.maximum(torch.minimum(self.depth_gain[:, k, None] * d[..., 2] + self.depth_bias[:, k, None], L), -L)
+            xy = d[..., :2].norm(dim=-1)
+            s = ((L * L - ez * ez).clamp_min(0).sqrt() / xy.clamp_min(1e-9)).clamp(max=ms.FLAT_MAX_STRETCH)
+            e = torch.cat([d[..., :2] * s[..., None], ez[..., None]], -1)
+            wt = torch.tensor(w, dtype=W.dtype, device=W.device)[:, None]
+            W[..., moved, :] += wt * (e - d)[..., None, :]
+        return W
+
     def world(self, W):
-        """World landmarks (B, T, 33, 3), metres, hip-midpoint origin -> MediaPipe's distortions."""
+        """World landmarks (B, T, 33, 3), metres, hip-midpoint origin, already flattened -> MediaPipe's
+        world-only distortions."""
         W = W.clone()
         lb = lambda k: self.limb[k][:, None, None, None]
         sh_mid = 0.5 * (W[..., I["left_shoulder"], :] + W[..., I["right_shoulder"], :])
@@ -169,6 +192,13 @@ def project(X, R, t, fx, aspect=4 / 3):
     hip_z = 0.5 * (z[..., L_HIP] + z[..., R_HIP])[..., None]
     d = f * (C[..., 2] - hip_z) / hip_z
     return torch.stack([u, v, d], -1)
+
+
+def flat_image_z(X, R, t, fx, flat):
+    """camera.Camera.flat_image_z, batched: pose2d z from flattened hip-centred depths."""
+    C = to_camera(X, R, t)
+    hip_z = (0.5 * (C[..., L_HIP, 2] + C[..., R_HIP, 2])).clamp_min(1e-3)[..., None]
+    return fx[:, None, None] * flat[..., 2] / hip_z
 
 
 def world_landmarks(X, R, t):
