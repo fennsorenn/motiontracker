@@ -10,7 +10,7 @@ All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) 
 | `prep_fits` | Batch CMU → MHR fit (`mtcore.cmu_fit`) into `data/m1/<dir>` (`--out`); stores per-subject `scales`, `head_offset`, `head_post` in `subjects.json`; QC flags bad clips (arm residual, wrist speed) for exclusion. |
 | `seated` | Standing → seated: seated legs, damped pelvis lean/turn, breathing/sway, per-arm rest postures (lap/desk/hanging), clamped to MHR limits. `rest_weights` no longer fades rest stretches out at the crop end (fixed 2026-11-08). |
 | `camera` | Desk-webcam camera (height up to 0.55 m), framing sampled around the recorded session. vspark mirrors the image, so labels match an unmirrored synthetic camera. World landmarks are camera-aligned, hip-centred, metres. |
-| `mpstyle` | MediaPipe-style landmark placement: biases applied in both spaces vs world-only distortions, calibrated against the fitted CMU population, randomized per sequence. `IMAGE_Z = 3.0` scales image-landmark depth, with a log-normal spread. |
+| `mpstyle` | MediaPipe-style landmark placement: biases applied in both spaces vs world-only distortions, calibrated against the fitted CMU population, randomized per sequence. `IMAGE_Z = 3.0` scales image-landmark depth, with a log-normal spread. Depth flattening (WIP): see below. |
 | `noise` | Observation model: AR(1) jitter, visibility by distance outside the frame (with lag), drifting guesses, glitches, dropouts, lower visibility for seated hips. Per-group recalibration `_RECAL` (`Z_GAIN`, `IMAGE_GAIN`); `NoiseConfig.image_z_noise`. Coherent arm noise (2026-11-09): `MIX`, a 33x33 mixing matrix built from `ARM_CORR` (shoulder-elbow 0.32, elbow-wrist 0.52, wrist-hand 0.99), correlates the jitter and the out-of-frame guesses along each arm; mirrored in `gpugen/observe.py`. |
 | `synth` | Ties the above together: fitted MHR sequence → synthetic landmark frames (world + image + visibility) at the target frame times. |
 | `features` | Shared by training and inference: causal shoulder-width scale, history at time offsets 0–1.6 s. |
@@ -49,7 +49,20 @@ Extending: any change to a numpy synthesis stage must be mirrored in `gpugen` (a
 
 `--rest`: held posture with both arms in rest templates (`seated.seat(force_rest=...)`). Evaluate with `mteval evaluate --gt gt.jsonl` (`modules/eval-harness.md`). Heavy steps run under `tools/guarded-run.sh`. Renders are CMU-derived: `data/m1/renders`, never committed. Sets so far: `v1` (motion, 8 x 20 s), `rest1` (6 x 15 s); results in the plan, step 7c.
 
-Known limits: the seated idle motion is a rough AR(1), so rest ground truth is never still (smoothing it is an open owner decision). MediaPipe's world landmarks flatten depth (see Open).
+Known limits: the seated idle motion is a rough AR(1), so rest ground truth is never still (smoothing it is an open owner decision). MediaPipe's world landmarks flatten depth (see MediaPipe depth flattening and Open).
+
+## MediaPipe depth flattening (WIP, M1, commit 1913fdb)
+Rendered sessions (exact ground truth) showed MediaPipe's world landmarks compress depth per segment: depth component of a segment vector ≈ gain × true + bias, with segment length kept (the image-plane part is stretched). Measured: upper arm 0.37 / +1 cm, forearm 0.33 / −6 cm, hand 0.18 / −4 cm, shoulders 0.60 / +1 cm, hips 0.47 / −1 cm, torso 0.42 / −10 cm, head yaw (ears) 0.47, ears→nose 0.43 / −5 cm. Image z ≈ 3× world z on every segment. The previous synthesis had unflattened world depth and image z = 3× geometric depth, i.e. ~3× too deep in both spaces, so models inherited the flattening on real input. (vspark compensates with `ikCalibration.zScale = 3`, only in its IK mode, off by default; the frozen baseline does not use it.)
+
+Implementation (`mpstyle`):
+- `DEPTH` (gain/bias table) and `DEPTH_STEPS`: hierarchical steps (torso, shoulders, hips, neck, ears, face points, upper arm, forearm, hand points); each step translates only the points below it.
+- `flatten()`: depth = gain · dz + bias, clipped to ±segment length; image-plane part stretched to keep the length, stretch capped at `FLAT_MAX_STRETCH = 4`.
+- `Style.depth_gain` / `Style.depth_bias`, randomized per sequence (gains log-normal 0.25, clipped to [0.05, 1]; bias + N(0, 1 cm + 30% |bias|)); `Style.flatten`.
+- `Camera.flat_image_z`: image-landmark z from the flattened depths.
+- `synth`: world = `style.world(style.flatten(world_landmarks))`; image z from flattened depth, then × `IMAGE_Z`.
+- `gpugen`: `geom.Style.flatten`, `flat_image_z`, used in `generator.py`; tests check exact numpy/torch agreement.
+
+Not modelled yet: the extra depth error during motion (4-7 cm residual, ~0.5 s timescale; <1.5 cm at rest). Run `m1-v6` is training to test the change; results pending.
 
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
@@ -59,4 +72,4 @@ Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l
 - New observation effects belong in `noise` (sensor-like) or `mpstyle` (systematic MediaPipe placement); check them with `calibrate` against real sessions.
 
 ## Open
-Latest run `m1-v5` (coherent noise; `m1-v4` kept). Arm rest noise (not yet better than the baseline) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7c). Rendered sessions show MediaPipe's world landmarks flatten depth (toward-camera slope ~0.42 upper arm, ~0.32 forearm vs truth) and the models inherit it; whether to model this in synthesis, wait for real multi-view data, or move to render-then-detect training (M6) is an open owner decision.
+Latest run `m1-v5` (coherent noise; `m1-v4` kept). Arm rest noise (not yet better than the baseline) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7c). Rendered sessions show MediaPipe's world landmarks flatten depth (toward-camera slope ~0.42 upper arm, ~0.32 forearm vs truth) and the models inherit it; whether to model this in synthesis, wait for real multi-view data, or move to render-then-detect training (M6) is an open owner decision. Modelling it in synthesis is being tried (WIP, see MediaPipe depth flattening; `m1-v6`).
