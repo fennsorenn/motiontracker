@@ -1,4 +1,4 @@
-# train (implemented; M1 itself WIP)
+# train (implemented; M1 itself WIP; contact-aware training WIP)
 
 Location: `train/` (uv project, package `mttrain`, CUDA PyTorch). Builds M1 training data from CMU, trains the body lifter and runs it on recorded sessions. Depends on `mtcore` (`modules/mtcore.md`); its output is evaluated with the harness (`modules/eval-harness.md`). Plan, decisions and run results: `plans/m1-body-lifter.md`.
 
@@ -14,14 +14,15 @@ All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) 
 | `noise` | Observation model: AR(1) jitter, visibility by distance outside the frame (with lag), drifting guesses, glitches, dropouts, lower visibility for seated hips. Per-group recalibration `_RECAL` (`Z_GAIN`, `IMAGE_GAIN`); `NoiseConfig.image_z_noise`. Coherent arm noise (2026-11-09): `MIX`, a 33x33 mixing matrix built from `ARM_CORR` (shoulder-elbow 0.32, elbow-wrist 0.52, wrist-hand 0.99), correlates the jitter and the out-of-frame guesses along each arm; mirrored in `gpugen/observe.py`. |
 | `synth` | Ties the above together: fitted MHR sequence → synthetic landmark frames (world + image + visibility) at the target frame times. Passes the shoulder distance to `Style.flatten`. |
 | `features` | Shared by training and inference: causal shoulder-width scale, history at time offsets 0–1.6 s. |
-| `skeleton` | Target extraction from MHR poses and torch FK for the position loss. |
-| `dataset` | Numpy `Generator`: on-the-fly samples; 75% seated. Validation = held-out CMU subjects (fixed numpy set, also with `--gen gpu`). `MT_FITS` selects the fits directory under `data/m1` (default `fits`; current `fits-v3`), recorded in the run config. |
+| `skeleton` | Target extraction from MHR poses and torch FK for the position loss. `CONTACT_POINTS` and `contact_points(G, P, cof)` (see Contacts). |
+| `dataset` | Numpy `Generator`: on-the-fly samples; 75% seated. Validation = held-out CMU subjects (fixed numpy set, also with `--gen gpu`). `MT_FITS` selects the fits directory under `data/m1` (default `fits`; current `fits-v3`), recorded in the run config. `source_table(split, p_choreo)` mixes in the choreography pool (see Contacts). |
 | `model` | `Lifter`: 17 rotations (6D) + per-joint confidence, ~1.1M params, ~0.3 ms/frame CPU. |
-| `losses` | Laplace NLL on rotation (uses the confidence), FK position, velocity, joint-limit box measured from the data (proxy for MHR's Euler limits). |
+| `losses` | Laplace NLL on rotation (uses the confidence), FK position, velocity, joint-limit box measured from the data (proxy for MHR's Euler limits), contact loss `con` (see Contacts). |
 | `train` | Training loop; runs in `data/m1/runs/<name>`. `--gen gpu` (default) uses `gpugen` on `--device` (default `cuda:1`), `--gen-chunk 4` batches per generator call; `--gen cpu` keeps the DataLoader path. |
 | `infer` | Session → harness pose track; writes only the VRM bones the model drives. |
 | `calibrate` | Real vs synthetic landmark statistics. Rerun after new sessions are recorded. |
 | `render` | Rendered synthetic sessions with exact ground truth (see below). |
+| `choreo` | Designed contact choreography (see Contacts). |
 | `limitcheck` | Criterion 8: `python -m mttrain.limitcheck <ckpt> <session>`. IK of MHR parameters to the predicted orientations with limits off, checked against `[Limits]` (angles wrapped). Runs on the session plus stressed copies (tracking loss, low confidence, extra noise, arms out of frame, glitches) and on synthetic ground truth for validation. |
 
 ## GPU data generator (`gpugen`, implemented 2026-11-08)
@@ -47,7 +48,7 @@ Extending: any change to a numpy synthesis stage must be mirrored in `gpugen` (a
 3. `video`: ffmpeg → mirrored VP9 video.
 4. `replay`: recorder replay in headless Chrome (`tools/recorder/test/drive_headless.mjs`, optional timeout argument) → landmarks from the exact live MediaPipe build (`modules/recorder.md`).
 
-`--rest`: held posture with both arms in rest templates (`seated.seat(force_rest=...)`). `--fovs` (commit f666bf2): each sequence written once per horizontal FOV as `seqNN_fovFF`, same motion, appearance and camera line, only the perspective changes. Evaluate with `mteval evaluate --gt gt.jsonl` (`modules/eval-harness.md`). Heavy steps run under `tools/guarded-run.sh`. Renders are CMU-derived: `data/m1/renders`, never committed. Sets so far: `v1` (motion, 8 x 20 s), `rest1` (6 x 15 s), `fov1` (3 clips x FOV 50/65/80/95); results in the plan, steps 7c-7d.
+`--contact`: contact choreography instead of CMU clips (see Contacts). `--rest`: held posture with both arms in rest templates (`seated.seat(force_rest=...)`). `--fovs` (commit f666bf2): each sequence written once per horizontal FOV as `seqNN_fovFF`, same motion, appearance and camera line, only the perspective changes. Evaluate with `mteval evaluate --gt gt.jsonl` (`modules/eval-harness.md`). Heavy steps run under `tools/guarded-run.sh`. Renders are CMU-derived: `data/m1/renders`, never committed. Sets so far: `v1` (motion, 8 x 20 s), `rest1` (6 x 15 s), `fov1` (3 clips x FOV 50/65/80/95), `contact1` (contact choreography); results in the plan, steps 7c-7d.
 
 Known limits: the seated idle motion is a rough AR(1), so rest ground truth is never still (smoothing it is an open owner decision). Plain mannequin renders flatten depth more than real video does (see below).
 
@@ -75,6 +76,22 @@ Known limits / not modelled:
 - The extra depth error during motion (4-7 cm residual, ~0.5 s timescale; <1.5 cm at rest).
 - Real-video flattening strength is unmeasured; it needs multi-view ground truth (owner is setting up two cameras).
 
+## Contacts (choreography implemented; contact-aware training WIP)
+Motivation: on `contact1` every system leaves the hand 11-14 cm too far from the face; palms together `m1-v7` is best (3.9 cm |err|).
+
+Choreography (`choreo`, implemented, commits 546e137, 8fffdcf):
+- Seated sequences with designed contact events, solved with MHR IK (pymomentum `solve_ik`): prayer palms, hand-to-face with fingertip or palm on chin/cheek/forehead/mouth, and near-misses at 8-14 cm. Minimum-jerk approach / hold / release; the exact contact intervals are the holds.
+- Rendered test set: `render.py prepare --contact` → `data/m1/renders/contact1`; segments have `settleMs` 0 and `trueCm`. The harness pools all segments of a variant and shows a ground-truth contact column (`modules/eval-harness.md`).
+- Training pool (commit 0ed4a2b): `MT_FITS=fits-v3 uv run python -m mttrain.choreo --split train --n 1000` (and `--split val --n 100 --seed 101`) → `data/m1/choreo/<split>/cNNNN.npz` (MediaPipe landmarks at 30 fps + segments JSON). CMU-derived, local only. <1 s per 30 s sequence; run under `tools/guarded-run.sh`.
+
+Contact-aware training (WIP, commit 0ed4a2b; first model `m1-v8`, 40k steps on GPU):
+- `dataset.source_table(split, p_choreo)`: the pool is a training source with `p_choreo` of the total weight (default 0.2, `train.py --p-choreo`). Pool sequences are already seated and skip the seater, in both the numpy `Generator` and `gpugen.GpuGenerator`.
+- `skeleton.CONTACT_POINTS`: `l_hand` / `r_hand` = midpoint of the index and pinky knuckle landmarks (parent wrist), `nose` (parent `c_head`). Stored as offsets `cof` in the parent's rest-relative frame (`TargetExtractor.contact_offsets`, `gpugen` `Targets.contact_offsets`); `contact_points(G, P, cof)` places them.
+- `losses` `con` (weight 5): vector error between contact-point differences (hand-hand, each hand-nose), after FK on the true body, weighted `exp(-(d_true / 0.15 m)^2)`. Validation metrics `cm_contact_near` / `frac_contact_near` (pairs closer than 15 cm).
+- Extending: a new contact point goes into `CONTACT_POINTS` with a parent joint, and both target extractors (numpy and `gpugen`) must produce its offset.
+
+Still open: `m1-v8` results.
+
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
 
@@ -83,4 +100,4 @@ Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l
 - New observation effects belong in `noise` (sensor-like) or `mpstyle` (systematic MediaPipe placement); check them with `calibrate` against real sessions.
 
 ## Open
-Current best run `m1-v7` (depth flattening; `m1-v5`, `m1-v6` kept). Arm rest noise (not yet better than the baseline), the rough seated idle motion, real flattening strength (multi-view) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7d) and the depth flattening limits above.
+Current best run `m1-v7` (depth flattening; `m1-v5`, `m1-v6` kept); contact-aware `m1-v8` training. Arm rest noise (not yet better than the baseline), the rough seated idle motion, real flattening strength (multi-view) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7d) and the depth flattening limits above.

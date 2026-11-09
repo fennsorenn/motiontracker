@@ -7,11 +7,11 @@ Status: implemented. Usage, system definitions, metric table and known limits: `
 uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. If sandboxed, uv may need `UV_CACHE_DIR` set.
 
 - `quat.py` — quaternion helpers, including `slerp`.
-- `session.py` — `Session` / `Segment` (optional `variant`) / `PoseTrack` loading (recorder session dirs or bare landmarks files). A session is named after its folder, not the `name` in `session.json`. `auto_still_segments`: windowed-average landmark speed, threshold 0.12 m/s (set from one static clip, rough).
+- `session.py` — `Session` / `Segment` (optional `variant`, `settle_ms`) / `PoseTrack` loading (recorder session dirs or bare landmarks files). A session is named after its folder, not the `name` in `session.json`. `auto_still_segments`: windowed-average landmark speed, threshold 0.12 m/s (set from one static clip, rough).
 - `metrics.py` — label-free and labeled metrics. All time-based so systems with different output rates are comparable. `xcorr_lag` linearly resamples midpoint-stamped speeds onto a common grid to stay unbiased across rates.
   - Criterion 7, restated 2026-11-09 (`PLAN.md` §6); shared helper `_arms_on_performer`. Tests: `tests/test_hand_position.py`.
     - `hand_position`: `in_view_2d` / `all_2d` (primary): wrist error in the camera plane against the image landmarks, arm lengths from the image's 95th-percentile segment lengths; `forearm_dir_2d` (guard); 3D `in_view` / `all` on the performer's skeleton (secondary).
-    - `contact` (criterion 7b): for protocol segments labeled `contact` (variants `palms-together`, `hand-to-face`; true distance about zero).
+    - `contact` (criterion 7b): for protocol segments labeled `contact` (variants `palms-together`, `hand-to-face`; true distance about zero). Pools all segments of a variant; with `--gt` the report adds a ground-truth contact column (rendered contact sets, `modules/train.md` Contacts).
   - Ground truth (`--gt gt.jsonl`, from rendered sessions, `modules/train.md`): `globals_track` (global orientations of head and arm bones, independent of how a system splits the chain), `wrist_error_gt`, `ground_truth_metrics` (global rotation error, onset lag, peak-velocity ratio, wrist error). Full orientation error includes forearm twist, which body landmarks barely show, so direction-based errors are more meaningful for arms.
   - `with_head_global`: adds the pseudo-bone `global:head` (group `head_global`) to every system's track before metrics.
 - `systems.py` — system registry.
