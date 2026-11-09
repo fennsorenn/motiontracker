@@ -46,8 +46,8 @@ SCRIPT = REPO_ROOT / "tools" / "render" / "render_blender.py"
 DRIVER = REPO_ROOT / "tools" / "recorder" / "test" / "drive_headless.mjs"
 
 
-def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest=False):
-    """`rest`: a held CMU posture with both arms in rest postures (lap, desk, hanging; random per arm)
+def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False):
+    """`rest_mode`: a held CMU posture with both arms in rest postures (lap, desk, hanging; random per arm)
     plus the seated idle motion (breathing, sway): nearly still ground truth, for noise at rest."""
     rng = np.random.default_rng(seed)
     ch = load()
@@ -69,7 +69,7 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest=False):
     for i in range(n):
         key = keys[order[i % len(order)]]
         s0 = rng.integers(0, len(mps[key]) - T + 1)
-        if rest:
+        if rest_mode:
             held = np.repeat(mps[key][s0 + rng.integers(T)][None], T, 0)
             pair = tuple(rng.choice(list(REST), 2))
             mp = seat(rng, pn, held, FPS, lim, force_rest=pair)
@@ -94,7 +94,7 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest=False):
             for k in range(T):
                 f.write(json.dumps({"t": round(k / FPS * 1000, 1),
                                     "bones": {b: bones[b][k].round(6).tolist() for b in OUTPUT_BONES if b in bones}}) + "\n")
-        print(f"{d.name}: clip {key} from frame {s0}, {T} frames" + (f", rest {pair}" if rest else ""), flush=True)
+        print(f"{d.name}: clip {key} from frame {s0}, {T} frames" + (f", rest {pair}" if rest_mode else ""), flush=True)
 
 
 def video(out, threads=8):
@@ -150,7 +150,7 @@ def main():
     ap.add_argument("--rest", action="store_true", help="held posture, arms resting (noise at rest)")
     a = ap.parse_args()
     if a.step == "prepare":
-        prepare(a.out, a.n, a.seconds, a.seed, rest=a.rest)
+        prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest)
     elif a.step == "video":
         video(a.out, a.threads)
     else:
