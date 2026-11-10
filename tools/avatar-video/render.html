@@ -1,0 +1,131 @@
+<!doctype html>
+<!-- Frame renderer for render.mjs: one VRM avatar per panel, posed like vspark's viewport
+     (resetNormalizedPose + setNormalizedPose with each system's normalized bone rotations).
+     Same three.js / three-vrm versions as vspark. -->
+<meta charset="utf-8">
+<style>body { margin: 0; background: #222; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/",
+  "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.2/lib/three-vrm.module.js"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+const q = new URLSearchParams(location.search);
+const S = Number(q.get('size') || 600);
+const data = await (await fetch('tracks.json')).json();
+const P = data.panels.length;
+const W = S * P, H = S;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.setScissorTest(true);
+document.body.appendChild(renderer.domElement);
+const out = document.createElement('canvas');
+out.width = W; out.height = H;
+const ctx = out.getContext('2d');
+
+const loader = new GLTFLoader();
+loader.register((p) => new VRMLoaderPlugin(p));
+async function loadVrm() {
+  const gltf = await loader.loadAsync('avatar.vrm');
+  const vrm = gltf.userData.vrm;
+  VRMUtils.removeUnnecessaryVertices(gltf.scene);
+  VRMUtils.rotateVRM0(vrm); // VRM 0.x faces -Z; turn it to face the camera like 1.0
+  return vrm;
+}
+
+const panels = [];
+for (const p of data.panels) {
+  const vrm = await loadVrm();
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xd9d6d0);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8170, 1.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+  sun.position.set(0.5, 1.5, 2.0);
+  scene.add(sun);
+  scene.add(vrm.scene);
+  panels.push({ ...p, vrm, scene, vrm0: vrm.meta?.metaVersion === '0', i: 0 });
+}
+
+// Camera: in front, at upper-chest height, framing hips to above the head and a full arm reach.
+const h = panels[0].vrm.humanoid;
+const pos = (b) => h.getNormalizedBoneNode(b).getWorldPosition(new THREE.Vector3());
+panels[0].vrm.scene.updateMatrixWorld(true);
+const hips = pos('hips'), head = pos('head');
+const reach = 2.6 * pos('leftUpperArm').distanceTo(pos('leftHand'));
+const extent = Math.max(head.y - hips.y + 0.55, reach);
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
+const cy = hips.y + 0.5 * (head.y - hips.y) + 0.12;
+camera.position.set(0, cy, (extent / 2) / Math.tan(THREE.MathUtils.degToRad(15)));
+camera.lookAt(0, cy, 0);
+// Side view inset (top right of each panel): from the avatar's right side (-X; it faces +Z), so
+// reach toward the webcam, which the front view can't show, points right in the inset.
+const I = Math.round(S * 0.36);
+const side = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
+side.position.set(-camera.position.z, cy, 0);
+side.lookAt(0, cy, 0);
+
+function poseAt(p, t) {
+  while (p.i + 1 < p.t.length && p.t[p.i + 1] <= t) p.i++;
+  const pose = {};
+  if (p.t[p.i] <= t) {
+    for (const [name, qs] of Object.entries(p.bones)) {
+      const r = qs[p.i];
+      if (!r) continue;
+      pose[name] = { rotation: p.vrm0 ? [-r[0], r[1], -r[2], r[3]] : r };
+    }
+  }
+  p.vrm.humanoid.resetNormalizedPose();
+  p.vrm.humanoid.setNormalizedPose(pose);
+  p.vrm.update(1 / 60);
+}
+
+function segmentAt(t) {
+  return data.segments.find((s) => s.t0 <= t && t < s.t1);
+}
+
+window.renderAt = (t) => {
+  panels.forEach((p, k) => {
+    poseAt(p, t);
+    renderer.setViewport(k * S, 0, S, S);
+    renderer.setScissor(k * S, 0, S, S);
+    renderer.render(p.scene, camera);
+    renderer.setViewport(k * S + S - I - 6, S - I - S / 15 - 6, I, I);
+    renderer.setScissor(k * S + S - I - 6, S - I - S / 15 - 6, I, I);
+    renderer.render(p.scene, side);
+  });
+  ctx.drawImage(renderer.domElement, 0, 0);
+  ctx.font = `bold ${Math.round(S / 26)}px sans-serif`;
+  ctx.textBaseline = 'top';
+  panels.forEach((p, k) => {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(k * S, 0, S, S / 15);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(p.name, k * S + S / 40, S / 60);
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(k * S + S - I - 6, S / 15 + 6, I, I);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.font = `${Math.round(S / 40)}px sans-serif`;
+    ctx.fillText('side view (webcam to the right)', k * S + S - I - 2, S / 15 + 10);
+    ctx.font = `bold ${Math.round(S / 26)}px sans-serif`;
+  });
+  const seg = segmentAt(t);
+  ctx.font = `${Math.round(S / 34)}px sans-serif`;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, H - S / 16, W, S / 16);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`${(t / 1000).toFixed(1)} s   ${seg ? seg.label + ': ' + seg.prompt : ''}`, S / 40, H - S / 16 + S / 70);
+  return out.toDataURL('image/jpeg', 0.92).split(',')[1];
+};
+window.__info = { end: Math.min(...panels.map((p) => p.t[p.t.length - 1])), start: Math.max(...panels.map((p) => p.t[0])),
+  vrm0: panels[0].vrm0, extent };
+window.__ready = true;
+</script>

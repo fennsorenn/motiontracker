@@ -17,6 +17,7 @@ No service code exists yet. Current milestone: **M1, the body lifter in MHR spac
 | `train` | implemented | uv project (`train/`, package `mttrain`, CUDA PyTorch): CMU fits, seated synthesis, synthetic landmarks + noise, batched GPU data generator, contact choreography, model, training, inference on sessions, limit check. Details: `modules/train.md`. |
 | `render` | implemented | Rendered synthetic sessions with exact ground truth: `mttrain.render` + `tools/render/render_blender.py` (Blender EEVEE) → video → recorder replay → real MediaPipe landmarks + `gt.jsonl`. Details: `modules/train.md` (Rendered sessions). |
 | `mp-depth-probe` | implemented (spike, done 2026-11-09) | Spike (`spikes/mp-depth-probe/`): where MediaPipe's pose landmark model encodes hand-vs-face depth. Result: both landmark heads are linear in one 768-d feature (`re_lu_55`) with no linear trace of that depth (CV R2 ~0); only a weak mid-network trace (R2 <= 0.29, 16x16-8x8 stages); MediaPipe's output moves the wrong way as the hand leaves the face. A closed-form head edit is ruled out; a fine-tune would have to reach the mid network. More promising cue: hand size relative to face size (Holistic hand/face landmarks) fed to the lifter. Renders only; re-check on real frames once two-camera depth exists. Details: `spikes/mp-depth-probe/README.md`. |
+| `avatar-video` | WIP | Dev tool (`tools/avatar-video/`): side-by-side comparison video of a recorded session on a VRM avatar (mirrored webcam \| `baseline-rendered` \| a learned model's glide track). Output in gitignored `data/`. |
 | `retargeting` | planned (M4) | Learned layer mapping the performer's pose onto the avatar's MHR identity, then to VRM 1.0 (`PLAN.md` §3.10a). |
 
 ### baseline (implemented, frozen)
@@ -53,6 +54,9 @@ Location: `core/`. Shared by the spike and `train/` as an editable path dependen
 
 ### train (implemented)
 Location: `train/`. Pipeline prep_fits → seated → camera → mpstyle → noise → synth → features → dataset → model → losses → train → infer, plus calibrate (real vs synthetic stats). Training runs on the RTX 4060 (`cuda:1`) with training data generated in batches on the same GPU (`gpugen`, torch port of the synthesis pipeline; the numpy generator stays as the tested reference and builds the validation set). `limitcheck` measures MHR limit violations of a checkpoint (criterion 8). Heavy CPU jobs (fits, training) run under `tools/guarded-run.sh`. Details: `modules/train.md`.
+
+### avatar-video (WIP)
+Location: `tools/avatar-video/`. Renders a side-by-side comparison video of a recorded session: mirrored webcam video, the vspark `baseline-rendered` track and a learned model's glide track (e.g. `m1-v8`), each on a VRM avatar. Uses three.js 0.168 + @pixiv/three-vrm 3.5.2 (same as vspark, `setNormalizedPose`) in headless Chrome over CDP; frames assembled with ffmpeg. Output videos go to gitignored `data/` (they contain the owner's webcam video), never committed. No module file yet.
 
 ### retargeting (planned, M4)
 Learned retargeting layer (`PLAN.md` §3.10a): maps the performer's pose (tracked on the performer's realistic MHR identity) onto the avatar's MHR identity, then to VRM 1.0. Avatar bone lengths enter only here. Trained to keep spatial accuracy (relative positions/directions between body parts, contacts included); may read earlier latents for temporal context. The M3 spike confirmed it is needed: proportion differences, not the conversion, cause contact misses on stylized avatars. No module file yet.
