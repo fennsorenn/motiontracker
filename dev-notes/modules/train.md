@@ -113,11 +113,31 @@ Head test clips (2026-11-11): `python -m mttrain.render prepare --head` renders 
 - 3D head is locked to the torso (slope ~0.05).
 - The earlier low correlations came from the CMU sets having little head motion, not from MediaPipe.
 
-Next: `m1-v10` (planned): per-axis MediaPipe-like head response without noise, 3D near-locked with a nod offset, pivot at the ear midpoint, a head move generator for more head motion in seated sequences, hand lock off. Plan: `plans/m1-v10-head-response.md`.
+`m1-v10` (implemented, commit fc82b23; plan `plans/m1-v10-head-response.md`):
+- `mpstyle` / `gpugen` `head_lock`: per-axis gains (`HEAD_AXES` nod, turn, tilt in the landmark chest frame), fixed face nod `HEAD_NOD_DEG`, pivot at the ear midpoint, no noise. Per-sequence spread `HEAD_SPREAD` 0.2, `HEAD_NOD_SPREAD_DEG` 3.
+- Calibrated on `head1` seq00/seq01 with `python -m mttrain.headcal --sets head1` (options `--image-gain`/`--world-gain T N L`, `--image-nod`/`--world-nod`; prints mean angles): image gains nod 0.45, turn 0.70, tilt 0.38; world 0.1 each with +25 deg nod.
+- Hand lock off (gain 1, noise 0).
+- `seated.head_moves` / `gpugen.motion.head_moves`: min-jerk looks to random head-vs-chest targets (turn +-70, nod +-30, tilt +-30 deg; each axis zero with p 0.4) in 40 % of seated sequences. `HEAD_MOVES`, `HEAD_SHARES` are shared with `render.head_choreography`. `seat(moves=False)` for rendered rest/head sessions and the contact choreography.
+- Training interrupted at step 34000/40000; `best.pt` from step 34000 used (v9 gained ~0.1 deg over its last 6000 steps). `train.py` checkpoints hold no optimizer state, so runs cannot resume.
+
+Results, `m1-v8` -> `m1-v10` (mean over sequences of median global error, deg):
+
+| set | upper arms | forearms | head |
+|---|---|---|---|
+| v1 | 34.5 -> 33.6 | 43.1 -> 42.1 | 16.8 -> 18.4 |
+| fov1 | 35.8 -> 32.6 | 44.0 -> 40.0 | 25.1 -> 29.4 |
+| rest1 | 36.7 -> 31.1 | 43.6 -> 36.2 | 25.4 -> 25.2 |
+| contact1 | 29.8 -> 28.1 | 36.8 -> 34.0 | 11.2 -> 12.2 |
+| head1 | 33.8 -> 32.1 | 39.6 -> 35.8 | 18.5 -> 17.7 |
+
+- Head-vs-chest slope on head clips (turn/nod/tilt): v8 0.11/0.21/0.16, v10 0.16/0.18/0.23; target >= 0.6 missed. On synthetic observations of the same clips v10 reaches 0.93/0.43/0.69, so the gap is sim-to-real.
+- Recorded session head segment, head vs chest p5..p95: v8 turn -7..+8, tilt -6..+2; v10 turn -21..+6, tilt -16..+6 (more head motion on the real face).
+
+Finding (2026-11-11): on the head clips MediaPipe's 3D torso co-rotates with the head. The chest frame from world shoulders + hips follows head-vs-chest turn with slope 0.21 (corr 0.81) and nod 0.17 (corr 0.51); the true chest does not move, and image shoulders do not move. `m1-v10` therefore explains head turns as upper-body turns (head vs root 0.49, head vs chest 0.16). Dropping the 3D head points at inference helps only slightly (turn 0.22). Not modelled yet; candidate for the next run.
 
 Context: training data never passes through MediaPipe (synthetic landmarks + hand-modelled MediaPipe biases). Taps into MediaPipe's internal state remain M7 and need rendered training video (M6).
 
-Still unclear: the `m1-v10` calibrated gains and results, how the 3D head masking is signalled to the model at inference.
+Still unclear: how to model the 3D torso co-rotation (next run not yet planned), how the 3D head masking is signalled to the model at inference.
 
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
@@ -127,4 +147,4 @@ Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l
 - New observation effects belong in `noise` (sensor-like) or `mpstyle` (systematic MediaPipe placement); check them with `calibrate` against real sessions.
 
 ## Open
-Current best run `m1-v7` (depth flattening; `m1-v5`, `m1-v6` kept); contact-aware `m1-v8` level elsewhere, better at contacts. The MediaPipe hand-to-face depth bias (Contacts). Head nod/tilt/turn under-read vs the chest (Head observations, WIP; `m1-v9` regressed, `m1-v10` planned). Arm rest noise (not yet better than the baseline), the rough seated idle motion, real flattening strength (multi-view) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7e) and the depth flattening limits above.
+Current best run `m1-v7` (depth flattening; `m1-v5`, `m1-v6` kept); contact-aware `m1-v8` level elsewhere, better at contacts. The MediaPipe hand-to-face depth bias (Contacts). Head nod/tilt/turn under-read vs the chest (Head observations, WIP; `m1-v9` regressed, `m1-v10` implemented but head-vs-chest still ~0.2: MediaPipe's 3D torso co-rotates with the head). Arm rest noise (not yet better than the baseline), the rough seated idle motion, real flattening strength (multi-view) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7e) and the depth flattening limits above.
