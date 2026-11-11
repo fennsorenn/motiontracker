@@ -1,6 +1,7 @@
 """Rendered synthetic sessions: exact ground truth for the whole system with the real detector.
 
     uv run python -m mttrain.render prepare --out data/m1/renders/v1 [--n 6] [--seconds 20] [--seed 0] [--rest]
+                                           [--head]               # designed head rotations, torso still
                                            [--fovs 50,65,80,95]   # each sequence once per field of view
                                            [--contact]            # designed contact choreography
     uv run python -m mttrain.render video   --out data/m1/renders/v1      # Blender + ffmpeg
@@ -65,9 +66,41 @@ def _contact_distances(ch, lm, mp, seg):
     return float(np.median(np.minimum(np.linalg.norm(lw - nose, axis=1), np.linalg.norm(rw - nose, axis=1))))
 
 
-def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fovs=None, contact_mode=False):
+# head choreography (head_mode): (turn, nod, tilt) targets in degrees of the head relative to the chest, held
+# for a moment and reached with minimum-jerk moves; split between the neck and head joints. Positive turn =
+# MHR twist +, nod = bend + (down), tilt = lean +. Reaches 60 deg turns, 35 deg nods, 30 deg tilts and
+# combinations: the range MediaPipe compresses (mttrain.headcal).
+HEAD_POSES = [(0, 0, 0), (45, 0, 0), (-45, 0, 0), (0, 0, 0), (0, 30, 0), (0, -25, 0), (0, 0, 0), (0, 0, 25),
+              (0, 0, -25), (0, 0, 0), (60, 0, 0), (-60, 0, 0), (0, 0, 0), (35, 25, 0), (-35, 25, 0), (-35, -20, 0),
+              (35, -20, 0), (0, 0, 0), (30, 0, 25), (-30, 0, -25), (20, 15, -20), (0, 0, 0)]
+
+
+def head_choreography(rng, pn, mp, fps, limits):
+    """Overwrite the neck/head parameters of a held seated posture with the HEAD_POSES sequence."""
+    P = {n: i for i, n in enumerate(pn)}
+    n = len(mp)
+    t = np.arange(n) / fps
+    step = t[-1] / (len(HEAD_POSES) - 1)  # seconds per target: move (60 %) then hold
+    keys = np.radians(np.array(HEAD_POSES, dtype=float)) / np.radians(17.2 / 0.3)  # deg -> rad of joint parameter
+    out = mp.copy()
+    seg = np.minimum((t / step).astype(int), len(HEAD_POSES) - 2)
+    u = np.clip((t - seg * step) / (0.6 * step), 0, 1)
+    w = u ** 3 * (10 - 15 * u + 6 * u * u)
+    cur = keys[seg] + (keys[seg + 1] - keys[seg]) * w[:, None]  # (n, 3) total turn, nod, tilt in parameter units
+    for k, (neck, head, share) in enumerate((("neck_twist", "head_twist", 0.45), ("neck_bend", "head_bend", 0.5),
+                                            ("neck_lean", "head_lean", 0.6))):
+        out[:, P[neck]] = share * cur[:, k]
+        out[:, P[head]] = (1 - share) * cur[:, k]
+    from .seated import clamp
+    return clamp(pn, out, limits)
+
+
+def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fovs=None, contact_mode=False,
+            head_mode=False):
     """`rest_mode`: a held CMU posture with both arms in rest postures (lap, desk, hanging; random per arm)
     plus the seated idle motion (breathing, sway): nearly still ground truth, for noise at rest.
+    `head_mode`: as rest_mode, but the head runs the HEAD_POSES choreography relative to the still torso
+    (no idle head motion): MediaPipe's head response against exact truth.
     `fovs`: horizontal fields of view (deg); each sequence is written once per value (seqNN_fovFF), same
     motion, appearance and camera yaw, height, roll and framing; the distance follows the field of view.
     `contact_mode`: designed contact choreography (mttrain.choreo) on held-out subjects' bodies; the
@@ -100,10 +133,12 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
                     c["trueCm"] = round(_contact_distances(ch, lm, mp, c), 1)
                 print(f"  {c['label']} {c['variant']} {c['t0'] / 1000:.1f}-{c['t1'] / 1000:.1f} s, hold drift {dr:.2f} cm"
                       + (f", true distance {c['trueCm']} cm" if "trueCm" in c else ""), flush=True)
-        elif rest_mode:
+        elif rest_mode or head_mode:
             held = np.repeat(mps[key][s0 + rng.integers(T)][None], T, 0)
             pair = tuple(rng.choice(list(REST), 2))
             mp = seat(rng, pn, held, FPS, lim, force_rest=pair)
+            if head_mode:
+                mp = head_choreography(rng, pn, mp, FPS, lim)
         else:
             mp = seat(rng, pn, mps[key][s0:s0 + T], FPS, lim)
         states = skeleton_state(ch, mp)
@@ -123,7 +158,7 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
                 (Path(out) / name / "contacts.json").write_text(json.dumps(contacts, indent=1))
         tally = {v: round(sum(c["t1"] - c["t0"] for c in contacts if c["variant"] == v) / 1000, 1)
                  for v in ("palms-together", "hand-to-face", "near-face")} if contacts else None
-        print(f"seq{i:02d}: clip {key} from frame {s0}, {T} frames" + (f", rest {pair}" if rest_mode else "")
+        print(f"seq{i:02d}: clip {key} from frame {s0}, {T} frames" + (f", rest {pair}" if rest_mode or head_mode else "")
               + (f", fov {fovs}" if fovs else "") + (f", contact s {tally}" if tally else ""), flush=True)
 
 
@@ -215,12 +250,13 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--rest", action="store_true", help="held posture, arms resting (noise at rest)")
+    ap.add_argument("--head", action="store_true", help="held posture, arms resting, designed head rotations")
     ap.add_argument("--contact", action="store_true", help="designed contact choreography (mttrain.choreo)")
     ap.add_argument("--fovs", type=lambda v: [float(x) for x in v.split(",")], default=None,
                     help="comma-separated horizontal fields of view (deg): each sequence once per value")
     a = ap.parse_args()
     if a.step == "prepare":
-        prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest, fovs=a.fovs, contact_mode=a.contact)
+        prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest, fovs=a.fovs, contact_mode=a.contact, head_mode=a.head)
     elif a.step == "video":
         video(a.out, a.threads)
     elif a.step == "gt":
