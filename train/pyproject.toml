@@ -1,0 +1,25 @@
+[project]
+name = "mttrain"
+version = "0.0.0"
+description = "M1 body lifter: CMU -> MHR data prep, landmark synthesis, noise model, training"
+requires-python = ">=3.12,<3.13"
+dependencies = ["mtcore", "torch>=2.8,<2.9", "numpy"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["uv_build>=0.10.11,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+mtcore = { path = "../core", editable = true }
+torch = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

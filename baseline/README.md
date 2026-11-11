@@ -10,6 +10,7 @@ Changes to vspark after the snapshot are not picked up.
 pnpm install
 pnpm run-baseline --input frames.jsonl --output poses.jsonl            # backend solver output
 pnpm run-baseline --input frames.jsonl --stage rendered --render-hz 60 # + frontend One Euro filter
+pnpm run-baseline --poses poses.jsonl --stage rendered                  # filter only, any pose track
 pnpm test                                                               # equivalence with vspark
 ```
 
@@ -30,6 +31,8 @@ torso/head, arms with the elbow-hinge solve, confidence-weighted arm smoothing, 
 head calibration and finger calibration. All behaviour-config values are vspark's defaults.
 
 The optional rendered stage adds the frontend's per-bone One Euro filter (min cutoff 1.0, beta 0.3).
+`--poses` skips the solver and runs a precomputed pose track (another system's output, same format)
+through this stage only, so other systems get identical filtering.
 It runs once per simulated render frame on the latest pose, as vspark's Viewport does. The
 second-order dynamics filter is available but off, matching vspark's default.
 

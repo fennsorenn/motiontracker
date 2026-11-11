@@ -22,3 +22,15 @@ def local_mean(q: np.ndarray, center: int, lo: int, hi: int) -> np.ndarray:
     signs[signs == 0] = 1.0
     m = np.sum(window * signs[:, None], axis=0)
     return m / np.linalg.norm(m)
+
+
+def slerp(a: np.ndarray, b: np.ndarray, u: float) -> np.ndarray:
+    """Shortest-path spherical interpolation from a to b, u in [0, 1]."""
+    a, b = normalize(a), normalize(b)
+    dot = float(np.sum(a * b))
+    if dot < 0.0:
+        b, dot = -b, -dot
+    if dot > 0.9995:
+        return normalize(a + u * (b - a))
+    th = np.arccos(dot)
+    return (np.sin((1 - u) * th) * a + np.sin(u * th) * b) / np.sin(th)

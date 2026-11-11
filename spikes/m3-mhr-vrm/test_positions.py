@@ -6,28 +6,20 @@ onto lowerArm (driving lowerArm with wrist_twist instead of lowarm).
 """
 
 import sys
-from pathlib import Path
 
 import numpy as np
 import pymomentum.geometry as g
 
-import convert
-from convert import MAP, MhrToVrm, vrm_fk
-from dump_skeleton import load
+import mtcore.convert as convert
+from mtcore.convert import MAP, MhrToVrm, vrm_fk
+from mtcore.mhr import FLEX_T, limits, load
 
 rng = np.random.default_rng(1)
 ch = load()
 jn = list(ch.skeleton.joint_names)
 pn = list(ch.parameter_transform.names)
-FLEX_T = {"spine_length_flexible", "neck_length_flexible", "shoulder_width_flexible", "arm_length_flexible",
-          "hip_width_flexible", "leg_length_flexible"}
 pose_idx = [i for i, n in enumerate(pn) if not n.startswith(("scale_", "root_t")) and n not in FLEX_T]
-LIM = {}
-for line in (Path(__file__).resolve().parents[2] / "data/mhr/assets/compact_v6_1.model").read_text().splitlines():
-    q = line.split()
-    if len(q) >= 4 and q[0] == "limit" and q[2] == "minmax":
-        lo, hi = line.split("[")[1].split("]")[0].split(",")
-        LIM[q[1]] = (float(lo), float(hi))
+LIM = limits()
 FRAC = float(sys.argv[1]) if len(sys.argv) > 1 else 0.5
 lo = np.array([LIM.get(pn[i], (-0.6, 0.6))[0] for i in pose_idx]) * FRAC
 hi = np.array([LIM.get(pn[i], (-0.6, 0.6))[1] for i in pose_idx]) * FRAC

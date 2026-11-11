@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cmu import CMU_ROOT, Skeleton, read_amc
+from mtcore.cmu import CMU_ROOT, Skeleton, read_amc
 
 
 def score(path):

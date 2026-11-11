@@ -2,10 +2,21 @@
 
 For VRM bone b driven by MHR joint j:
     G_vrm(b) = Q_mhr(j) * Q_mhr_rest(j)^-1 * D(b)
-where D(b) is the minimal rotation taking b's direction in the avatar's T-pose rest onto j's
-direction in MHR's A-pose rest. Local rotation = G_vrm(parent)^-1 * G_vrm(b) (VRM 1.0 normalized
-bones have identity rest rotations). Joints MHR has but VRM lacks (spine0, twist joints,
-wrist_twist, thumb0, pinky0, extra foot joints) fold in automatically through the globals.
+Local rotation = G_vrm(parent)^-1 * G_vrm(b) (VRM 1.0 normalized bones have identity rest rotations).
+
+D(b) depends on the bone:
+- Torso, neck, head and shoulders (REST_ALIGNED): D = identity, i.e. MHR's rest maps onto the
+  avatar's rest and only the performer's rotation away from rest is copied. Both rests are neutral
+  upright postures, but MHR's spine has an anatomical S-curve and backward-angled clavicles while
+  VRoid spines are nearly straight; matching segment directions here copied that curve onto the
+  avatar as a constant hunch (chest +30, upperChest +32 deg forward, neck -32, hips -20 at MHR rest)
+  with shoulders turned ~37 deg back (found 2026-11-11 in the avatar comparison video).
+- Limbs and fingers: D = the minimal rotation taking b's direction in the avatar's T-pose rest onto
+  j's direction in MHR's A-pose rest (the rests differ, so their offset must not be copied). Each
+  bone's global rotation is computed independently, so arms point where MHR's do whatever the torso
+  and shoulders do; those only move where the arm is attached.
+Joints MHR has but VRM lacks (spine0, twist joints, wrist_twist, thumb0, pinky0, extra foot joints)
+fold in automatically through the globals.
 """
 
 import numpy as np
@@ -41,6 +52,9 @@ for s, m in (("left", "l"), ("right", "r")):
             f"{s}{vf}Intermediate": (f"{m}_{mf}2", f"{m}_{mf}3"),
             f"{s}{vf}Distal": (f"{m}_{mf}3", f"{m}_{mf}_null"),
         })
+
+# bones whose MHR rest maps onto the avatar's rest (D = identity); see the module docstring
+REST_ALIGNED = {"hips", "spine", "chest", "upperChest", "neck", "head", "leftShoulder", "rightShoulder"}
 
 # VRM 1.0 humanoid parents (subset that MAP covers)
 VRM_PARENT = {"spine": "hips", "chest": "spine", "upperChest": "chest", "neck": "upperChest", "head": "neck",
@@ -117,7 +131,7 @@ class MhrToVrm:
             jp = MAP[b][2] if len(MAP[b]) > 2 else j  # joint where the VRM bone sits
             self.q_rest_inv[b] = qinv(Q[self.jn.index(j)])
             vc = VRM_CHILD.get(b)
-            if jd is None or vc not in vrm_rest_positions:
+            if b in REST_ALIGNED or jd is None or vc not in vrm_rest_positions:
                 self.D[b] = np.array([0, 0, 0, 1.0])
                 continue
             d_mhr = P[self.jn.index(jd)] - P[self.jn.index(jp)]

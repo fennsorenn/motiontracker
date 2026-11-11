@@ -27,6 +27,14 @@ const $ = (id) => document.getElementById(id);
 const videoEl = $('video');
 const params = new URLSearchParams(location.search);
 const replayUrl = params.get('video');
+// ?mode=image: IMAGE running mode; default VIDEO (what vspark uses). Caution (tasks-vision 0.10.17, measured
+// 2026-11-11): the holistic landmarker is stateful in IMAGE mode too, smoothing landmarks heavily over
+// wall-clock time between detect() calls, so IMAGE-mode replays are NOT an unsmoothed reference.
+const RUNNING_MODE = params.get('mode') === 'image' ? 'IMAGE' : 'VIDEO';
+// Frame-stepped replay (?step, always in IMAGE mode): pause, seek to each detector frame, wait until it is
+// shown, then detect. Timestamps come from the seek target, so they stay right however slow detection is
+// (free-running replay draws stale frames when detection blocks the page: ~0.6 s late in IMAGE mode).
+const STEPPED = !!replayUrl && (params.has('step') || RUNNING_MODE === 'IMAGE');
 
 let landmarker = null;
 let stream = null;
@@ -61,13 +69,14 @@ async function init() {
   const vision = await FilesetResolver.forVisionTasks(WASM_URL);
   landmarker = await HolisticLandmarker.createFromModelPath(vision, MODEL_URL);
   await landmarker.setOptions({
-    runningMode: 'VIDEO',
+    runningMode: RUNNING_MODE,
     minFaceDetectionConfidence: 0.5,
     minFacePresenceConfidence: 0.5,
     minPoseDetectionConfidence: 0.5,
     minPosePresenceConfidence: 0.5,
     minHandLandmarksConfidence: 0.5,
   });
+  if (params.has('test')) window.__mtLandmarker = landmarker;  // test harness access (statefulness checks)
   $('state').textContent = 'Ready.';
   $('start').disabled = false;
 }
@@ -123,20 +132,47 @@ function tick() {
   if (!running) return;
   if (videoEl.readyState < 2) return scheduleNext();
   lastFrameAt = performance.now();
+  // VIDEO mode needs strictly increasing timestamps; wall clock in both modes.
+  processFrame(replayUrl ? videoEl.currentTime * 1000 : lastFrameAt - t0, lastFrameAt);
+  scheduleNext();
+}
+
+function processFrame(t, detectorTs) {
   ctx.setTransform(-1, 0, 0, 1, PROC_W, 0);
   ctx.drawImage(videoEl, 0, 0, PROC_W, PROC_H);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const t = replayUrl ? videoEl.currentTime * 1000 : lastFrameAt - t0;
   const before = performance.now();
-  // VIDEO mode needs strictly increasing timestamps; wall clock in both modes.
-  const r = landmarker.detectForVideo(canvas, lastFrameAt);
+  const r = RUNNING_MODE === 'IMAGE' ? landmarker.detect(canvas) : landmarker.detectForVideo(canvas, detectorTs);
   stats.inferMs = 0.9 * stats.inferMs + 0.1 * (performance.now() - before);
   const f = toFrame(r, t);
   frames.push(f);
   stats.frames++;
   for (const k of ['pose', 'face', 'leftHand', 'rightHand']) if (f[k]) stats[k]++;
   showStatus(f);
-  scheduleNext();
+}
+
+async function steppedReplay() {
+  videoEl.pause();
+  const shown = () => new Promise((resolve) => {
+    // the seeked frame is presented (requestVideoFrameCallback), with a timeout fallback
+    const timer = setTimeout(resolve, 500);
+    if (videoEl.requestVideoFrameCallback) videoEl.requestVideoFrameCallback(() => { clearTimeout(timer); resolve(); });
+  });
+  for (let k = 0; running; k++) {
+    const ts = (k * FRAME_INTERVAL_MS) / 1000 + 0.001;  // never the current position: that seek may not fire 'seeked'
+    if (ts >= videoEl.duration) break;
+    const seeked = new Promise((resolve) => {
+      const timer = setTimeout(resolve, 3000);
+      videoEl.addEventListener('seeked', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    const presented = shown();
+    videoEl.currentTime = ts;
+    await seeked;
+    await presented;
+    processFrame(Math.round(ts * 1000), ts * 1000 + 1);
+    await new Promise((resolve) => setTimeout(resolve, 0));  // let the page update between frames
+  }
+  stop();
 }
 
 function showStatus(f) {
@@ -207,10 +243,15 @@ async function start() {
   const protocol = PROTOCOLS[$('protocol').value];
 
   if (replayUrl) {
-    videoEl.src = replayUrl;
+    // stepped replay seeks: load the file into memory (the local test server has no byte-range support)
+    videoEl.src = STEPPED ? URL.createObjectURL(await (await fetch(replayUrl)).blob()) : replayUrl;
     videoEl.style.transform = 'none'; // recorded videos are unmirrored; show them as recorded
-    await videoEl.play();
-    videoEl.onended = () => stop();
+    if (STEPPED) {
+      await new Promise((resolve) => (videoEl.readyState >= 1 ? resolve() : videoEl.addEventListener('loadedmetadata', resolve, { once: true })));
+    } else {
+      await videoEl.play();
+      videoEl.onended = () => stop();
+    }
   } else {
     const [w, h] = $('size').value.split('x').map(Number);
     const deviceId = $('camera').value;
@@ -237,7 +278,8 @@ async function start() {
   $('state').innerHTML = '<span class="rec">● recording</span>';
   if (protocol.steps.length) runProtocol(protocol);
   else $('prompt').textContent = replayUrl ? 'Replaying video…' : 'Recording (free). Press S to mark still segments.';
-  tick();
+  if (STEPPED) steppedReplay();
+  else tick();
 }
 
 async function stop() {
@@ -278,7 +320,7 @@ async function stop() {
       width: PROC_W,
       height: PROC_H,
       targetFps: TARGET_FPS,
-      detector: { name: 'mediapipe-holistic-landmarker', tasksVision: TASKS_VISION, model: MODEL_URL, modelMd5: MODEL_MD5_BASE64, runningMode: 'VIDEO' },
+      detector: { name: 'mediapipe-holistic-landmarker', tasksVision: TASKS_VISION, model: MODEL_URL, modelMd5: MODEL_MD5_BASE64, runningMode: RUNNING_MODE, steppedReplay: STEPPED },
       landmarkFormat: 'vspark CameraCapture: pose=world+image visibility, hands=world (image fallback), face=image; *2d = normalized image space of the mirrored frame',
     },
     landmarks: { file: 'landmarks.jsonl', frames: frames.length },

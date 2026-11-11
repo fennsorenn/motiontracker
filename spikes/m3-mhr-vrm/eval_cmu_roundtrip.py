@@ -8,10 +8,10 @@ error converted to centimetres on the avatar. The MHR-proportion VRM is a sanity
 
 import numpy as np
 
-from convert import MAP, MhrToVrm, vrm_fk
-from fit_avatars import AVATARS
-from fit_cmu import fit
-from vrm_skeleton import load_vrm
+from mtcore.convert import MAP, MhrToVrm, vrm_fk
+from mtcore.paths import AVATARS
+from mtcore.cmu_fit import fit
+from mtcore.vrm import load_vrm
 
 CLIPS = [(28, 15), (15, 7), (32, 12), (28, 8), (13, 31), (29, 20), (79, 72), (80, 46), (30, 18), (79, 84)]
 AVATAR_SET = ["AvatarSample_D", "Base_Male", "AvatarSample_E", "Sakurada_Fumiriya"]

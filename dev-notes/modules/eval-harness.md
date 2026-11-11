@@ -6,27 +6,39 @@ Status: implemented. Usage, system definitions, metric table and known limits: `
 
 uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. If sandboxed, uv may need `UV_CACHE_DIR` set.
 
-- `quat.py` — quaternion helpers.
-- `session.py` — `Session` / `Segment` (optional `variant`) / `PoseTrack` loading (recorder session dirs or bare landmarks files). A session is named after its folder, not the `name` in `session.json`. `auto_still_segments`: windowed-average landmark speed, threshold 0.12 m/s (set from one static clip, rough).
+- `quat.py` — quaternion helpers, including `slerp`.
+- `session.py` — `Session` / `Segment` (optional `variant`, `settle_ms` from `session.json` `settleMs`: time skipped at the start of a contact segment before measuring; recorded protocol sessions use a default settle time while the person moves into contact, rendered contact segments use 0 because the hold intervals are exact) / `PoseTrack` loading (recorder session dirs or bare landmarks files). A session is named after its folder, not the `name` in `session.json`. `auto_still_segments`: windowed-average landmark speed, threshold 0.12 m/s (set from one static clip, rough).
 - `metrics.py` — label-free and labeled metrics. All time-based so systems with different output rates are comparable. `xcorr_lag` linearly resamples midpoint-stamped speeds onto a common grid to stay unbiased across rates.
+  - Criterion 7, restated 2026-11-09 (`PLAN.md` §6); shared helper `_arms_on_performer`. Tests: `tests/test_hand_position.py`.
+    - `hand_position`: `in_view_2d` / `all_2d` (primary): wrist error in the camera plane against the image landmarks, arm lengths from the image's 95th-percentile segment lengths; `forearm_dir_2d` (guard); 3D `in_view` / `all` on the performer's skeleton (secondary).
+    - `contact` (criterion 7b): for protocol segments labeled `contact` (variants `palms-together`, `hand-to-face`; true distance about zero). Pools all segments of a variant; with `--gt` the report adds a ground-truth contact column (rendered contact sets, `modules/train.md` Contacts).
+  - Ground truth (`--gt gt.jsonl`, from rendered sessions, `modules/train.md`): `globals_track` (global orientations of head and arm bones, independent of how a system splits the chain), `wrist_error_gt`, `ground_truth_metrics` (global rotation error, onset lag, peak-velocity ratio, wrist error). Full orientation error includes forearm twist, which body landmarks barely show, so direction-based errors are more meaningful for arms.
+  - `with_head_global`: adds the pseudo-bone `global:head` (group `head_global`) to every system's track before metrics.
 - `systems.py` — system registry.
   - Builtins `baseline` and `baseline-rendered`: run the baseline CLI (`baseline/`, needs `pnpm install`), with head calibration captured at the middle of the first `still` segment.
   - `name=path.jsonl`: precomputed `OutputFrame` JSONL (`{t, bones:{vrmBone:[x,y,z,w]}}`).
-- `report.py` — `evaluate` → JSON; summary is the median per bone group (torso/head, shoulders, arms, hands, fingers); markdown rendering.
+  - `name-rendered=path.jsonl` (`run_rendered`): runs a precomputed track through the baseline CLI's filter-only mode (vspark's One Euro filter, 60 Hz; `baseline.md`). The baseline's own solver output through it reproduces `baseline-rendered` exactly (end-to-end test).
+  - `name-glide=path.jsonl`: upsamples a precomputed track to 60 Hz without smoothing, via `upsample.py`.
+- `upsample.py` — `glide`: on each new pose, every bone slerps from what is currently shown to the new pose, finishing one render frame before the next pose is expected, then holds. Expected interval = mean of the last 10 input intervals (causal). Bones absent from the newest pose are absent from the output; reappearing bones snap. Tests: `tests/test_upsample.py`.
+- `report.py` — `evaluate` → JSON; summary is the median per bone group (torso/head, shoulders, arms, hands, fingers, plus `head_global`); markdown rendering.
   - Pooled rest metrics are over all `still` segments together. Additionally `per_still_segment` per system and a top-level `still_segment_summary` break rest noise / twitches down per still segment (keyed by `variant` where present); the markdown adds a "Rest by still segment" table when a session has more than one still segment.
-- `cli.py` — `mteval evaluate`. Reports default to `<repo>/reports/<session folder>/` regardless of cwd.
+- `report.py` adds an "Against ground truth" section when `--gt` is given.
+- `cli.py` — `mteval evaluate` (`--gt gt.jsonl` for ground-truth metrics). Reports default to `<repo>/reports/<session folder>/` regardless of cwd.
 - `tests/test_metrics.py` — synthetic known-answer tests for every metric. `tests/test_end_to_end.py` — runs the real baseline on vspark's `hand_dropouts` clip.
 
 ## Extending
 
-- Evaluating a learned model: write its output as `OutputFrame` JSONL and pass `--system name=path.jsonl`. This is the intended extension point; a builtin in `systems.py` is only worth it if the harness should run the model itself.
+- Evaluating a learned model: write its output as `OutputFrame` JSONL and pass `--system name=path.jsonl` (raw), `name-glide=` (primary rendered comparison) or `name-rendered=`. This is the intended extension point; a builtin in `systems.py` is only worth it if the harness should run the model itself.
 - New metric: add it to `metrics.py` as a time-based function, add a synthetic known-answer test, wire it into `report.py`, and add a row to the README metric table.
-- Labeled metrics are ready but not reported; wire them into `report.py` once labeled sessions exist (M1).
+- Labeled metrics are reported through `--gt` (rendered sessions); a new labeled source only needs to write the same `gt.jsonl` VRM track.
 
 ## Caveats
 
-- Compare systems at the same stage only: solver vs solver (`baseline`), rendered vs rendered (`baseline-rendered`). The rendered stage shows higher peak speeds and twitch counts from catch-up bursts after each 10 FPS pose, even though rest jitter and noise are lower. A learned model must be compared raw against `baseline`, or through the same render filter against `baseline-rendered`.
+- Compare systems at the same stage only: solver vs solver (`baseline`), rendered vs rendered (`baseline-rendered`). The rendered stage shows higher peak speeds and twitch counts from catch-up bursts after each 10 FPS pose, even though rest jitter and noise are lower.
+- M1 go/no-go (owner, 2026-11-08, `PLAN.md` §6): the model replaces both vspark's solver and its One Euro filter, so the primary comparison is `name-glide` vs `baseline-rendered`; `name-rendered` (model through the filter) is secondary.
+- Lag floor at 60 Hz: the lag metric stamps speeds at interval midpoints, so any causal 60 Hz display of 10 FPS input measures at least ~50 ms. Glide measures ~90 ms, about the same as `baseline-rendered` (70–95 ms); read lag differences between rendered systems against this floor.
 - Lag is unreliable on short or low-motion clips; check `corr` in the JSON.
+- Criterion 7 was restated (2026-11-09) to measure in the camera plane against the image landmarks, with the 3D on-skeleton number kept as secondary.
 
 ## Measurements so far (static test clip only)
 
@@ -39,4 +51,4 @@ uv project in `eval/`, package `mteval` (`src/mteval/`), CLI `mteval evaluate`. 
 
 ## Not yet
 
-Contact preservation, reprojection error (2D landmarks are already recorded). Success thresholds are `[OPEN]` (`PLAN.md` §6).
+Reprojection error (2D landmarks are already recorded). MHR limit violations (criterion 8) are measured in `train/` (`mttrain.limitcheck`, `modules/train.md`), not here. Success thresholds are `[OPEN]` (`PLAN.md` §6).

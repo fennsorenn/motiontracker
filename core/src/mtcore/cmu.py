@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-CMU_ROOT = Path(__file__).resolve().parents[2] / "data" / "cmu" / "all_asfamc" / "subjects"
+from .paths import CMU_ROOT
 
 
 def _rot(axis, deg):
@@ -72,8 +72,11 @@ class Skeleton:
                 self.children[parts[0]] = parts[1:]
         self.root_C = _euler_xyz(*self.root_axis)
 
-    def fk(self, frame):
-        """frame: {bone: [values]} -> {bone: end position (cm)}, plus 'root'."""
+    def fk(self, frame, rotations=False):
+        """frame: {bone: [values]} -> {bone: end position (cm)}, plus 'root'.
+
+        rotations=True also returns {bone: world rotation (3, 3)}; identity in the ASF rest pose,
+        which faces +z with the subject's left at +x and y up (as MHR's rest pose)."""
         r = frame["root"]
         vals = dict(zip(self.root_order, r))
         pos0 = np.array([vals.get("TX", 0), vals.get("TY", 0), vals.get("TZ", 0)])
@@ -89,7 +92,7 @@ class Skeleton:
             M[name] = M[parent] @ b["C"] @ _euler_xyz(*ang) @ b["C"].T
             P[name] = P[parent] + b["length"] * self.unit_cm * (M[name] @ b["direction"])
             stack += [(name, c) for c in self.children.get(name, [])]
-        return P
+        return (P, M) if rotations else P
 
 
 def read_amc(path):
@@ -107,12 +110,25 @@ def read_amc(path):
     return frames
 
 
-def clip_positions(subject, clip, step=4):
-    """Joint end positions for every `step`-th frame (CMU is 120 fps; step 4 -> 30 fps)."""
+def clip_positions(subject, clip, step=4, frames=None, rot_bones=()):
+    """Joint end positions for every `step`-th frame (CMU is 120 fps; step 4 -> 30 fps).
+
+    `frames` optionally selects indices into that subsampled sequence (FK runs only on those).
+    With `rot_bones`, also returns their world rotations (T, len(rot_bones), 3, 3)."""
     sid = f"{int(subject):02d}"
     d = CMU_ROOT / sid
     sk = Skeleton(d / f"{sid}.asf")
-    frames = read_amc(d / f"{sid}_{int(clip):02d}.amc")[::step]
-    names = list(sk.fk(frames[0]).keys())
-    out = np.array([[sk.fk(f)[n] for n in names] for f in frames])
+    seq = read_amc(d / f"{sid}_{int(clip):02d}.amc")[::step]
+    if frames is not None:
+        seq = [seq[i] for i in frames]
+    fk = [sk.fk(f, rotations=True) for f in seq]
+    names = list(fk[0][0].keys())
+    out = np.array([[p[n] for n in names] for p, _ in fk])
+    if rot_bones:
+        return names, out, np.array([[m[b] for b in rot_bones] for _, m in fk])
     return names, out
+
+
+def clip_length(subject, clip, step=4):
+    sid = f"{int(subject):02d}"
+    return len(read_amc(CMU_ROOT / sid / f"{sid}_{int(clip):02d}.amc")[::step])

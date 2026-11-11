@@ -16,12 +16,8 @@ uv run python eval_cmu_roundtrip.py       # CMU -> MHR -> avatars: spatial relat
 
 VS Code: the repo's `.vscode/launch.json` has a "Spike: …" entry per script (run `uv sync` first).
 
-| File | What |
-|---|---|
-| `convert.py` | MHR skeleton state → VRM 1.0 normalized local rotations (`MhrToVrm`), VRM FK. |
-| `vrm_skeleton.py` | Minimal VRM 0.x/1.0 humanoid reader (0.x turned to face +Z). |
-| `cmu.py` | CMU ASF/AMC reader + FK. |
-| `fit_cmu.py` | pymomentum sequence IK: shared performer scales + per-frame pose. |
+The reusable modules (MHR loading, conversion, VRM reader, CMU reader and fit) moved to
+`core/` (`mtcore`); the scripts here import them from there.
 
 Known issue: `MHR.from_files` segfaults (pymomentum-cpu 0.1.114, torch 2.8 CPU) in
 `Character.with_blend_shape`; the spike loads the rig without blendshapes instead.

@@ -103,7 +103,7 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
        → service output (VMC/OSC over UDP + WebSocket)
 ```
 - Keep the detector frozen and add a learned **lifter** on top that outputs rotations directly. `[CLAUDE]` (owner's goal was direct skeleton output; this structure is Claude's proposal)
-- Rotation representation: **6D rotations** (better for training than Euler/quaternions). `[CLAUDE]`
+- Rotation representation: **6D rotations** (better for training than Euler/quaternions). `[USER]` (2026-11-01, for M1)
 - Strictly **causal** (no future frames). `[CLAUDE]`, consistent with `[USER]` latency requirement.
 
 ### 3.2 Base detector: MediaPipe vs RTMPose
@@ -296,14 +296,14 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
   - Contact preservation (hand-face, hands-together)
   - Reprojection error on unlabeled real video
 - Test sets: held-out synthetic, ARKit-labeled face/head recordings, unlabeled real seated video.
-- **Success criteria for the M1 go/no-go**, provisional `[USER]` (2026-11-01: "confirm it for now to get going"); revisit after more seated-v2 sessions. Measured after the same render filter as `baseline-rendered`, on at least three seated-v2 sessions, holding on each session. Body bones only (shoulders, arms); hand/finger targets belong to M4.
+- **Success criteria for the M1 go/no-go**, provisional `[USER]` (2026-11-01: "confirm it for now to get going"); revisit after more seated-v2 sessions. The model is measured as a replacement for both vspark's solver and its frontend One Euro filter: its output is upsampled to 60 Hz without smoothing (glide to the latest pose; harness `--system <name>-glide=<poses>`) and compared against `baseline-rendered`, what the avatar shows today `[USER]` (2026-11-08; was: both through the same render filter). The model through the render filter (`<name>-rendered`) is reported as a secondary number. On at least three seated-v2 sessions, holding on each session. Body bones only (shoulders, arms); hand/finger targets belong to M4.
   1. Rest noise with arms below the frame: at least 50% lower than baseline.
   2. Twitches per minute at rest: under 10 (baseline ~38–49).
   3. Rest noise with elbows in view: no worse than baseline.
-  4. Added lag vs detector: no more than baseline, ideally under 50 ms (harness resolution is coarse at 10 FPS).
+  4. Added lag vs detector: no more than baseline, ideally under 50 ms (harness resolution is coarse at 10 FPS). Note: the harness stamps speeds at frame-interval midpoints, so any causal 60 Hz display of a 10 FPS stream shows at least half an interval (~50 ms); glide measures ~90 ms, about the same as `baseline-rendered` (70–95 ms).
   5. Speed p90 in slow/fast segments: at least 80% of baseline (guards against over-smoothing).
   6. Model cost: under 2 ms per frame on a laptop CPU.
-  7. Hand position on the performer's own skeleton vs detected hands: at least 30% lower error than baseline.
+  7. Hand position `[USER]` (restated 2026-11-09; was: 3D error vs detected hands at least 30% lower than baseline, which favoured the baseline: it copies the very landmarks the metric compares against, including MediaPipe's unreliable depth). (a) Wrist error on the performer's own skeleton in the camera plane, against the image landmarks: no worse than baseline; guarded by the forearm direction in the image (errors along the viewing axis barely move the wrist in 2D). (b) Contact: during the seated-v2 contact segments (palms together, hand to face; true distance about 0), the avatar's distance on the performer's skeleton is below baseline. Threshold to set once sessions exist.
   8. Joint-limit violations: near zero in all conditions, including low confidence and tracking loss.
   9. Side-by-side video check by the owner: at least as natural, especially with arms below the frame.
 
@@ -396,7 +396,7 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 **Order change `[USER]` (2026-11-01):** M3 (MHR ↔ VRM spike) runs before M1, so M1 trains in MHR space from the start. M0's remaining items are deferred: more seated-v2 recordings happen alongside, the face-cost check moves to M4. The rest of the order is still `[CLAUDE]`.
 
 1. **M0: Baseline + evaluation harness.** Extract current tracking `[USER]`; implement metrics (§6); record a few seated test videos; measure baseline. Also re-check face blendshape cost with correct running mode.
-2. **M1: Body keypoint lifter POC.** MediaPipe pose keypoints → causal temporal head → rotations. Data: CMU + synthetic seated motion + simulated noise; short history window. Compare against baseline on real seated video. **Go/no-go point** for the learned approach.
+2. **M1: Body keypoint lifter POC.** Plan: `dev-notes/plans/m1-body-lifter.md`. Decisions `[USER]` (2026-11-01): landmarks synthesized from fitted MHR poses with a session-calibrated noise and framing model (rendering stays in M6); small causal model over time-offset history, 6D output, rotation + FK position + joint-limit + velocity losses (over a GRU); CMU low-travel clips weighted to upper-body activity plus spliced seated motion, performer scales varied within MHR limits; new `train/` uv project (CUDA) and spike code moved into a shared package. MediaPipe pose keypoints → causal temporal head → rotations. Data: CMU + synthetic seated motion + simulated noise; short history window. Compare against baseline on real seated video. **Go/no-go point** for the learned approach.
 3. **M2: Service skeleton** (can run parallel to M1). Python service owning camera; VMC over UDP + OSC over WebSocket; browser viewer with three-vrm; video-file source for repeatable tests; timestamps, sequence numbers, latest-wins.
 4. **M3: MHR ↔ VRM spike** (can run parallel). Decide canonical skeleton.
 5. **M4: Hand and face heads + merger.** Procedural hands; face head on top of MediaPipe blendshapes; modality dropout; residual merger; gaze angles; learned retargeting layer (§3.10a).
