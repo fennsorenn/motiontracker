@@ -42,13 +42,15 @@ Differences from the numpy generator: fixed 97-frame source crop (clips shorter 
 Extending: any change to a numpy synthesis stage must be mirrored in `gpugen` (and vice versa), with the comparison test kept passing; the numpy pipeline is the reference.
 
 ## Rendered sessions (`render`, implemented 2026-11-09)
-`python -m mttrain.render prepare|video|replay --out data/m1/renders/<set> [--n] [--seconds] [--seed] [--rest] [--fovs 50,65,80,95]`, with `tools/render/render_blender.py` (Blender 5.2 EEVEE, `blender -b`). Pipeline:
+`python -m mttrain.render prepare|video|replay|gt --out data/m1/renders/<set> [--n] [--seconds] [--seed] [--rest] [--fovs 50,65,80,95]`, with `tools/render/render_blender.py` (Blender 5.2 EEVEE, `blender -b`). Pipeline:
 1. `prepare`: held-out CMU clips (distinct clips) through the seated pipeline at 30 fps; camera from the training desk-camera sampler; writes `gt.jsonl` (camera-relative ground-truth VRM track).
 2. Blender renders frames: MHR mesh skinned with pymomentum, plain skin material, wall, key light.
 3. `video`: ffmpeg → mirrored VP9 video.
 4. `replay`: recorder replay in headless Chrome (`tools/recorder/test/drive_headless.mjs`, optional timeout argument) → landmarks from the exact live MediaPipe build (`modules/recorder.md`).
 
 `--contact`: contact choreography instead of CMU clips (see Contacts). `--rest`: held posture with both arms in rest templates (`seated.seat(force_rest=...)`). `--fovs` (commit f666bf2): each sequence written once per horizontal FOV as `seqNN_fovFF`, same motion, appearance and camera line, only the perspective changes. Evaluate with `mteval evaluate --gt gt.jsonl` (`modules/eval-harness.md`). Heavy steps run under `tools/guarded-run.sh`. Renders are CMU-derived: `data/m1/renders`, never committed. Sets so far: `v1` (motion, 8 x 20 s), `rest1` (6 x 15 s), `fov1` (3 clips x FOV 50/65/80/95), `contact1` (contact choreography); results in the plan, steps 7c-7d.
+
+`gt` (added 2026-11-11) rewrites `gt.jsonl` from `seq.npz` without re-rendering; use it after any MHR → VRM conversion change. All four sets were regenerated after the `torso-rest-pose` fix; model poses inferred on renders before that (`m1-v4..v7`) are stale for position-based metrics (per-bone angle errors are unaffected).
 
 Known limits: the seated idle motion is a rough AR(1), so rest ground truth is never still (smoothing it is an open owner decision). Plain mannequin renders flatten depth more than real video does (see below).
 

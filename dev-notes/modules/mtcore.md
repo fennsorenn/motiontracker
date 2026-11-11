@@ -12,7 +12,7 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 |---|---|
 | `paths.py` | Repo and data locations. |
 | `mhr.py` | Loads the MHR rig via pymomentum **without blendshapes** (`MHR.from_files` segfaults with them, pymomentum 0.1.114 CPU), FK (`skeleton_state`, `positions`), `[Limits]` parser (`limits`), `FLEX_T` (flexible-translation parameters, kept at zero). |
-| `convert.py` | MHR skeleton state → VRM 1.0 normalized local rotations (`MhrToVrm`), VRM FK, quaternion helpers. Method: `modules/mhr-vrm-spike.md` (Conversion). |
+| `convert.py` | MHR skeleton state → VRM 1.0 normalized local rotations (`MhrToVrm`), VRM FK, quaternion helpers. `REST_ALIGNED` (torso + shoulders) map rest-to-rest, other bones use direction matching. Method: `modules/mhr-vrm-spike.md` (Conversion). |
 | `vrm.py` | Minimal VRM 0.x/1.0 humanoid reader (0.x turned to face +Z). |
 | `cmu.py` | CMU ASF/AMC reader + FK (cm), with optional per-frame rotations. |
 | `cmu_fit.py` | CMU clip → MHR (pymomentum sequence IK). See below. |
@@ -34,7 +34,7 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 `LandmarkModel` computes MediaPipe's 33 pose landmarks from MHR joints (shoulders, elbows, wrists, hand points, hips, ...) and from mesh vertices (face points, etc.) that are carried rigidly with their joint, so no full mesh skinning is needed per frame. MediaPipe's systematic placement differences from MHR anatomy are not modelled here; that is `mttrain.mpstyle` (`modules/train.md`).
 
 ## Tests
-`core/tests/` (`uv run pytest`): conversion round trip, CMU fit, landmarks, quaternions. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
+`core/tests/` (`uv run pytest`): conversion round trip (direction match for non-`REST_ALIGNED` bones; MHR rest → identity locals and torso following MHR world rotation for `REST_ALIGNED`; arm world rotations equal to all-direction matching), CMU fit, landmarks, quaternions. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
 
 ## Extending
 - New reusable code that more than one project (spike, `train/`, later the service) needs goes here, not into a consumer.
