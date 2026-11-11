@@ -113,3 +113,69 @@ def test_visibility_lags_when_leaving_the_frame():
     _, _, vis, _ = observe(rng, np.zeros((T, 33, 3)), image, np.full(T, 0.1), quiet)
     v = vis[:, I("left_wrist")]
     assert v[9] > 0.95 and 0.3 < v[11] < 0.95 and v[29] < 0.1  # decays over several frames
+
+
+def _head_vs_chest(X):
+    """Head-vs-chest rotation angle (deg) from landmarks: chest frame from shoulders and hips, head frame
+    from ears, eyes and mouth (as mttrain.headcal)."""
+    def fr(xa, up):
+        x = xa / np.linalg.norm(xa, axis=-1, keepdims=True)
+        z = np.cross(x, up); z /= np.linalg.norm(z, axis=-1, keepdims=True)
+        return np.stack([x, np.cross(z, x), z], -1)
+    C = fr(X[:, I("left_shoulder")] - X[:, I("right_shoulder")],
+           X[:, [I("left_shoulder"), I("right_shoulder")]].mean(1) - X[:, [I("left_hip"), I("right_hip")]].mean(1))
+    H = fr(X[:, I("left_ear")] - X[:, I("right_ear")],
+           X[:, [I("left_eye"), I("right_eye")]].mean(1) - X[:, [I("mouth_left"), I("mouth_right")]].mean(1))
+    return np.einsum("tji,tjk->tik", C, H)
+
+
+def test_rotvec_round_trip():
+    from mttrain.mpstyle import mat_to_rotvec, rotvec_to_mat
+    v = np.random.default_rng(0).normal(0, 0.8, (50, 3))
+    assert np.abs(mat_to_rotvec(rotvec_to_mat(v)) - v).max() < 1e-9
+
+
+@pytest.mark.skipif(not (MHR_ASSETS / "lod1.fbx").exists(), reason="MHR assets missing")
+def test_head_lock_gain():
+    """Gain 1 without noise keeps the landmarks; gain 0 makes the face rigid with the chest (head-vs-chest
+    rotation from landmarks as at rest) and leaves every other point alone."""
+    from mtcore.landmarks import LandmarkModel
+    from mtcore.mhr import load, skeleton_state
+    from mttrain.mpstyle import FACE, HeadRig, head_lock
+    ch = load()
+    pn, jn = list(ch.parameter_transform.names), list(ch.skeleton.joint_names)
+    rest = skeleton_state(ch, np.zeros(len(pn)))
+    lmod = LandmarkModel(ch, rest)
+    rig = HeadRig(jn, rest, lmod)
+    rng = np.random.default_rng(2)
+    mp = np.zeros((6, len(pn)))
+    for k in ("neck_twist", "neck_lean", "neck_bend", "head_twist", "head_lean", "head_bend", "spine_twist0",
+              "spine_bend1", "spine_lean0", "l_clavicle_rz", "root_ry", "root_rx"):
+        mp[:, pn.index(k)] = rng.uniform(-0.3, 0.3, 6)
+    st = skeleton_state(ch, mp)
+    X = lmod(st) / 100.0
+    delta, pivot = rig(st, X)
+    d0, _ = rig(rest[None], lmod(rest[None]) / 100.0)
+    assert np.abs(d0 - np.eye(3)).max() < 1e-5
+    zero = np.zeros((6, 3))
+    assert np.abs(head_lock(X, delta, pivot, 1.0, zero) - X).max() < 1e-6  # float32 skeleton states
+    L = head_lock(X, delta, pivot, 0.0, zero)
+    other = [k for k in range(33) if k not in FACE]
+    assert np.abs(L[:, other] - X[:, other]).max() == 0
+    r0 = _head_vs_chest(lmod(rest[None]) / 100.0)[0]
+    ang = lambda A, B: np.degrees(np.arccos(np.clip((np.trace(A.T @ B) - 1) / 2, -1, 1)))
+    assert max(ang(r0, r) for r in _head_vs_chest(L)) < 0.01
+    assert max(ang(r0, r) for r in _head_vs_chest(X)) > 10
+
+
+def test_head3d_mask():
+    from mttrain.features import HEAD3D_DIMS, frame_features
+    rng = np.random.default_rng(0)
+    T = 5
+    world, image = rng.normal(0, 0.3, (T, 33, 3)), rng.uniform(0, 1, (T, 33, 3))
+    vis, present = np.ones((T, 33)), np.ones(T, bool)
+    full = frame_features(np.arange(T) * 0.1, world, image, vis, present)
+    masked = frame_features(np.arange(T) * 0.1, world, image, vis, present, head3d=False)
+    keep = [k for k in range(full.shape[1]) if k not in HEAD3D_DIMS]
+    assert (masked[:, HEAD3D_DIMS] == 0).all() and np.array_equal(masked[:, keep], full[:, keep])
+    assert len(HEAD3D_DIMS) == 44 and (full[:, HEAD3D_DIMS] != 0).any()

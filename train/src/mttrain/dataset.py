@@ -104,7 +104,7 @@ class Generator:
             rot, pos, off = self.te(s["states"][tgt], s["camera"].R)
             cof = self.te.contact_offsets(s["states"][tgt], s["camera"].R, self.lm(s["states"][tgt]))
             times = s["t"]
-            feats = frame_features(times, s["world"], s["image"], s["vis"], s["present"])
+            feats = frame_features(times, s["world"], s["image"], s["vis"], s["present"], s["head3d"])
             idx, age = history_indices(times, tgt)
             if rng.random() < 0.1:  # session start: no history before a random point
                 cut = rng.uniform(times[0], times[tgt[0]])

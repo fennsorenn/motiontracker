@@ -5,7 +5,7 @@ import numpy as np
 from mtcore.mhr import skeleton_state
 
 from .camera import sample_desk_camera, shoulder_distance
-from .mpstyle import Style
+from .mpstyle import HeadRig, Style, head_lock, head_noise
 from .noise import NoiseConfig, observe
 
 
@@ -21,22 +21,43 @@ def frame_times(rng, duration, fps=10.0, drop_rate=0.03):
     return t[keep]
 
 
+_RIGS = {}
+
+
+def _rig(ch, landmark_model):
+    key = (id(ch), id(landmark_model))
+    if key not in _RIGS:
+        rest = skeleton_state(ch, np.zeros(len(ch.parameter_transform.names)))
+        _RIGS[key] = HeadRig(ch.skeleton.joint_names, rest, landmark_model)
+    return _RIGS[key]
+
+
 def synthesize(rng, ch, landmark_model, mp, src_fps=30.0, fps=None, style=None, noise=None, camera=None):
     """One observed sequence from model parameters mp (N, P) sampled at src_fps.
 
     Returns dict: t (T,) s, states (T, J, 8) MHR skeleton states (targets), world/image (T, 33, 3)
-    noisy MediaPipe-style landmarks, vis (T, 33), present (T,), clean_world, clean_image."""
+    noisy MediaPipe-style landmarks, vis (T, 33), present (T,), clean_world, clean_image, head3d
+    (False: the 3D head points are to be dropped from the model input, features.frame_features)."""
     fps = fps or float(rng.uniform(8, 30))
     t = frame_times(rng, len(mp) / src_fps, fps)
     idx = np.minimum(np.round(t * src_fps).astype(int), len(mp) - 1)
     states = skeleton_state(ch, mp[idx])
     X = landmark_model(states) / 100.0  # MHR world, metres
     style = style or Style.sample(rng)
-    X = style.placement(X)
-    cam = camera or sample_desk_camera(rng, X)
-    image, _ = cam.project(X)
-    flat = style.flatten(cam.world_landmarks(X), shoulder_distance(cam, X))
-    image[..., 2] = cam.flat_image_z(X, flat)
+    # MediaPipe's partial head response, separately for the image and the world landmarks
+    Xs = {}
+    for space in ("image", "world"):
+        g, sd = style.head_gain[space], style.head_noise_deg[space]
+        if g == 1.0 and sd == 0.0:
+            Xs[space] = X
+        else:
+            delta, pivot = _rig(ch, landmark_model)(states, X)
+            Xs[space] = head_lock(X, delta, pivot, g, head_noise(rng, t, sd))
+    Xi, Xw = style.placement(Xs["image"]), style.placement(Xs["world"])
+    cam = camera or sample_desk_camera(rng, Xi)
+    image, _ = cam.project(Xi)
+    flat = style.flatten(cam.world_landmarks(Xw), shoulder_distance(cam, Xw))
+    image[..., 2] = cam.flat_image_z(Xi, flat)
     world = style.world(flat)
     dt = np.diff(t, prepend=t[0] - 1.0 / fps)
     W, Im, vis, present = observe(rng, world, image, dt, noise or NoiseConfig.sample(rng))
@@ -44,4 +65,4 @@ def synthesize(rng, ch, landmark_model, mp, src_fps=30.0, fps=None, style=None, 
     image[..., 2] *= style.image_z  # MediaPipe's exaggerated image depth; scales its noise too
     Im[..., 2] *= style.image_z
     return dict(t=t, states=states, world=W, image=Im, vis=vis, present=present,
-                clean_world=world, clean_image=image, camera=cam)
+                clean_world=world, clean_image=image, camera=cam, head3d=style.head3d)

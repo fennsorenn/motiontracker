@@ -29,8 +29,8 @@ def causal_scale(times, world, vis, present, valid):
     return out
 
 
-def frame_features(times, world, image, vis, present, valid):
-    """(B, T, FRAME_DIM)."""
+def frame_features(times, world, image, vis, present, valid, head3d=None):
+    """(B, T, FRAME_DIM). head3d (B,) bool: False drops the 3D head points (features.HEAD3D_DIMS)."""
     B, T = times.shape
     s = causal_scale(times, world, vis, present, valid)
     f = torch.cat([
@@ -40,6 +40,9 @@ def frame_features(times, world, image, vis, present, valid):
         present[..., None].float(),
     ], -1)
     f[..., :-1] = torch.where(present[..., None], f[..., :-1], torch.zeros_like(f[..., :-1]))
+    if head3d is not None:
+        dims = torch.tensor(F.HEAD3D_DIMS, device=f.device)
+        f[..., dims] = torch.where(head3d[:, None, None], f[..., dims], torch.zeros_like(f[..., dims]))
     return f.clamp(-10, 10)
 
 

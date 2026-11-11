@@ -5,6 +5,9 @@ Per frame (all causal):
   (frames with both shoulders visible); body-size invariant, robust to one bad frame;
 - image landmarks: x, y centred on the frame, z (MediaPipe's relative depth);
 - visibility, and whether the detector returned a pose at all.
+The 3D head points (world xyz and image z of the 11 face landmarks) can be dropped (head3d=False,
+zeros): MediaPipe's 3D head barely follows the head (mttrain.mpstyle), so models are trained with them
+dropped for some sequences and can run live either way.
 History: for a target frame at time t, the latest frame at or before t - offset for each offset in
 OFFSETS, with its actual age (webcams drop frames; parts may run at other rates later).
 """
@@ -16,6 +19,8 @@ SCALE_WINDOW = 2.0
 DEFAULT_SCALE = 0.33  # metres, recorded session's median MediaPipe shoulder width
 FRAME_DIM = 33 * 3 + 33 * 3 + 33 + 1
 L_SH, R_SH = 11, 12
+HEAD = list(range(11))  # face landmarks (MP33[:11])
+HEAD3D_DIMS = [3 * k + c for k in HEAD for c in range(3)] + [99 + 3 * k + 2 for k in HEAD]  # world xyz, image z
 
 
 def causal_scale(times, world, vis, present):
@@ -32,8 +37,8 @@ def causal_scale(times, world, vis, present):
     return out
 
 
-def frame_features(times, world, image, vis, present):
-    """Observations (T, ...) -> (T, FRAME_DIM) float32."""
+def frame_features(times, world, image, vis, present, head3d=True):
+    """Observations (T, ...) -> (T, FRAME_DIM) float32. head3d=False: 3D head points zeroed."""
     s = causal_scale(times, world, vis, present)
     f = np.concatenate([
         (world / s[:, None, None]).reshape(len(times), -1),
@@ -42,6 +47,8 @@ def frame_features(times, world, image, vis, present):
         present[:, None].astype(float),
     ], 1)
     f[~present, :-1] = 0.0
+    if not head3d:
+        f[:, HEAD3D_DIMS] = 0.0
     return np.clip(f, -10, 10).astype(np.float32)
 
 

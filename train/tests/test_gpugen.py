@@ -157,3 +157,38 @@ def test_generator_matches_numpy_statistically():
         close(ang(ref["rot"][:, :, j]), ang(gpu["rot"][:, :, j]), f"joint {j}")
     close(ref["dt"], gpu["dt"], "dt")
     assert abs(ref["seated"].mean() - gpu["seated"].mean()) < 0.08
+
+
+def test_head_lock_matches_numpy():
+    from mttrain import mpstyle as ms
+    from mttrain.gpugen import geom
+    from mttrain.features import frame_features
+    from mttrain.gpugen.features import frame_features as gpu_features
+    ch, pn, rest, lm = _setup()
+    jn = list(ch.skeleton.joint_names)
+    rng = np.random.default_rng(4)
+    B, T = 2, 6
+    mp = rng.normal(0, 0.2, (B, T, len(pn)))
+    mp[..., [i for i, n in enumerate(pn) if n.startswith("scale_")]] = 0
+    states = skeleton_state(ch, mp.reshape(B * T, -1)).reshape(B, T, -1, 8)
+    X = lm(states) / 100.0
+    st = torch.tensor(states, dtype=torch.float32)
+    Xt = torch.tensor(X, dtype=torch.float32)
+    d_t, p_t = geom.HeadRig(jn, rest, lm)(st, Xt)
+    rig = ms.HeadRig(jn, rest, lm)
+    noise = rng.normal(0, 0.05, (B, T, 3))
+    gain = np.array([0.2, 0.7])
+    L_t = geom.head_lock(torch.tensor(X, dtype=torch.float32), d_t, p_t, torch.tensor(gain, dtype=torch.float32),
+                         torch.tensor(noise, dtype=torch.float32)).numpy()
+    for b in range(B):
+        d, p = rig(states[b], X[b])
+        assert np.abs(d_t[b].numpy() - d).max() < 1e-4 and np.abs(p_t[b].numpy() - p).max() < 1e-5
+        assert np.abs(L_t[b] - ms.head_lock(X[b], d, p, gain[b], noise[b])).max() < 1e-4
+    # head 3D mask
+    times = np.arange(T) * 0.1
+    world, image = rng.normal(0, 0.3, (B, T, 33, 3)), rng.uniform(0, 1, (B, T, 33, 3))
+    vis, present = np.ones((B, T, 33)), np.ones((B, T), bool)
+    f_t = gpu_features(*(torch.tensor(v, dtype=torch.float32) for v in (np.tile(times, (B, 1)), world, image, vis)),
+                       torch.tensor(present), torch.ones(B, T, dtype=torch.bool), torch.tensor([True, False])).numpy()
+    for b, h in enumerate((True, False)):
+        assert np.abs(f_t[b] - frame_features(times, world[b], image[b], vis[b], present[b], h)).max() < 1e-5

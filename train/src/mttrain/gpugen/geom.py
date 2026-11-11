@@ -45,6 +45,80 @@ class Landmarks(torch.nn.Module):
         return st[..., :3] + st[..., 7:8] * quat_rotate(st[..., 3:7], self.offset.expand_as(st[..., :3]))
 
 
+# ── head response (mpstyle.head_lock) ──────────────────────────────────────────────────────────────
+
+
+def rotvec_to_mat(v):
+    th = v.norm(dim=-1, keepdim=True)
+    k = v / th.clamp_min(1e-12)
+    z = torch.zeros_like(k[..., 0])
+    K = torch.stack([torch.stack([z, -k[..., 2], k[..., 1]], -1), torch.stack([k[..., 2], z, -k[..., 0]], -1),
+                     torch.stack([-k[..., 1], k[..., 0], z], -1)], -2)
+    th = th[..., None]
+    return torch.eye(3, device=v.device) + torch.sin(th) * K + (1 - torch.cos(th)) * K @ K
+
+
+def mat_to_rotvec(M):
+    c = ((M.diagonal(dim1=-2, dim2=-1).sum(-1) - 1) / 2).clamp(-1, 1)
+    th = torch.arccos(c)
+    w = torch.stack([M[..., 2, 1] - M[..., 1, 2], M[..., 0, 2] - M[..., 2, 0], M[..., 1, 0] - M[..., 0, 1]], -1)
+    s = torch.sin(th)
+    return w * torch.where(s > 1e-6, th / (2 * s).clamp_min(1e-12), torch.full_like(th, 0.5))[..., None]
+
+
+def head_lock(X, delta, pivot, gain, noise):
+    """mpstyle.head_lock, batched: X (B, T, 33, 3), delta (B, T, 3, 3), pivot (B, T, 3), gain (B,),
+    noise (B, T, 3)."""
+    want = rotvec_to_mat(noise) @ rotvec_to_mat(gain[:, None, None] * mat_to_rotvec(delta))
+    M = want @ delta.transpose(-1, -2)
+    X = X.clone()
+    X[..., FACE, :] = pivot[..., None, :] + torch.einsum("btij,btkj->btki", M, X[..., FACE, :] - pivot[..., None, :])
+    return X
+
+
+def landmark_frames(X):
+    """mpstyle.landmark_frames, torch."""
+    def fr(xa, up):
+        x = xa / xa.norm(dim=-1, keepdim=True)
+        z = torch.cross(x, up, dim=-1)
+        z = z / z.norm(dim=-1, keepdim=True)
+        return torch.stack([x, torch.cross(z, x, dim=-1), z], -1)
+    mean = lambda *ns: X[..., [I[n] for n in ns], :].mean(-2)
+    C = fr(X[..., I["left_shoulder"], :] - X[..., I["right_shoulder"], :],
+           mean("left_shoulder", "right_shoulder") - mean("left_hip", "right_hip"))
+    H = fr(X[..., I["left_ear"], :] - X[..., I["right_ear"], :],
+           mean("left_eye", "right_eye") - mean("mouth_left", "mouth_right"))
+    return C, H
+
+
+class HeadRig(torch.nn.Module):
+    """mpstyle.HeadRig, batched: states (B, T, J, 8), true landmarks X (B, T, 33, 3) metres ->
+    delta (B, T, 3, 3), neck (B, T, 3) metres."""
+
+    def __init__(self, joint_names, rest_state, landmark_model):
+        super().__init__()
+        self.n = list(joint_names).index("c_neck")
+        C0, H0 = ms.landmark_frames(landmark_model(rest_state[None])[0] / 100.0)
+        self.register_buffer("rest_rel", torch.tensor(C0.T @ H0, dtype=torch.float32))
+
+    def forward(self, states, X):
+        C, H = landmark_frames(X)
+        return H @ self.rest_rel.T @ C.transpose(-1, -2), states[..., self.n, :3] / 100.0
+
+
+def head_noise(gen, dt, sigma_deg, tau=ms.HEAD_NOISE_TAU):
+    """mpstyle.head_noise, batched: dt (B, T) s between frames, sigma_deg (B,) -> (B, T, 3) rad."""
+    B, T = dt.shape
+    s = torch.deg2rad(sigma_deg)[:, None]
+    e = torch.randn(B, T, 3, generator=gen, device=dt.device) * s[..., None]
+    r = torch.exp(-dt / tau)
+    out = torch.empty(B, T, 3, device=dt.device)
+    out[:, 0] = e[:, 0]
+    for t in range(1, T):
+        out[:, t] = r[:, t, None] * out[:, t - 1] + torch.sqrt(1 - r[:, t, None] ** 2) * e[:, t]
+    return out
+
+
 # ── MediaPipe style ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -52,13 +126,15 @@ class Style:
     """Per-sequence MediaPipe biases, as mpstyle.Style but with (B, ...) tensors."""
 
     def __init__(self, hip_widen, image_z, face_placement, face_world, limb, offset, depth_gain, depth_bias,
-                 depth_relax):
+                 depth_relax, head_gain, head_noise_deg, head3d):
         self.hip_widen, self.image_z = hip_widen, image_z  # (B,)
         self.face_placement, self.face_world = face_placement, face_world  # (B, 33)
         self.limb = limb  # name -> (B,)
         self.offset = offset  # (B, 33, 3) metres
         self.depth_gain, self.depth_bias = depth_gain, depth_bias  # (B, K) per ms.DEPTH_KEYS, bias metres
         self.depth_relax = depth_relax  # (B,)
+        self.head_gain, self.head_noise_deg = head_gain, head_noise_deg  # space -> (B,)
+        self.head3d = head3d  # (B,) bool
 
     @classmethod
     def from_numpy(cls, styles, device=None):
@@ -67,10 +143,14 @@ class Style:
                    t([s.face_placement for s in styles]), t([s.face_world for s in styles]),
                    {k: t([s.limb[k] for s in styles]) for k in ms.LIMB}, t([s.offset for s in styles]),
                    t([s.depth_gain for s in styles]), t([s.depth_bias for s in styles]),
-                   t([s.depth_relax for s in styles]))
+                   t([s.depth_relax for s in styles]),
+                   {k: t([s.head_gain[k] for s in styles]) for k in ms.HEAD_GAIN},
+                   {k: t([s.head_noise_deg[k] for s in styles]) for k in ms.HEAD_NOISE_DEG},
+                   torch.tensor([s.head3d for s in styles], device=device))
 
     @classmethod
-    def sample(cls, B, gen, device, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25):
+    def sample(cls, B, gen, device, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25,
+               head_spread=0.4):
         ln = lambda *shape: torch.exp(torch.randn(*shape, generator=gen, device=device) * spread)
         fp = torch.tensor(ms._factors(ms.FACE_PLACEMENT), dtype=torch.float32, device=device).repeat(B, 1)
         fw = torch.tensor(ms._factors(ms.FACE_WORLD), dtype=torch.float32, device=device).repeat(B, 1)
@@ -85,7 +165,11 @@ class Style:
         gain = (g0 * torch.exp(torch.randn(B, K, generator=gen, device=device) * depth_spread)).clamp(0.05, 1.0)
         bias = b0 + torch.randn(B, K, generator=gen, device=device) * (0.01 + 0.3 * b0.abs())
         relax = torch.rand(B, generator=gen, device=device)
-        return cls(ms.HIP_WIDEN * ln(B), image_z, fp, fw, limb, offset, gain, bias, relax)
+        hs = lambda: torch.exp(torch.randn(B, generator=gen, device=device) * head_spread)
+        head_gain = {k: (g * hs()).clamp(0.02, 1.0) for k, g in ms.HEAD_GAIN.items()}
+        head_noise = {k: v * hs() for k, v in ms.HEAD_NOISE_DEG.items()}
+        head3d = torch.rand(B, generator=gen, device=device) >= ms.HEAD3D_DROP
+        return cls(ms.HIP_WIDEN * ln(B), image_z, fp, fw, limb, offset, gain, bias, relax, head_gain, head_noise, head3d)
 
     @staticmethod
     def _lateral(X, factors):

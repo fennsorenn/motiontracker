@@ -7,6 +7,9 @@ the rest:
   clip's own baseline carry over damped (leaning to reach, swivelling), plus a random slouch.
   MHR's root pitch/roll are body-relative (applied after yaw), so the deviations transfer directly.
 - Idle life: breathing and slow sway on the spine and pelvis.
+- Head life: slow extra turns, nods and tilts on the neck and head with a per-sequence activity
+  level (added 2026-11-11: CMU's head barely tilts relative to the chest, +-9 deg p5-p95, and turns
+  and nods +-25 deg; webcam users turn, nod and tilt more).
 - Rest postures: per arm, stretches of hands in the lap, on the desk, or hanging beside the chair,
   blended in and out with minimum-jerk transitions. Arms resting below the frame is a normal
   streaming posture (PLAN.md §3.3), and standing mocap barely contains it.
@@ -27,6 +30,10 @@ REST = {
                 "uparm_rz": -0.564, "elbow_bend": -0.082, "lowarm_twist": 0.040, "wrist_ry": -0.239,
                 "wrist_rz": -0.001},
 }
+# head life: rad std at full activity, AR time constant s (twist = turn, bend = nod, lean = tilt)
+HEAD_LIFE = {"neck_twist": 0.15, "head_twist": 0.25, "neck_bend": 0.10, "head_bend": 0.12, "neck_lean": 0.15,
+             "head_lean": 0.15}
+HEAD_LIFE_TAU = 1.0
 ARM_KEYS = ["clavicle_rx", "clavicle_ry", "clavicle_rz", "uparm_twist", "uparm_ry", "uparm_rz", "elbow_bend",
             "lowarm_twist", "wrist_ry", "wrist_rz"]
 LEG_ZERO = ["upleg_twist", "upleg_ry", "upleg_rz", "knee_bend", "lowleg_twist", "foot_bend", "foot_lean0",
@@ -120,6 +127,9 @@ def seat(rng, pn, mp, fps=30.0, limits=None, force_rest=None):
     out[:, P["spine_bend1"]] += breath
     out[:, P["spine_lean0"]] += _slow(rng, n, fps, 0.02, 2.5)
     out[:, P["spine_twist0"]] += _slow(rng, n, fps, 0.02, 2.5)
+    act = rng.uniform(0, 1)
+    for k, sd in HEAD_LIFE.items():
+        out[:, P[k]] += act * _slow(rng, n, fps, sd, HEAD_LIFE_TAU)
 
     # rest postures per arm
     for k, s in enumerate("lr"):

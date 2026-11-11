@@ -5,7 +5,7 @@ import math
 
 import torch
 
-from ..seated import ARM_KEYS, LEG_ZERO, REST
+from ..seated import ARM_KEYS, HEAD_LIFE, HEAD_LIFE_TAU, LEG_ZERO, REST
 
 REST_NAMES = list(REST)
 
@@ -103,9 +103,11 @@ class Seater(torch.nn.Module):
         dev = mp.device
         P = self.P
         u = lambda lo, hi: lo + (hi - lo) * torch.rand(B, 1, generator=gen, device=dev)
-        # slow signals: legs (l, r) x 3, pelvis 6, spine 2, arm rest targets (l, r) x 10
-        sig = [0.04, 0.08, 0.03] * 2 + [0.015, 0.01, 0.03, 0.02, 0.01, 0.02] + [0.02, 0.02] + [0.02] * 20
-        tau = [3.0, 3.0, 3.0] * 2 + [2.0, 2.0, 4.0, 3.0, 3.0, 3.0] + [2.5, 2.5] + [1.5] * 20
+        # slow signals: legs (l, r) x 3, pelvis 6, spine 2, arm rest targets (l, r) x 10, head life 6
+        sig = [0.04, 0.08, 0.03] * 2 + [0.015, 0.01, 0.03, 0.02, 0.01, 0.02] + [0.02, 0.02] + [0.02] * 20 \
+            + list(HEAD_LIFE.values())
+        tau = [3.0, 3.0, 3.0] * 2 + [2.0, 2.0, 4.0, 3.0, 3.0, 3.0] + [2.5, 2.5] + [1.5] * 20 \
+            + [HEAD_LIFE_TAU] * len(HEAD_LIFE)
         S = slow_signals(gen, B, n, fps, sig, tau, dev)
         out = mp.clone()
         for k, s in enumerate("lr"):
@@ -129,6 +131,9 @@ class Seater(torch.nn.Module):
         out[:, :, P["spine_bend1"]] += breath
         out[:, :, P["spine_lean0"]] += S[:, 12]
         out[:, :, P["spine_twist0"]] += S[:, 13]
+        act = u(0, 1)
+        for j, key in enumerate(HEAD_LIFE):
+            out[:, :, P[key]] += act * S[:, 34 + j]
         for k, s in enumerate("lr"):
             w, names = rest_weights(gen, B, n, fps, dev)
             # one template variation per sequence and template (seated: per arm, per template name)

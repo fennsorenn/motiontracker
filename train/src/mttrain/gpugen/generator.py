@@ -24,7 +24,8 @@ from ..dataset import SRC_FPS, source_table
 from ..features import OFFSETS
 from . import features as GF
 from .fk import MhrFK
-from .geom import Landmarks, Style, Targets, flat_image_z, project, sample_desk_camera, shoulder_distance, world_landmarks
+from .geom import (HeadRig, Landmarks, Style, Targets, flat_image_z, head_lock, head_noise, project, sample_desk_camera,
+                   shoulder_distance, world_landmarks)
 from .motion import Seater
 from .observe import observe, sample_config
 
@@ -39,8 +40,10 @@ class GpuGenerator:
         pn = list(ch.parameter_transform.names)
         jn = list(ch.skeleton.joint_names)
         rest = skeleton_state(ch, np.zeros(len(pn)))
-        self.lm = Landmarks(LandmarkModel(ch, rest)).to(self.dev)
+        lmodel = LandmarkModel(ch, rest)
+        self.lm = Landmarks(lmodel).to(self.dev)
         self.targets = Targets(jn, rest).to(self.dev)
+        self.head_rig = HeadRig(jn, rest, lmodel).to(self.dev)
         keep = sorted(set(self.lm.joint.tolist()) | set(self.targets.idx.tolist()))
         self.fk = MhrFK(ch, keep).to(self.dev)
         self.seater = Seater(pn, limits()).to(self.dev)
@@ -93,15 +96,21 @@ class GpuGenerator:
         states = self.fk(mp.gather(1, src[..., None].expand(B, self.Tmax, mp.shape[-1])))  # (B, T, J, 8)
         X = self.lm(states) / 100.0
         style = Style.sample(B, self.gen, dev)
-        X = style.placement(X)
-        Xn = torch.where(valid[..., None, None], X, torch.full_like(X, math.nan))
-        R, t, fx = sample_desk_camera(Xn, self.gen)
-        image = project(X, R, t, fx)
-        flat = style.flatten(world_landmarks(X, R, t), shoulder_distance(Xn, R, t))
-        image[..., 2] = flat_image_z(X, R, t, fx, flat)
-        world = style.world(flat)
         dt = torch.diff(tz, dim=1, prepend=(tz[:, :1] - 1.0 / fps[:, None]))
         dt = torch.where(valid, dt, (1.0 / fps)[:, None].expand_as(dt))
+        # MediaPipe's partial head response, separately for the image and the world landmarks
+        delta, pivot = self.head_rig(states, X)
+        Xi = style.placement(head_lock(X, delta, pivot, style.head_gain["image"],
+                                       head_noise(self.gen, dt, style.head_noise_deg["image"])))
+        Xw = style.placement(head_lock(X, delta, pivot, style.head_gain["world"],
+                                       head_noise(self.gen, dt, style.head_noise_deg["world"])))
+        Xn = torch.where(valid[..., None, None], Xi, torch.full_like(Xi, math.nan))
+        R, t, fx = sample_desk_camera(Xn, self.gen)
+        image = project(Xi, R, t, fx)
+        Xwn = torch.where(valid[..., None, None], Xw, torch.full_like(Xw, math.nan))
+        flat = style.flatten(world_landmarks(Xw, R, t), shoulder_distance(Xwn, R, t))
+        image[..., 2] = flat_image_z(Xi, R, t, fx, flat)
+        world = style.world(flat)
         W, Im, vis, present = observe(self.gen, world, image, dt, sample_config(B, self.gen, dev))
         Im[..., 2] = Im[..., 2] * style.image_z[:, None, None]
         present = present & valid
@@ -111,7 +120,7 @@ class GpuGenerator:
         st_t = states.gather(1, tgt[..., None, None].expand(B, K, *states.shape[2:]))
         rot, pos, off = self.targets(st_t, R)
         cof = self.targets.contact_offsets(st_t, R, self.lm(st_t))
-        feats = GF.frame_features(times, W, Im, vis, present, valid)
+        feats = GF.frame_features(times, W, Im, vis, present, valid, style.head3d)
         idx, age = GF.history_indices(times, tgt)
         # session start: no history before a random point, for 10% of samples
         cut_on = torch.rand(B, generator=self.gen, device=dev) < 0.1

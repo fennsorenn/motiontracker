@@ -1,7 +1,7 @@
 """Run a trained M1 lifter on a recorded session -> VRM pose track for the evaluation harness.
 
     uv run python -m mttrain.infer data/m1/runs/<name>/best.pt sessions/<session> [--out poses.jsonl]
-        [--avatar AvatarSample_D]
+        [--avatar AvatarSample_D] [--no-head3d]
 
 Causal: every frame sees only itself and earlier frames (features are causal; batching all frames at
 once gives the same result as streaming). Output lines match the baseline's pose tracks:
@@ -75,8 +75,8 @@ class Runner:
         self.out_idx = [self.jn.index(j) for j in OUT_JOINTS]
         self.conv = MhrToVrm(self.jn, rest, load_vrm(AVATARS / f"{avatar}.vrm")[2])
 
-    def predict(self, times, world, image, vis, present):
-        feats = frame_features(times, world, image, vis, present)
+    def predict(self, times, world, image, vis, present, head3d=True):
+        feats = frame_features(times, world, image, vis, present, head3d)
         idx, age = history_indices(times, np.arange(len(times)))
         x = torch.from_numpy(model_input(feats, idx, age))
         with torch.no_grad():
@@ -126,10 +126,12 @@ def main():
     ap.add_argument("session", type=Path)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--avatar", default="AvatarSample_D")
+    ap.add_argument("--no-head3d", action="store_true",
+                    help="drop the 3D head points from the input (models trained with head 3D dropout, m1-v9+)")
     a = ap.parse_args()
     r = Runner(a.ckpt, a.avatar)
     times, world, image, vis, present = read_session(a.session)
-    rot, conf = r.predict(times, world, image, vis, present)
+    rot, conf = r.predict(times, world, image, vis, present, head3d=not a.no_head3d)
     bones = r.vrm(rot)
     out = a.out or a.ckpt.parent / f"{a.session.name}.poses.jsonl"
     with open(out, "w") as f:
@@ -137,7 +139,7 @@ def main():
             f.write(json.dumps({"t": round(t * 1000, 1),
                                 "bones": {b: bones[b][i].round(6).tolist() for b in OUTPUT_BONES if b in bones},
                                 "conf": dict(zip(OUT_JOINTS, conf[i].round(3).tolist()))}) + "\n")
-    feats = frame_features(times, world, image, vis, present)
+    feats = frame_features(times, world, image, vis, present, not a.no_head3d)
     idx, age = history_indices(times, np.arange(len(times)))
     print(f"{len(times)} frames -> {out}; model cost {r.step_cost_ms(model_input(feats, idx, age)):.2f} ms/frame (1 CPU thread)")
 
