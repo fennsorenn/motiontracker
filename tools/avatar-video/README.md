@@ -13,6 +13,17 @@ uv run --project eval python tools/avatar-video/prepare.py sessions/<session> da
 tools/guarded-run.sh -c 8-15 -- node tools/avatar-video/render.mjs data/videos/<name> <avatar.vrm> sessions/<session>
 ```
 
+Optionally overlay the session's MediaPipe landmarks on the webcam panel (no avatar re-render, ~1 min):
+
+```
+tools/guarded-run.sh -c 8-15 -- node tools/avatar-video/overlay.mjs data/videos/<name> sessions/<session>
+# -> data/videos/<name>/compare-landmarks.mp4 (same --size / --from as the render)
+```
+
+Pose skeleton (orange = the person's left, blue = right, dot opacity = visibility; what the learned
+models see), face mesh (green) and hands (yellow), semi-transparent; landmarks fade when the latest
+detector frame is over 300 ms old (the detector runs at ~10 fps).
+
 - Posing follows vspark's viewport: `resetNormalizedPose` + `setNormalizedPose` with the normalized
   bone rotations, three.js 0.168.0 and @pixiv/three-vrm 3.5.2 (vspark's versions, from jsDelivr).
   VRM 0.x avatars are turned to face the camera (`VRMUtils.rotateVRM0`) and get the rotations with x
