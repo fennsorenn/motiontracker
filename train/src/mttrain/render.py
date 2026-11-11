@@ -6,7 +6,8 @@
                                            [--contact]            # designed contact choreography
     uv run python -m mttrain.render video   --out data/m1/renders/v1      # Blender + ffmpeg
     uv run python -m mttrain.render replay  --out data/m1/renders/v1      # headless recorder -> landmarks
-                                           [--mode image]         # unsmoothed detector -> landmarks-image.jsonl
+                                           [--mode image]         # IMAGE running mode -> landmarks-image.jsonl
+                                                                  # (still smoothed in 0.10.17: see recorder.js)
     uv run python -m mttrain.render gt      --out data/m1/renders/v1      # rewrite gt.jsonl from seq.npz
                                                                           # (after a conversion change)
 
@@ -217,8 +218,8 @@ def _free_port():
 
 def replay(out, mode="video"):
     """Recorder replay of every sequence's video -> landmarks.jsonl + session.json. mode='image': the
-    detector in IMAGE running mode (no tracking or landmark smoothing) -> landmarks-image.jsonl and
-    session-image.json beside the default ones."""
+    detector in IMAGE running mode, frame-stepped -> landmarks-image.jsonl and session-image.json beside
+    the default ones (caution: still landmark-smoothed in tasks-vision 0.10.17, see tools/recorder)."""
     sfx = "" if mode == "video" else f"-{mode}"
     port = _free_port()
     server = subprocess.Popen(["python3", "-m", "http.server", str(port), "--bind", "127.0.0.1", "-d", str(REPO_ROOT)],
@@ -232,7 +233,8 @@ def replay(out, mode="video"):
             tmp = d / "replay"
             tmp.mkdir(exist_ok=True)
             seconds = len(np.load(d / "seq.npz")["mp"]) / FPS
-            subprocess.run(["node", str(DRIVER), url, str(tmp), str(int(seconds * 2 + 30))], check=True)
+            # stepped image-mode replays run at detection speed, not real time
+            subprocess.run(["node", str(DRIVER), url, str(tmp), str(int(seconds * (2 if not sfx else 40) + 30))], check=True)
             for f in ("session", "landmarks"):
                 ext = ".json" if f == "session" else ".jsonl"
                 shutil.move(tmp / f"{f}{ext}", d / f"{f}{sfx}{ext}")
@@ -259,7 +261,7 @@ def main():
     ap.add_argument("--head", action="store_true", help="held posture, arms resting, designed head rotations")
     ap.add_argument("--contact", action="store_true", help="designed contact choreography (mttrain.choreo)")
     ap.add_argument("--mode", choices=("video", "image"), default="video",
-                    help="replay: detector running mode (image = no tracking or landmark smoothing)")
+                    help="replay: detector running mode (image: frame-stepped; still smoothed in 0.10.17)")
     ap.add_argument("--fovs", type=lambda v: [float(x) for x in v.split(",")], default=None,
                     help="comma-separated horizontal fields of view (deg): each sequence once per value")
     a = ap.parse_args()

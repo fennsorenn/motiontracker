@@ -27,7 +27,14 @@ console.log('state after load:', state);
 if (state === 'Ready.') {
   await ev("document.getElementById('start').click()");
   for (let i = 0; i < timeoutS * 2; i++) { await sleep(500); if (await ev('!!window.__mtResult')) break; }
-  const res = await ev('window.__mtResult');
+  // fetch the result in pieces: one returnByValue message over ~4 MB never arrives
+  let res = null;
+  const n = await ev('window.__mtResult ? window.__mtResult.landmarks.length : -1');
+  if (n >= 0) {
+    let landmarks = '';
+    for (let o = 0; o < n; o += 500000) landmarks += await ev(`window.__mtResult.landmarks.substring(${o}, ${o + 500000})`);
+    res = { dirName: await ev('window.__mtResult.dirName'), session: await ev('window.__mtResult.session'), landmarks };
+  }
   if (res) { fs.writeFileSync(`${outDir}/session.json`, res.session); fs.writeFileSync(`${outDir}/landmarks.jsonl`, res.landmarks); }
   console.log('status:', await ev("document.getElementById('status').textContent"));
   console.log('result:', res ? res.dirName : 'none');
