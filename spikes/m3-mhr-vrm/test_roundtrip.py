@@ -5,7 +5,7 @@ import sys
 import numpy as np
 import pymomentum.geometry as g
 
-from mtcore.convert import MAP, VRM_CHILD, MhrToVrm, qrot, vrm_fk
+from mtcore.convert import MAP, REST_ALIGNED, VRM_CHILD, MhrToVrm, qrot, vrm_fk
 from mtcore.mhr import FLEX_T, load
 from mtcore.paths import AVATARS
 from mtcore.vrm import load_vrm
@@ -36,7 +36,8 @@ for _ in range(200):
         c = VRM_CHILD.get(b); jd = MAP[b][1]
         # hips: MHR's c_spine1 position also moves with c_spine0, which VRM folds into its spine bone,
         # so this direction comparison is not meaningful; test_positions.py covers the upper body.
-        if c not in P_vrm or jd is None or b == "hips":
+        # torso and shoulders map rest-to-rest since 2026-11-11 (mtcore.convert), not by direction
+        if c not in P_vrm or jd is None or b == "hips" or b in REST_ALIGNED:
             continue
         d_v = P_vrm[c] - P_vrm[b]
         d_m = st[jn.index(jd), :3] - st[jn.index(MAP[b][0]), :3]

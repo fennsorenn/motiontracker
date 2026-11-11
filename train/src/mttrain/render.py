@@ -5,6 +5,8 @@
                                            [--contact]            # designed contact choreography
     uv run python -m mttrain.render video   --out data/m1/renders/v1      # Blender + ffmpeg
     uv run python -m mttrain.render replay  --out data/m1/renders/v1      # headless recorder -> landmarks
+    uv run python -m mttrain.render gt      --out data/m1/renders/v1      # rewrite gt.jsonl from seq.npz
+                                                                          # (after a conversion change)
 
 Held-out CMU motion (validation subjects) goes through the seated pipeline at 30 fps; the skinned MHR
 mesh is rendered in Blender (tools/render/render_blender.py) from a desk camera sampled like the
@@ -129,9 +131,13 @@ def _write(d, verts, faces, cam, mp, skin, wall, key, states, conv, T):
     d.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(d / "seq.npz", verts=verts.astype(np.float32), faces=faces, R=cam.R, t=cam.t,
                         fx=cam.fx, mp=mp.astype(np.float32), fps=FPS, skin=skin, wall=wall, clip=key)
+    _write_gt(d, states, cam.R, conv, T)
+
+
+def _write_gt(d, states, cam_R, conv, T):
     # ground truth, camera-relative like the model's output: G' = R0^T R_cam G
     G = quat_to_mat(states[..., 3:7])
-    Gc = R0.T @ cam.R @ G
+    Gc = R0.T @ cam_R @ G
     st = states.copy()
     st[..., 3:7] = mat_to_quat(Gc)
     bones = conv.locals(st)
@@ -139,6 +145,18 @@ def _write(d, verts, faces, cam, mp, skin, wall, key, states, conv, T):
         for k in range(T):
             f.write(json.dumps({"t": round(k / FPS * 1000, 1),
                                 "bones": {b: bones[b][k].round(6).tolist() for b in OUTPUT_BONES if b in bones}}) + "\n")
+
+
+def gt(out, avatar="AvatarSample_D"):
+    """Rewrite every sequence's gt.jsonl from its stored model parameters and camera (no re-render)."""
+    ch = load()
+    jn = list(ch.skeleton.joint_names)
+    conv = MhrToVrm(jn, skeleton_state(ch, np.zeros(len(ch.parameter_transform.names))),
+                    load_vrm(AVATARS / f"{avatar}.vrm")[2])
+    for d in sorted(Path(out).glob("seq*")):
+        z = np.load(d / "seq.npz")
+        _write_gt(d, skeleton_state(ch, z["mp"].astype(np.float64)), z["R"], conv, len(z["mp"]))
+        print(f"{d.name}: gt.jsonl rewritten", flush=True)
 
 
 def video(out, threads=8):
@@ -190,7 +208,7 @@ def replay(out):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=("prepare", "video", "replay"))
+    ap.add_argument("step", choices=("prepare", "video", "replay", "gt"))
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--n", type=int, default=6)
     ap.add_argument("--seconds", type=float, default=20.0)
@@ -205,6 +223,8 @@ def main():
         prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest, fovs=a.fovs, contact_mode=a.contact)
     elif a.step == "video":
         video(a.out, a.threads)
+    elif a.step == "gt":
+        gt(a.out)
     else:
         replay(a.out)
 
