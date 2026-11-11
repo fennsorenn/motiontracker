@@ -6,6 +6,7 @@
                                            [--contact]            # designed contact choreography
     uv run python -m mttrain.render video   --out data/m1/renders/v1      # Blender + ffmpeg
     uv run python -m mttrain.render replay  --out data/m1/renders/v1      # headless recorder -> landmarks
+                                           [--mode image]         # unsmoothed detector -> landmarks-image.jsonl
     uv run python -m mttrain.render gt      --out data/m1/renders/v1      # rewrite gt.jsonl from seq.npz
                                                                           # (after a conversion change)
 
@@ -214,29 +215,34 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def replay(out):
+def replay(out, mode="video"):
+    """Recorder replay of every sequence's video -> landmarks.jsonl + session.json. mode='image': the
+    detector in IMAGE running mode (no tracking or landmark smoothing) -> landmarks-image.jsonl and
+    session-image.json beside the default ones."""
+    sfx = "" if mode == "video" else f"-{mode}"
     port = _free_port()
     server = subprocess.Popen(["python3", "-m", "http.server", str(port), "--bind", "127.0.0.1", "-d", str(REPO_ROOT)],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for d in sorted(Path(out).glob("seq*")):
-            if (d / "landmarks.jsonl").exists():
+            if (d / f"landmarks{sfx}.jsonl").exists():
                 continue
             rel = (d / "video.webm").resolve().relative_to(REPO_ROOT)
-            url = f"http://127.0.0.1:{port}/tools/recorder/index.html?video=/{rel}&test"
+            url = f"http://127.0.0.1:{port}/tools/recorder/index.html?video=/{rel}&test" + (f"&mode={mode}" if sfx else "")
             tmp = d / "replay"
             tmp.mkdir(exist_ok=True)
             seconds = len(np.load(d / "seq.npz")["mp"]) / FPS
             subprocess.run(["node", str(DRIVER), url, str(tmp), str(int(seconds * 2 + 30))], check=True)
-            for f in ("session.json", "landmarks.jsonl"):
-                shutil.move(tmp / f, d / f)
+            for f in ("session", "landmarks"):
+                ext = ".json" if f == "session" else ".jsonl"
+                shutil.move(tmp / f"{f}{ext}", d / f"{f}{sfx}{ext}")
             if (d / "contacts.json").exists():  # true contact intervals as protocol segments
-                meta = json.loads((d / "session.json").read_text())
+                meta = json.loads((d / f"session{sfx}.json").read_text())
                 meta["segments"] = [g for g in meta.get("segments", []) if g["label"] != "contact"] \
                     + json.loads((d / "contacts.json").read_text())
-                (d / "session.json").write_text(json.dumps(meta, indent=1))
+                (d / f"session{sfx}.json").write_text(json.dumps(meta, indent=1))
             shutil.rmtree(tmp, ignore_errors=True)
-            print(f"{d.name}: landmarks ok", flush=True)
+            print(f"{d.name}: landmarks{sfx} ok", flush=True)
     finally:
         server.terminate()
 
@@ -252,6 +258,8 @@ def main():
     ap.add_argument("--rest", action="store_true", help="held posture, arms resting (noise at rest)")
     ap.add_argument("--head", action="store_true", help="held posture, arms resting, designed head rotations")
     ap.add_argument("--contact", action="store_true", help="designed contact choreography (mttrain.choreo)")
+    ap.add_argument("--mode", choices=("video", "image"), default="video",
+                    help="replay: detector running mode (image = no tracking or landmark smoothing)")
     ap.add_argument("--fovs", type=lambda v: [float(x) for x in v.split(",")], default=None,
                     help="comma-separated horizontal fields of view (deg): each sequence once per value")
     a = ap.parse_args()
@@ -262,7 +270,7 @@ def main():
     elif a.step == "gt":
         gt(a.out)
     else:
-        replay(a.out)
+        replay(a.out, a.mode)
 
 
 if __name__ == "__main__":

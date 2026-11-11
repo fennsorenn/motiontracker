@@ -27,6 +27,9 @@ const $ = (id) => document.getElementById(id);
 const videoEl = $('video');
 const params = new URLSearchParams(location.search);
 const replayUrl = params.get('video');
+// ?mode=image: IMAGE running mode (each frame detected on its own: no tracking, no landmark smoothing);
+// default VIDEO (what vspark uses). For measuring MediaPipe's own smoothing.
+const RUNNING_MODE = params.get('mode') === 'image' ? 'IMAGE' : 'VIDEO';
 
 let landmarker = null;
 let stream = null;
@@ -61,7 +64,7 @@ async function init() {
   const vision = await FilesetResolver.forVisionTasks(WASM_URL);
   landmarker = await HolisticLandmarker.createFromModelPath(vision, MODEL_URL);
   await landmarker.setOptions({
-    runningMode: 'VIDEO',
+    runningMode: RUNNING_MODE,
     minFaceDetectionConfidence: 0.5,
     minFacePresenceConfidence: 0.5,
     minPoseDetectionConfidence: 0.5,
@@ -129,7 +132,7 @@ function tick() {
   const t = replayUrl ? videoEl.currentTime * 1000 : lastFrameAt - t0;
   const before = performance.now();
   // VIDEO mode needs strictly increasing timestamps; wall clock in both modes.
-  const r = landmarker.detectForVideo(canvas, lastFrameAt);
+  const r = RUNNING_MODE === 'IMAGE' ? landmarker.detect(canvas) : landmarker.detectForVideo(canvas, lastFrameAt);
   stats.inferMs = 0.9 * stats.inferMs + 0.1 * (performance.now() - before);
   const f = toFrame(r, t);
   frames.push(f);
@@ -278,7 +281,7 @@ async function stop() {
       width: PROC_W,
       height: PROC_H,
       targetFps: TARGET_FPS,
-      detector: { name: 'mediapipe-holistic-landmarker', tasksVision: TASKS_VISION, model: MODEL_URL, modelMd5: MODEL_MD5_BASE64, runningMode: 'VIDEO' },
+      detector: { name: 'mediapipe-holistic-landmarker', tasksVision: TASKS_VISION, model: MODEL_URL, modelMd5: MODEL_MD5_BASE64, runningMode: RUNNING_MODE },
       landmarkFormat: 'vspark CameraCapture: pose=world+image visibility, hands=world (image fallback), face=image; *2d = normalized image space of the mirrored frame',
     },
     landmarks: { file: 'landmarks.jsonl', frames: frames.length },
