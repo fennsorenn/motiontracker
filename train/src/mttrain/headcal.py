@@ -1,9 +1,15 @@
-"""How well do head landmarks follow the head's rotation relative to the chest? MediaPipe on rendered
-sessions (mttrain.render) against synthetic observations of the same motion and camera, both against
-the truth. Used to calibrate mttrain.mpstyle's head response (HEAD_GAIN, HEAD_NOISE_DEG).
+"""How well do head landmarks follow the head's rotation relative to the chest, and the pose's hand
+points the wrist bend? MediaPipe on rendered sessions (mttrain.render) against synthetic observations of
+the same motion and camera, both against the truth. Used to calibrate mttrain.mpstyle's head and hand
+response (HEAD_GAIN, HEAD_NOISE_DEG, HAND_GAIN, HAND_NOISE_DEG).
 
     uv run python -m mttrain.headcal [--sets v1 fov1 rest1 contact1] [--seed 0]
-                                     [--gain world image] [--noise world image]   # try other values
+                                     [--gain world image] [--noise world image]   # try other head values
+                                     [--session sessions/<s>]   # also: pose vs hand model on a recording
+
+Wrist bend: image = signed in-plane angle of wrist -> index/pinky midpoint minus elbow -> wrist; world =
+3D angle between the two. On a recording there is no truth: the pose's bend is compared with the hand
+model's (wrist -> middle knuckle, against the pose forearm), whose own error lowers the slope.
 
 Measures, per axis (turn, nod, tilt), slope and correlation of observed against true:
 - world: head-vs-chest rotation from 3D landmarks (chest frame from shoulders and hips, head frame from
@@ -65,10 +71,56 @@ def image_cues(P):
     return np.stack([(d * e).sum(1) / L, (d * n).sum(1) / L, tilt], 1)
 
 
+SIDES = {"left": (13, 15, 19, 17), "right": (14, 16, 20, 18)}  # elbow, wrist, index, pinky
+
+
+def _wrap(x):
+    return (x + 180) % 360 - 180
+
+
+def image_bend(P, side):
+    el, wr, ix, pk = SIDES[side]
+    P = P[..., :2] * ASPECT
+    a = lambda v: np.degrees(np.arctan2(v[..., 1], v[..., 0]))
+    return _wrap(a(0.5 * (P[:, ix] + P[:, pk]) - P[:, wr]) - a(P[:, wr] - P[:, el]))
+
+
+def world_bend(P, side):
+    el, wr, ix, pk = SIDES[side]
+    f, h = P[:, wr] - P[:, el], 0.5 * (P[:, ix] + P[:, pk]) - P[:, wr]
+    c = (f * h).sum(1) / np.linalg.norm(f, axis=1) / np.linalg.norm(h, axis=1)
+    return np.degrees(np.arccos(np.clip(c, -1, 1)))
+
+
+def _bends(Tw, Ti, Ow, Oi):
+    """-> {'hand image': (true, obs), 'hand world': ...}, both sides stacked, as (N, 1) columns."""
+    out = {}
+    for space, f, T, O in (("hand image", image_bend, Ti, Oi), ("hand world", world_bend, Tw, Ow)):
+        out[space] = (np.concatenate([f(T, s) for s in SIDES])[:, None], np.concatenate([f(O, s) for s in SIDES])[:, None])
+    return out
+
+
+def session_hands(session):
+    """Recorded session: pose bend vs hand-model bend per side -> printed slope/corr."""
+    rows = [json.loads(line) for line in open(Path(session) / "landmarks.jsonl") if line.strip()]
+    for side, hk in (("left", "leftHand2d"), ("right", "rightHand2d")):
+        el, wr = SIDES[side][:2]
+        P = np.array([r["pose2d"] for r in rows if r.get("pose2d") and r.get(hk)])
+        H = np.array([r[hk] for r in rows if r.get("pose2d") and r.get(hk)])[..., :2] * ASPECT
+        if not len(P):
+            continue
+        a = lambda v: np.degrees(np.arctan2(v[..., 1], v[..., 0]))
+        Pp = P[..., :2] * ASPECT
+        hm = _wrap(a(H[:, 9] - H[:, 0]) - a(Pp[:, wr] - Pp[:, el]))
+        f = fit(hm[:, None].repeat(3, 1), image_bend(P, side)[:, None].repeat(3, 1))[0]
+        print(f"  {side:5s} n={len(P):3d} hand-model bend p5..p95 {np.percentile(hm, 5):+4.0f}..{np.percentile(hm, 95):+4.0f}"
+              f"  pose vs hand model slope {f[0]:+.2f} corr {f[1]:.2f}")
+
+
 def fit(true, obs):
-    """Per axis: slope of obs on true and correlation, (3, 2)."""
+    """Per column (axis): slope of obs on true and correlation, (C, 2)."""
     out = []
-    for i in range(3):
+    for i in range(true.shape[1]):
         x, y = true[:, i] - true[:, i].mean(), obs[:, i] - obs[:, i].mean()
         out.append(((x * y).sum() / max((x * x).sum(), 1e-12), np.corrcoef(x, y)[0, 1]))
     return np.array(out)
@@ -91,13 +143,16 @@ def collect(seq_dir, ch, lm, rng, style=None):
         if k < len(true_lm):
             tw.append(true_lm[k]); ti.append(cam.project(true_lm[k])[0])
             ow.append(np.asarray(r["pose"])[:, :3]); oi.append(np.asarray(r["pose2d"])[:, :3])
-    out = {"mediapipe": {"world": (world_angles(np.array(tw)), world_angles(np.array(ow))),
-                         "image": (image_cues(np.array(ti)), image_cues(np.array(oi)))}}
+    tw, ti, ow, oi = map(np.array, (tw, ti, ow, oi))
+    out = {"mediapipe": {"world": (world_angles(tw), world_angles(ow)), "image": (image_cues(ti), image_cues(oi)),
+                         **_bends(tw, ti, ow, oi)}}
     s = synthesize(rng, ch, lm, mp, src_fps=fps, fps=30.0, style=style or Style.sample(rng),
                    noise=NoiseConfig.sample(rng), camera=cam)
     true_s = lm(s["states"]) / 100.0
+    ti_s = cam.project(true_s)[0]
     out["synthetic"] = {"world": (world_angles(true_s), world_angles(s["world"])),
-                        "image": (image_cues(cam.project(true_s)[0]), image_cues(s["image"]))}
+                        "image": (image_cues(ti_s), image_cues(s["image"])),
+                        **_bends(true_s, ti_s, s["world"], s["image"])}
     return out
 
 
@@ -107,12 +162,14 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--gain", type=float, nargs=2, metavar=("WORLD", "IMAGE"), help="override mpstyle.HEAD_GAIN")
     ap.add_argument("--noise", type=float, nargs=2, metavar=("WORLD", "IMAGE"), help="override HEAD_NOISE_DEG")
+    ap.add_argument("--session", help="recorded session: also compare the pose's wrist bend with the hand model's")
     a = ap.parse_args()
     if a.gain:
         ms.HEAD_GAIN.update(world=a.gain[0], image=a.gain[1])
     if a.noise:
         ms.HEAD_NOISE_DEG.update(world=a.noise[0], image=a.noise[1])
-    print(f"synthetic head response: gain {ms.HEAD_GAIN}, noise deg {ms.HEAD_NOISE_DEG} (per-sequence spread)")
+    print(f"synthetic head response: gain {ms.HEAD_GAIN}, noise deg {ms.HEAD_NOISE_DEG}; hands: gain {ms.HAND_GAIN}, "
+          f"noise deg {ms.HAND_NOISE_DEG} (per-sequence spread)")
     rng = np.random.default_rng(a.seed)
     ch = load()
     lm = LandmarkModel(ch, skeleton_state(ch, np.zeros(len(ch.parameter_transform.names))))
@@ -130,11 +187,14 @@ def main():
             pooled.setdefault((src, space), ([], []))
             pooled[(src, space)][0].append(t); pooled[(src, space)][1].append(o)
             f = fit(t, o)
-            print(f"  {space:5s} {src:9s} " + "  ".join(f"{ax} {s:+.2f}/{c:.2f}" for ax, (s, c) in zip(AXES, f)))
+            print(f"  {space:10s} {src:9s} " + "  ".join(f"{ax} {s:+.2f}/{c:.2f}" for ax, (s, c) in zip(AXES if len(f) == 3 else ["bend"], f)))
     print("== pooled (slope/corr)")
     for (src, space), (t, o) in sorted(pooled.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         f = fit(np.concatenate(t), np.concatenate(o))
-        print(f"  {space:5s} {src:9s} " + "  ".join(f"{ax} {s:+.2f}/{c:.2f}" for ax, (s, c) in zip(AXES, f)))
+        print(f"  {space:10s} {src:9s} " + "  ".join(f"{ax} {s:+.2f}/{c:.2f}" for ax, (s, c) in zip(AXES if len(f) == 3 else ["bend"], f)))
+    if a.session:
+        print(f"== {a.session}: wrist bend, pose vs hand model (image)")
+        session_hands(a.session)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,14 @@ the head-vs-chest rotation (relative to MediaPipe's own shoulder/hip frame, Head
 noise, about the neck joint (head_lock); the 3D head
 points are also dropped for some sequences (head3d), so the model can run with or without them.
 
+Wrist bend (found 2026-11-11): MediaPipe Pose's hand points (pinky, index, thumb) follow the hand's
+bend away from the forearm only partly too. Image slope/correlation of the bend: against the hand
+model on the recorded session 0.10-0.28 / 0.33-0.46 (the hand model's own error lowers the slope, so
+the truth is somewhat higher), against the truth on the renders 0.07-0.10 / 0.1-0.3 (untextured hands);
+exact synthetic points 0.8 / 0.65 after noise, so a model trained on them discounted the hand points'
+bend by about half. Modelled like the head: the hand points turn about the wrist so the bend is scaled
+by a gain, plus slow rotation noise (hand_lock).
+
 One person, one session: every factor is randomized per sequence (log-normal) so the model can't
 lean on these exact values. Recalibrate when more seated-v2 sessions exist.
 """
@@ -109,6 +117,14 @@ HEAD_GAIN = {"world": 0.1, "image": 0.25}
 HEAD_NOISE_DEG = {"world": 1.0, "image": 8.0}
 HEAD_NOISE_TAU = 0.5
 HEAD3D_DROP = 0.3  # fraction of sequences without the 3D head points (world xyz, image z)
+
+# wrist bend (see docstring): gain on the hand's swing away from the forearm direction and slow rotation
+# noise (std deg), per space; image calibrated toward the session (mttrain.headcal --hands)
+HAND_GAIN = {"world": 0.15, "image": 0.3}
+HAND_NOISE_DEG = {"world": 4.0, "image": 5.0}
+# per side: elbow, wrist, hand points turned about the wrist (pinky, index, thumb)
+HAND_SIDES = [(I["left_elbow"], I["left_wrist"], [I["left_pinky"], I["left_index"], I["left_thumb"]]),
+              (I["right_elbow"], I["right_wrist"], [I["right_pinky"], I["right_index"], I["right_thumb"]])]
 
 
 def _depth_steps():
@@ -200,6 +216,28 @@ class HeadRig:
         return delta, states[..., self.n, :3] / 100.0
 
 
+def rotvec_between(a, b):
+    """Rotation vectors (..., 3) of the minimal rotations taking directions a onto b."""
+    c = np.cross(a, b)
+    n = np.linalg.norm(c, axis=-1, keepdims=True)
+    ang = np.arctan2(n, (a * b).sum(-1, keepdims=True))
+    return c / np.maximum(n, 1e-12) * ang
+
+
+def hand_lock(X, gain, noise):
+    """MediaPipe's partial wrist-bend response on landmarks X (T, 33, 3): per side, the hand points turn
+    about the wrist as if the hand's swing away from the forearm direction were noise * swing^gain.
+    noise (T, 2, 3) rotation vectors (left, right)."""
+    X = X.copy()
+    for k, (el, wr, pts) in enumerate(HAND_SIDES):
+        f = X[:, wr] - X[:, el]
+        h = 0.5 * (X[:, pts[0]] + X[:, pts[1]]) - X[:, wr]
+        v = rotvec_between(f, h)
+        M = rotvec_to_mat(noise[:, k]) @ rotvec_to_mat(gain * v) @ np.swapaxes(rotvec_to_mat(v), -1, -2)
+        X[:, pts] = X[:, wr, None] + np.einsum("tij,tkj->tki", M, X[:, pts] - X[:, wr, None])
+    return X
+
+
 def head_noise(rng, t, sigma_deg, tau=HEAD_NOISE_TAU):
     """Slow rotation noise (T, 3) rad at irregular times t (T,) s: AR(1), stationary std sigma per axis."""
     out = np.zeros((len(t), 3))
@@ -265,6 +303,8 @@ class Style:
     head_gain: dict = field(default_factory=lambda: {"world": 1.0, "image": 1.0})  # head_lock gain per space
     head_noise_deg: dict = field(default_factory=lambda: {"world": 0.0, "image": 0.0})
     head3d: bool = True  # False: the 3D head points are dropped from the model input
+    hand_gain: dict = field(default_factory=lambda: {"world": 1.0, "image": 1.0})  # hand_lock gain per space
+    hand_noise_deg: dict = field(default_factory=lambda: {"world": 0.0, "image": 0.0})
 
     @classmethod
     def identity(cls):
@@ -274,7 +314,8 @@ class Style:
     def calibrated(cls):
         return cls(HIP_WIDEN, IMAGE_Z, _factors(FACE_PLACEMENT), _factors(FACE_WORLD), dict(LIMB),
                    depth_gain=np.array([g for g, _ in DEPTH.values()]), depth_bias=np.array([b for _, b in DEPTH.values()]),
-                   head_gain=dict(HEAD_GAIN), head_noise_deg=dict(HEAD_NOISE_DEG))
+                   head_gain=dict(HEAD_GAIN), head_noise_deg=dict(HEAD_NOISE_DEG),
+                   hand_gain=dict(HAND_GAIN), hand_noise_deg=dict(HAND_NOISE_DEG))
 
     @classmethod
     def sample(cls, rng, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25, head_spread=0.4):
@@ -283,8 +324,8 @@ class Style:
         Depth gains: log-normal depth_spread, clipped to [0.05, 1]; biases: normal, 1 cm + 30% of the bias;
         depth_relax uniform in [0, 1]: real video may be flattened less than the renders it was calibrated
         on (2026-11-09), so the strength is left for the model to infer.
-        Head: gains log-normal head_spread (clipped to [0.02, 1]), noise std log-normal head_spread; the
-        3D head points are dropped for HEAD3D_DROP of the sequences."""
+        Head and hands: gains log-normal head_spread (clipped to [0.02, 1]), noise std log-normal
+        head_spread; the 3D head points are dropped for HEAD3D_DROP of the sequences."""
         ln = lambda: float(np.exp(rng.normal(0, spread)))
         fp, fw = _factors(FACE_PLACEMENT), _factors(FACE_WORLD)
         fp[FACE] = 1 + (fp[FACE] - 1) * ln()
@@ -296,7 +337,9 @@ class Style:
                    b0 + rng.normal(0, 1, len(b0)) * (0.01 + 0.3 * np.abs(b0)), float(rng.uniform(0, 1)),
                    {k: float(np.clip(g * np.exp(rng.normal(0, head_spread)), 0.02, 1.0)) for k, g in HEAD_GAIN.items()},
                    {k: float(v * np.exp(rng.normal(0, head_spread))) for k, v in HEAD_NOISE_DEG.items()},
-                   bool(rng.random() >= HEAD3D_DROP))
+                   bool(rng.random() >= HEAD3D_DROP),
+                   {k: float(np.clip(g * np.exp(rng.normal(0, head_spread)), 0.02, 1.0)) for k, g in HAND_GAIN.items()},
+                   {k: float(v * np.exp(rng.normal(0, head_spread))) for k, v in HAND_NOISE_DEG.items()})
 
     def placement(self, X):
         """3D landmarks (..., 33, 3), any frame and unit: where MediaPipe places its points."""

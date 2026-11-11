@@ -24,8 +24,8 @@ from ..dataset import SRC_FPS, source_table
 from ..features import OFFSETS
 from . import features as GF
 from .fk import MhrFK
-from .geom import (HeadRig, Landmarks, Style, Targets, flat_image_z, head_lock, head_noise, project, sample_desk_camera,
-                   shoulder_distance, world_landmarks)
+from .geom import (HeadRig, Landmarks, Style, Targets, flat_image_z, hand_lock, head_lock, head_noise, project,
+                   sample_desk_camera, shoulder_distance, world_landmarks)
 from .motion import Seater
 from .observe import observe, sample_config
 
@@ -98,12 +98,14 @@ class GpuGenerator:
         style = Style.sample(B, self.gen, dev)
         dt = torch.diff(tz, dim=1, prepend=(tz[:, :1] - 1.0 / fps[:, None]))
         dt = torch.where(valid, dt, (1.0 / fps)[:, None].expand_as(dt))
-        # MediaPipe's partial head response, separately for the image and the world landmarks
+        # MediaPipe's partial head and wrist-bend response, separately for the image and world landmarks
         delta, pivot = self.head_rig(states, X)
-        Xi = style.placement(head_lock(X, delta, pivot, style.head_gain["image"],
-                                       head_noise(self.gen, dt, style.head_noise_deg["image"])))
-        Xw = style.placement(head_lock(X, delta, pivot, style.head_gain["world"],
-                                       head_noise(self.gen, dt, style.head_noise_deg["world"])))
+        Xs = {}
+        for space in ("image", "world"):
+            Y = head_lock(X, delta, pivot, style.head_gain[space], head_noise(self.gen, dt, style.head_noise_deg[space]))
+            hn = torch.stack([head_noise(self.gen, dt, style.hand_noise_deg[space]) for _ in range(2)], 2)
+            Xs[space] = style.placement(hand_lock(Y, style.hand_gain[space], hn))
+        Xi, Xw = Xs["image"], Xs["world"]
         Xn = torch.where(valid[..., None, None], Xi, torch.full_like(Xi, math.nan))
         R, t, fx = sample_desk_camera(Xn, self.gen)
         image = project(Xi, R, t, fx)

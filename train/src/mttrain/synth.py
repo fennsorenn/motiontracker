@@ -5,7 +5,7 @@ import numpy as np
 from mtcore.mhr import skeleton_state
 
 from .camera import sample_desk_camera, shoulder_distance
-from .mpstyle import HeadRig, Style, head_lock, head_noise
+from .mpstyle import HeadRig, Style, hand_lock, head_lock, head_noise
 from .noise import NoiseConfig, observe
 
 
@@ -44,15 +44,18 @@ def synthesize(rng, ch, landmark_model, mp, src_fps=30.0, fps=None, style=None, 
     states = skeleton_state(ch, mp[idx])
     X = landmark_model(states) / 100.0  # MHR world, metres
     style = style or Style.sample(rng)
-    # MediaPipe's partial head response, separately for the image and the world landmarks
+    # MediaPipe's partial head and wrist-bend response, separately for the image and world landmarks
     Xs = {}
     for space in ("image", "world"):
+        Xs[space] = X
         g, sd = style.head_gain[space], style.head_noise_deg[space]
-        if g == 1.0 and sd == 0.0:
-            Xs[space] = X
-        else:
+        if g != 1.0 or sd != 0.0:
             delta, pivot = _rig(ch, landmark_model)(states, X)
-            Xs[space] = head_lock(X, delta, pivot, g, head_noise(rng, t, sd))
+            Xs[space] = head_lock(Xs[space], delta, pivot, g, head_noise(rng, t, sd))
+        g, sd = style.hand_gain[space], style.hand_noise_deg[space]
+        if g != 1.0 or sd != 0.0:
+            hnoise = np.stack([head_noise(rng, t, sd), head_noise(rng, t, sd)], 1)
+            Xs[space] = hand_lock(Xs[space], g, hnoise)
     Xi, Xw = style.placement(Xs["image"]), style.placement(Xs["world"])
     cam = camera or sample_desk_camera(rng, Xi)
     image, _ = cam.project(Xi)

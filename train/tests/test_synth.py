@@ -179,3 +179,24 @@ def test_head3d_mask():
     keep = [k for k in range(full.shape[1]) if k not in HEAD3D_DIMS]
     assert (masked[:, HEAD3D_DIMS] == 0).all() and np.array_equal(masked[:, keep], full[:, keep])
     assert len(HEAD3D_DIMS) == 44 and (full[:, HEAD3D_DIMS] != 0).any()
+
+
+def test_hand_lock():
+    """Gain 1 without noise keeps the landmarks; gain 0 straightens the hand onto the forearm direction
+    (the bend's swing removed) and only moves the hand points."""
+    from mttrain.mpstyle import HAND_SIDES, hand_lock
+    rng = np.random.default_rng(5)
+    X = rng.normal(0, 0.3, (7, 33, 3))
+    zero = np.zeros((7, 2, 3))
+    assert np.abs(hand_lock(X, 1.0, zero) - X).max() < 1e-9
+    L = hand_lock(X, 0.0, zero)
+    moved = sorted(p for _, _, pts in HAND_SIDES for p in pts)
+    other = [k for k in range(33) if k not in moved]
+    assert np.abs(L[:, other] - X[:, other]).max() == 0
+    for el, wr, pts in HAND_SIDES:
+        f = L[:, wr] - L[:, el]
+        h = 0.5 * (L[:, pts[0]] + L[:, pts[1]]) - L[:, wr]
+        cos = (f * h).sum(1) / np.linalg.norm(f, axis=1) / np.linalg.norm(h, axis=1)
+        assert (cos > 1 - 1e-9).all()
+        # distances to the wrist are kept
+        assert np.allclose(np.linalg.norm(L[:, pts] - L[:, [wr]], axis=-1), np.linalg.norm(X[:, pts] - X[:, [wr]], axis=-1))
