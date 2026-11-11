@@ -34,44 +34,51 @@ cd train && ../tools/guarded-run.sh -c 8-15 -- uv run python ../spikes/retarget-
 
 ## Results (medians over events; cm, deg)
 
+Re-run 2026-11-11 after the torso/shoulder conversion fix (`mtcore.convert`, rest-to-rest for hips..head
+and the shoulders). The first run (2026-11-10) used the old direction-matched torso, which hunched
+every avatar forward ~40 deg; see "Corrected" below.
+
 | | copy min gap | copy pair gap / slide | ik min gap | ik pair gap / slide | ik change upper / fore / hand |
 |---|---|---|---|---|---|
-| palms together | - | 3.1 / 3.2 | - | 0.3 / 0.0 | 1.5 / 5.3 / 5.4 |
-| hand to face | **-7.3** | -7.1 / 4.8 | -1.0 | 1.8 / 1.2 | 11.1 / 22.4 / 38.8 |
-| near miss (6 cm) | -1.1 | -2.1 / 4.9 | 2.9 | 4.6 / 0.0 | 8.6 / 14.9 / 16.3 |
+| palms together | - | 0.6 / 1.8 | - | 0.3 / 0.0 | 0.9 / 2.9 / 2.9 |
+| hand to face | -1.7 | 0.5 / 4.1 | -1.0 | 1.9 / 1.7 | 8.0 / 8.8 / 16.8 |
+| near miss (6 cm) | 6.7 | 5.1 / 6.1 | 2.8 | 4.3 / 0.1 | 14.5 / 15.8 / 16.0 |
 
-Per avatar: hand to face copy min gap -5.8 to -7.4 cm on the female-base rigs, -9.1 to -9.4 on the
-male-base rigs and Sakurada; palms copy pair gap 3.3-3.9 cm (female base), 1.2-1.3 (male).
+Per avatar: hand to face copy min gap -1.3 to -1.7 cm on the female-base rigs, -2.9 to -3.8 on the
+male-base rigs and Sakurada (the performer's own poses: -3.6, see 5.); palms copy pair gap 1.3-1.8 cm
+(female base), -1.6 (male).
 
-1. **Hand to face is the big one.** Plain copy puts the hand about 7 cm *inside* the avatar's head
-   (9 cm on the male rigs), touching about 5 cm away from the intended spot. The VRoid heads are
-   large relative to the arms, so the performer's arm angles end inside them.
-2. **Fixing it is a real pose change, not a nudge.** Putting the hand on the face surface takes
-   ~22 deg at the forearm and ~39 deg at the hand (even with hand turns 10x as expensive as arm
-   turns): the fingers have to come out of the bigger head. A residual -1 cm remains (fingers).
-3. **Near misses collapse.** A 6 cm near miss becomes a touch or slight penetration (-1.1 cm) under
-   copy; IK keeps ~4.6 cm (the scaled gap). Retargeting has to know contact from near miss.
-4. **Palms survive copy reasonably** (3 cm apart, 3 cm sliding): both arms scale alike. A ~5 deg
-   correction closes them.
-5. Side finding: **the true contact poses penetrate** (performer min gap -1.7 cm palms, -3.6 cm
-   hand to face): `mttrain.choreo` aims joint centres (knuckle, fingertip joint) about 1 cm off a
-   landmark-derived face point, so the hand's thickness goes into the skin. Harmless for landmark
-   training; worth fixing if the choreography drives follow-along videos.
+1. **Plain copy lands contacts roughly right.** Hand to face: about as deep as the performer's own
+   (penetrating) pose, but ~4 cm away from the intended spot on the face. Palms: within 2 cm.
+2. **Near misses survive copy** (6.7 cm vs the performer's 6.0). IK pulls them to the scaled gap
+   (~4.3 cm), which is a choice of the goal, not a need.
+3. **Corrections are moderate**: ~9 deg forearm and ~17 deg hand at hand-to-face (up to 28 deg hand on
+   some avatars), ~3 deg for palms. Mostly sliding the hand across the face to the right spot.
+4. The male-base rigs go deeper under copy (larger heads relative to the arms): ~-3.5 cm.
+5. Side finding (unchanged): **the true contact poses penetrate** (performer min gap -1.7 cm palms,
+   -3.6 cm hand to face): `mttrain.choreo` aims joint centres (knuckle, fingertip joint) about 1 cm off
+   a landmark-derived face point, so the hand's thickness goes into the skin. Harmless for landmark
+   training; worth fixing if the choreography drives follow-along videos. It also inflates the copy
+   penetration above: with surface-aimed contacts, copy would likely sit near 0 to -1 cm.
+
+**Corrected** (first run, old conversion): copy put the hand ~7 cm inside the head (-9 cm on male
+rigs), collapsed near misses to -1 cm, and IK needed 22 deg forearm / 39 deg hand. That was the
+hunched torso (head pushed forward and down onto the hand), not avatar proportions.
 
 ## Conclusions
 
-- On these avatars, retargeting is worth a lot at hand-to-face contacts: ~7 cm penetration under
-  plain copy is visible on every avatar, independent of tracker quality.
-- It needs the intent: the same ~6 cm difference separates a near miss from a contact, so the
-  layer must be told which one is meant. Today the tracker can't (MediaPipe puts touching hands
-  8-26 cm in front of the face). Contact intent has to come from the lifter first.
-- Palms together is a small correction; hand to face is a large one (forearm/hand), so the layer
-  must be allowed to change the pose substantially near the face, i.e. it can't be a small residual.
+- With an upright torso mapping, retargeting at contacts is a refinement, not a rescue: plain copy
+  keeps contacts within ~2 cm of the surface and keeps near misses apart, on all 11 avatars.
+- What remains is placement: ~4 cm slide on the face, and up to ~3.5 cm penetration on big-head rigs.
+  A residual-sized correction (~10-20 deg) covers it.
+- Contact intent still matters for a retargeting layer (contact vs near miss decides the goal), but
+  the copy no longer destroys the distinction, so the tracker's near-face depth bias is the larger
+  problem for contacts by far.
 
 ## Caveats
 
 - Upper bound only: true poses and known targets; per-frame IK without temporal smoothness or
-  joint limits (39 deg hand changes not checked for natural wrist ranges).
+  joint limits (hand changes up to ~28 deg not checked for natural wrist ranges).
 - Correspondence by bounding-box-normalized part frames is approximate for stylized faces.
 - Signed distance from the nearest vertex's normal: reliable for shallow penetration of the face,
   not for hand-hand.
