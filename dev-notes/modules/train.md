@@ -99,6 +99,23 @@ Results (`m1-v8` vs `m1-v7`, plan step 7e; full numbers there):
 
 Open: hand-to-face is a MediaPipe depth problem. During true contacts MediaPipe places the hand 8-26 cm in front of the nose (world z), the same as for real near-misses; the synthetic observation model (`mpstyle`/`noise`) has no such bias, so every model puts the hand ~30 cm toward the camera. Unverified on real video: needs seated-v2 recordings with contact segments.
 
+## Head observations (WIP, `m1-head-obs`, started 2026-11-11)
+Finding (rendered sets, exact ground truth): `m1-v8` under-reads head nod/tilt/turn relative to the chest because the synthetic head landmarks do not match MediaPipe's.
+- MediaPipe's 3D world head landmarks barely follow head-vs-chest rotation: slope 0-0.28 vs truth, correlation <= 0.6.
+- 2D image head points follow partly: slope ~0.4-0.75.
+- The synthetic training landmarks follow the head exactly (gain 1), so the model learns to trust a signal that is weak on real input.
+- CMU training motion has little head tilt (+-9 deg, p5-p95).
+
+Planned changes (owner-approved 2026-11-11; not yet implemented):
+1. Synthetic head landmark model in `mpstyle` (numpy) and `gpugen/geom.py` (torch): head-vs-chest rotation reduced by a calibrated gain plus rotation noise, separately for 3D world and 2D image, calibrated against MediaPipe on the rendered sets. Numpy and torch must agree (see GPU data generator, Extending).
+2. Random dropout of the head's 3D world points (and image z) in 30% of training sequences, so the model runs live with or without them.
+3. Extra slow head motion (turn, nod, tilt) in the seated pipeline (`seated`, `gpugen/motion.py`).
+4. Train `m1-v9`; compare with `m1-v8` on the rendered sets and the real session, with head 3D present and masked at inference.
+
+Context: training data never passes through MediaPipe (synthetic landmarks + hand-modelled MediaPipe biases). Taps into MediaPipe's internal state remain M7 and need rendered training video (M6).
+
+Still unclear: the calibrated gain/noise values, how the masking is signalled to the model at inference, and the `m1-v9` results.
+
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
 
@@ -107,4 +124,4 @@ Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l
 - New observation effects belong in `noise` (sensor-like) or `mpstyle` (systematic MediaPipe placement); check them with `calibrate` against real sessions.
 
 ## Open
-Current best run `m1-v7` (depth flattening; `m1-v5`, `m1-v6` kept); contact-aware `m1-v8` level elsewhere, better at contacts. The MediaPipe hand-to-face depth bias (Contacts). Arm rest noise (not yet better than the baseline), the rough seated idle motion, real flattening strength (multi-view) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7e) and the depth flattening limits above.
+Current best run `m1-v7` (depth flattening; `m1-v5`, `m1-v6` kept); contact-aware `m1-v8` level elsewhere, better at contacts. The MediaPipe hand-to-face depth bias (Contacts). Head nod/tilt/turn under-read vs the chest (Head observations, WIP). Arm rest noise (not yet better than the baseline), the rough seated idle motion, real flattening strength (multi-view) and the go/no-go on seated-v2 sessions: see the plan (steps 7b-7e) and the depth flattening limits above.
