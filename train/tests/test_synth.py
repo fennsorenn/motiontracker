@@ -154,18 +154,59 @@ def test_head_lock_gain():
         mp[:, pn.index(k)] = rng.uniform(-0.3, 0.3, 6)
     st = skeleton_state(ch, mp)
     X = lmod(st) / 100.0
-    delta, pivot = rig(st, X)
+    delta, C = rig(st, X)
     d0, _ = rig(rest[None], lmod(rest[None]) / 100.0)
     assert np.abs(d0 - np.eye(3)).max() < 1e-5
     zero = np.zeros((6, 3))
-    assert np.abs(head_lock(X, delta, pivot, 1.0, zero) - X).max() < 1e-6  # float32 skeleton states
-    L = head_lock(X, delta, pivot, 0.0, zero)
+    assert np.abs(head_lock(X, delta, C, np.ones(3), 0.0, zero) - X).max() < 1e-6  # float32 skeleton states
+    L = head_lock(X, delta, C, np.zeros(3), 0.0, zero)
     other = [k for k in range(33) if k not in FACE]
     assert np.abs(L[:, other] - X[:, other]).max() == 0
     r0 = _head_vs_chest(lmod(rest[None]) / 100.0)[0]
     ang = lambda A, B: np.degrees(np.arccos(np.clip((np.trace(A.T @ B) - 1) / 2, -1, 1)))
     assert max(ang(r0, r) for r in _head_vs_chest(L)) < 0.01
     assert max(ang(r0, r) for r in _head_vs_chest(X)) > 10
+
+
+def test_head_lock_axes_and_pivot():
+    """Per-axis gains act on the rotation's components in the chest frame, the fixed nod turns about the
+    chest's x axis, and the ear midpoint stays put."""
+    from mttrain.mpstyle import FACE, I as LI, head_lock, rotvec_to_mat
+    rng = np.random.default_rng(3)
+    T = 4
+    X = rng.normal(0, 0.1, (T, 33, 3))
+    a = rng.normal(0, 1, (T, 3, 3))
+    C = np.linalg.qr(a)[0] * np.sign(np.linalg.det(np.linalg.qr(a)[0]))[:, None, None]  # random chest frames
+    ears = 0.5 * (X[:, LI["left_ear"]] + X[:, LI["right_ear"]])
+    rot = lambda v: C @ rotvec_to_mat(np.broadcast_to(v, (T, 3))) @ np.swapaxes(C, -1, -2)  # chest-frame rotvec
+
+    def moved(L, M):  # L's face = M applied to X's face about the ear midpoint
+        want = ears[:, None] + np.einsum("tij,tkj->tki", M, X[:, FACE] - ears[:, None])
+        return np.abs(L[:, FACE] - want).max() < 1e-9
+
+    zero = np.zeros((T, 3))
+    turn = np.radians([0.0, 40.0, 0.0])  # about the chest's y axis
+    assert moved(head_lock(X, rot(turn), C, np.array([1.0, 0.5, 1.0]), 0.0, zero), rot(-turn / 2))
+    assert moved(head_lock(X, rot(turn), C, np.array([0.5, 1.0, 0.2]), 0.0, zero), np.tile(np.eye(3), (T, 1, 1)))
+    nod = np.radians(10.0)
+    assert moved(head_lock(X, np.tile(np.eye(3), (T, 1, 1)), C, np.ones(3), nod, zero), rot(np.array([nod, 0, 0])))
+    L = head_lock(X, rot(turn), C, np.array([0.3, 0.3, 0.3]), nod, zero)
+    assert np.abs(0.5 * (L[:, LI["left_ear"]] + L[:, LI["right_ear"]]) - ears).max() < 1e-12
+
+
+def test_head_moves():
+    """Deliberate head moves: within the amplitudes, smooth, every axis used and sometimes left at zero."""
+    from mttrain.seated import HEAD_MOVES, head_moves
+    rng = np.random.default_rng(0)
+    fps = 30.0
+    H = np.stack([head_moves(rng, 300, fps) for _ in range(40)])
+    amp = np.radians([HEAD_MOVES["turn"], HEAD_MOVES["nod"], HEAD_MOVES["tilt"]])
+    assert (np.abs(H) <= amp + 1e-9).all()
+    assert (np.abs(H).max((0, 1)) > 0.8 * amp).all()  # large targets occur on every axis
+    assert ((np.abs(H) < 1e-12).mean((0, 1)) > 0.1).all()  # held at exactly zero for a good share of frames
+    # min-jerk moves: speed bounded by 1.875 x the largest step over the shortest move
+    v = np.abs(np.diff(H, axis=1)) * fps
+    assert (v <= 1.875 * 2 * amp / HEAD_MOVES["move"][0] + 1e-6).all()
 
 
 def test_head3d_mask():

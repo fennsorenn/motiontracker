@@ -175,16 +175,17 @@ def test_head_lock_matches_numpy():
     X = lm(states) / 100.0
     st = torch.tensor(states, dtype=torch.float32)
     Xt = torch.tensor(X, dtype=torch.float32)
-    d_t, p_t = geom.HeadRig(jn, rest, lm)(st, Xt)
+    d_t, C_t = geom.HeadRig(jn, rest, lm)(st, Xt)
     rig = ms.HeadRig(jn, rest, lm)
     noise = rng.normal(0, 0.05, (B, T, 3))
-    gain = np.array([0.2, 0.7])
-    L_t = geom.head_lock(torch.tensor(X, dtype=torch.float32), d_t, p_t, torch.tensor(gain, dtype=torch.float32),
-                         torch.tensor(noise, dtype=torch.float32)).numpy()
+    gain = np.array([[0.2, 0.6, 0.4], [0.7, 0.05, 1.0]])
+    nod = np.array([0.1, -0.2])
+    f32 = lambda v: torch.tensor(v, dtype=torch.float32)
+    L_t = geom.head_lock(f32(X), d_t, C_t, f32(gain), f32(nod), f32(noise)).numpy()
     for b in range(B):
-        d, p = rig(states[b], X[b])
-        assert np.abs(d_t[b].numpy() - d).max() < 1e-4 and np.abs(p_t[b].numpy() - p).max() < 1e-5
-        assert np.abs(L_t[b] - ms.head_lock(X[b], d, p, gain[b], noise[b])).max() < 1e-4
+        d, C = rig(states[b], X[b])
+        assert np.abs(d_t[b].numpy() - d).max() < 1e-4 and np.abs(C_t[b].numpy() - C).max() < 1e-5
+        assert np.abs(L_t[b] - ms.head_lock(X[b], d, C, gain[b], nod[b], noise[b])).max() < 1e-4
     # head 3D mask
     times = np.arange(T) * 0.1
     world, image = rng.normal(0, 0.3, (B, T, 33, 3)), rng.uniform(0, 1, (B, T, 33, 3))
@@ -193,6 +194,20 @@ def test_head_lock_matches_numpy():
                        torch.tensor(present), torch.ones(B, T, dtype=torch.bool), torch.tensor([True, False])).numpy()
     for b, h in enumerate((True, False)):
         assert np.abs(f_t[b] - frame_features(times, world[b], image[b], vis[b], present[b], h)).max() < 1e-5
+
+
+def test_head_moves_match_numpy():
+    """seated.head_moves vs the torch version: same amplitude, zero share and speed statistics."""
+    from mttrain.seated import head_moves
+    from mttrain.gpugen.motion import head_moves as gpu_head_moves
+    rng = np.random.default_rng(0)
+    gen = torch.Generator().manual_seed(0)
+    a = np.stack([head_moves(rng, 120, 30.0) for _ in range(3000)])  # 400 was too noisy (12 % apart)
+    b = gpu_head_moves(gen, 3000, 120, 30.0, "cpu").numpy()
+    for f, name in ((lambda h: np.abs(h), "abs"), (lambda h: (np.abs(h) < 1e-9).astype(float), "zero"),
+                    (lambda h: np.abs(np.diff(h, axis=1)), "speed")):
+        x, y = f(a).mean((0, 1)), f(b).mean((0, 1))
+        assert (np.abs(x - y) < 0.1 * x + 1e-3).all(), (name, x, y)
 
 
 def test_hand_lock_matches_numpy():

@@ -3,9 +3,10 @@ not the same random stream. Model parameters are (B, N, P) at the source rate (3
 
 import math
 
+import numpy as np
 import torch
 
-from ..seated import ARM_KEYS, HEAD_LIFE, HEAD_LIFE_TAU, LEG_ZERO, REST
+from ..seated import ARM_KEYS, HEAD_LIFE, HEAD_LIFE_TAU, HEAD_MOVES, HEAD_SHARES, LEG_ZERO, REST
 
 REST_NAMES = list(REST)
 
@@ -40,6 +41,25 @@ def unwrap(x):
     d = torch.diff(x, dim=-1)
     d = d - 2 * math.pi * torch.round(d / (2 * math.pi))
     return torch.cat([x[..., :1], x[..., :1] + torch.cumsum(d, -1)], -1)
+
+
+def head_moves(gen, B, n, fps, device):
+    """seated.head_moves, batched -> (B, n, 3) turn, nod, tilt (rad)."""
+    m = HEAD_MOVES
+    S = int(math.ceil(n / fps / (m["move"][0] + m["hold"][0]))) + 2
+    r = lambda *shape: torch.rand(*shape, generator=gen, device=device)
+    amp = torch.tensor(np.radians([m["turn"], m["nod"], m["tilt"]]), dtype=torch.float32, device=device)
+    tg = (2 * r(B, S + 1, 3) - 1) * amp * (r(B, S + 1, 3) >= m["p_zero"])
+    mv = m["move"][0] + (m["move"][1] - m["move"][0]) * r(B, S)
+    hd = m["hold"][0] + (m["hold"][1] - m["hold"][0]) * r(B, S)
+    start = torch.cat([torch.zeros(B, 1, device=device), torch.cumsum(mv + hd, 1)[:, :-1]], 1) \
+        - r(B, 1) * (mv[:, :1] + hd[:, :1])
+    t = (torch.arange(n, device=device, dtype=torch.float32) / fps).expand(B, n).contiguous()
+    k = (torch.searchsorted(start.contiguous(), t, right=True) - 1).clamp(0, S - 1)
+    w = min_jerk((t - start.gather(1, k)) / mv.gather(1, k))
+    a = tg.gather(1, k[..., None].expand(B, n, 3))
+    b = tg.gather(1, (k + 1)[..., None].expand(B, n, 3))
+    return a + (b - a) * w[..., None]
 
 
 def rest_weights(gen, B, n, fps, device, p_rest=0.6, max_cover=0.6, slots=3):
@@ -134,6 +154,11 @@ class Seater(torch.nn.Module):
         act = u(0, 1)
         for j, key in enumerate(HEAD_LIFE):
             out[:, :, P[key]] += act * S[:, 34 + j]
+        on = (torch.rand(B, generator=gen, device=dev) < HEAD_MOVES["p"]).float()[:, None, None]
+        hm = on * head_moves(gen, B, n, fps, dev)
+        for k, (neck, head, share) in enumerate(HEAD_SHARES):
+            out[:, :, P[neck]] += share * hm[..., k]
+            out[:, :, P[head]] += (1 - share) * hm[..., k]
         for k, s in enumerate("lr"):
             w, names = rest_weights(gen, B, n, fps, dev)
             # one template variation per sequence and template (seated: per arm, per template name)

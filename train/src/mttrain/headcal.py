@@ -4,7 +4,8 @@ the same motion and camera, both against the truth. Used to calibrate mttrain.mp
 response (HEAD_GAIN, HEAD_NOISE_DEG, HAND_GAIN, HAND_NOISE_DEG).
 
     uv run python -m mttrain.headcal [--sets v1 fov1 rest1 contact1] [--seed 0]
-                                     [--gain world image] [--noise world image]   # try other head values
+                                     [--image-gain T N L] [--world-gain T N L] [--image-nod DEG] [--world-nod DEG]
+                                     [--noise world image]   # try other head values (turn, nod, tilt)
                                      [--session sessions/<s>]   # also: pose vs hand model on a recording
 
 Wrist bend: image = signed in-plane angle of wrist -> index/pinky midpoint minus elbow -> wrist; world =
@@ -17,7 +18,9 @@ Measures, per axis (turn, nod, tilt), slope and correlation of observed against 
 - image: head-vs-shoulder cues in the image (turn and nod: nose offset from the ear midpoint along and
   across the ear line over the ear distance; tilt: ear line angle minus shoulder line angle), observed
   image landmarks vs the true landmarks projected through the same camera.
-Slope 1 / correlation 1: the observation follows the head fully.
+Slope 1 / correlation 1: the observation follows the head fully. Also printed: the mean observed angle
+per axis ("mean"), which calibrates the fixed 3D nod (mpstyle.HEAD_NOD_DEG). For the head response, use
+the designed head clips (--sets head1): the CMU sets have too little head-vs-chest motion.
 """
 
 import argparse
@@ -160,15 +163,24 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sets", nargs="*", default=["v1", "fov1", "rest1", "contact1"])
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--gain", type=float, nargs=2, metavar=("WORLD", "IMAGE"), help="override mpstyle.HEAD_GAIN")
+    for sp in ("image", "world"):
+        ap.add_argument(f"--{sp}-gain", type=float, nargs=3, metavar=("TURN", "NOD", "TILT"),
+                        help=f"override mpstyle.HEAD_GAIN['{sp}']")
+    for sp in ("image", "world"):
+        ap.add_argument(f"--{sp}-nod", type=float, help=f"override mpstyle.HEAD_NOD_DEG['{sp}'] (deg)")
     ap.add_argument("--noise", type=float, nargs=2, metavar=("WORLD", "IMAGE"), help="override HEAD_NOISE_DEG")
     ap.add_argument("--session", help="recorded session: also compare the pose's wrist bend with the hand model's")
     a = ap.parse_args()
-    if a.gain:
-        ms.HEAD_GAIN.update(world=a.gain[0], image=a.gain[1])
+    for sp in ("image", "world"):
+        g = getattr(a, f"{sp}_gain")
+        if g:
+            ms.HEAD_GAIN[sp] = (g[1], g[0], g[2])  # HEAD_AXES order: nod, turn, tilt
+        if getattr(a, f"{sp}_nod") is not None:
+            ms.HEAD_NOD_DEG[sp] = getattr(a, f"{sp}_nod")
     if a.noise:
         ms.HEAD_NOISE_DEG.update(world=a.noise[0], image=a.noise[1])
-    print(f"synthetic head response: gain {ms.HEAD_GAIN}, noise deg {ms.HEAD_NOISE_DEG}; hands: gain {ms.HAND_GAIN}, "
+    print(f"synthetic head response: gain {ms.HEAD_GAIN} ({ms.HEAD_AXES}), nod deg {ms.HEAD_NOD_DEG}, "
+          f"noise deg {ms.HEAD_NOISE_DEG}; hands: gain {ms.HAND_GAIN}, "
           f"noise deg {ms.HAND_NOISE_DEG} (per-sequence spread)")
     rng = np.random.default_rng(a.seed)
     ch = load()
@@ -190,8 +202,10 @@ def main():
             print(f"  {space:10s} {src:9s} " + "  ".join(f"{ax} {s:+.2f}/{c:.2f}" for ax, (s, c) in zip(AXES if len(f) == 3 else ["bend"], f)))
     print("== pooled (slope/corr)")
     for (src, space), (t, o) in sorted(pooled.items(), key=lambda kv: (kv[0][1], kv[0][0])):
-        f = fit(np.concatenate(t), np.concatenate(o))
-        print(f"  {space:10s} {src:9s} " + "  ".join(f"{ax} {s:+.2f}/{c:.2f}" for ax, (s, c) in zip(AXES if len(f) == 3 else ["bend"], f)))
+        t, o = np.concatenate(t), np.concatenate(o)
+        f = fit(t, o)
+        print(f"  {space:10s} {src:9s} " + "  ".join(f"{ax} {s:+.2f}/{c:.2f}" for ax, (s, c) in zip(AXES if len(f) == 3 else ["bend"], f))
+              + "   mean " + " ".join(f"{m:+.2f}" for m in o.mean(0)) + "  (true " + " ".join(f"{m:+.2f}" for m in t.mean(0)) + ")")
     if a.session:
         print(f"== {a.session}: wrist bend, pose vs hand model (image)")
         session_hands(a.session)

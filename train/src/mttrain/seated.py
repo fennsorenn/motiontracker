@@ -10,6 +10,9 @@ the rest:
 - Head life: slow extra turns, nods and tilts on the neck and head with a per-sequence activity
   level (added 2026-11-11: CMU's head barely tilts relative to the chest, +-9 deg p5-p95, and turns
   and nods +-25 deg; webcam users turn, nod and tilt more).
+- Head moves (added 2026-11-11 for m1-v10): in HEAD_MOVES["p"] of the sequences, deliberate looks:
+  min-jerk moves to random head-vs-chest targets (turn, nod, tilt; each axis often left at zero, so
+  plain turns, nods and tilts occur alone), then holds, on top of CMU's head and the head life.
 - Rest postures: per arm, stretches of hands in the lap, on the desk, or hanging beside the chair,
   blended in and out with minimum-jerk transitions. Arms resting below the frame is a normal
   streaming posture (PLAN.md §3.3), and standing mocap barely contains it.
@@ -34,6 +37,13 @@ REST = {
 HEAD_LIFE = {"neck_twist": 0.15, "head_twist": 0.25, "neck_bend": 0.10, "head_bend": 0.12, "neck_lean": 0.15,
              "head_lean": 0.15}
 HEAD_LIFE_TAU = 1.0
+# head moves: fraction of seated sequences, target amplitude deg (uniform +-), probability that an axis
+# stays at zero per target, move and hold durations s
+HEAD_MOVES = {"p": 0.4, "turn": 70.0, "nod": 30.0, "tilt": 30.0, "p_zero": 0.4, "move": (0.3, 1.2),
+              "hold": (0.2, 2.0)}
+# head-vs-chest turn, nod, tilt split over the neck and head joints: (neck parameter, head parameter,
+# neck share); joint parameters are radians of rotation
+HEAD_SHARES = (("neck_twist", "head_twist", 0.45), ("neck_bend", "head_bend", 0.5), ("neck_lean", "head_lean", 0.6))
 ARM_KEYS = ["clavicle_rx", "clavicle_ry", "clavicle_rz", "uparm_twist", "uparm_ry", "uparm_rz", "elbow_bend",
             "lowarm_twist", "wrist_ry", "wrist_rz"]
 LEG_ZERO = ["upleg_twist", "upleg_ry", "upleg_rz", "knee_bend", "lowleg_twist", "foot_bend", "foot_lean0",
@@ -62,6 +72,20 @@ def _smooth(x, fps, seconds):
     return np.convolve(pad, np.ones(k) / k, mode="valid")
 
 
+def head_moves(rng, n, fps):
+    """Deliberate head moves (n, 3): turn, nod, tilt in joint-parameter units (rad), HEAD_MOVES."""
+    m = HEAD_MOVES
+    S = int(np.ceil(n / fps / (m["move"][0] + m["hold"][0]))) + 2
+    amp = np.radians([m["turn"], m["nod"], m["tilt"]])
+    tg = rng.uniform(-1, 1, (S + 1, 3)) * amp * (rng.random((S + 1, 3)) >= m["p_zero"])
+    mv, hd = rng.uniform(*m["move"], S), rng.uniform(*m["hold"], S)
+    start = np.concatenate([[0.0], np.cumsum(mv + hd)[:-1]]) - rng.uniform(0, 1) * (mv[0] + hd[0])
+    t = np.arange(n) / fps
+    k = np.clip(np.searchsorted(start, t, side="right") - 1, 0, S - 1)
+    w = min_jerk((t - start[k]) / mv[k])
+    return tg[k] + (tg[k + 1] - tg[k]) * w[:, None]
+
+
 def rest_weights(rng, n, fps, p_rest=0.6, max_cover=0.6):
     """Per-frame blend weight in [0, 1] toward a rest posture, and the template name per frame."""
     w = np.zeros(n)
@@ -88,11 +112,13 @@ def rest_weights(rng, n, fps, p_rest=0.6, max_cover=0.6):
     return w, names
 
 
-def seat(rng, pn, mp, fps=30.0, limits=None, force_rest=None):
+def seat(rng, pn, mp, fps=30.0, limits=None, force_rest=None, moves=True):
     """Model parameters (N, P) of a standing clip -> seated version (N, P).
 
     `force_rest` (left template name, right template name): both arms rest in these postures for
     the whole clip instead of random rest stretches (rendered rest test sessions).
+
+    `moves`: False never adds head moves (rendered rest and head test sessions).
 
     `limits` (name -> (lo, hi), from mtcore.mhr.limits) clamps pose parameters afterwards, so
     targets never contain impossible poses (fits and random rest variations can stray past them)."""
@@ -130,6 +156,11 @@ def seat(rng, pn, mp, fps=30.0, limits=None, force_rest=None):
     act = rng.uniform(0, 1)
     for k, sd in HEAD_LIFE.items():
         out[:, P[k]] += act * _slow(rng, n, fps, sd, HEAD_LIFE_TAU)
+    if moves and rng.random() < HEAD_MOVES["p"]:
+        hm = head_moves(rng, n, fps)
+        for k, (neck, head, share) in enumerate(HEAD_SHARES):
+            out[:, P[neck]] += share * hm[:, k]
+            out[:, P[head]] += (1 - share) * hm[:, k]
 
     # rest postures per arm
     for k, s in enumerate("lr"):

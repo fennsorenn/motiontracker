@@ -128,7 +128,7 @@ def generate(rng, ch, lm, pn, base, T, fps, limits):
     P = {n: i for i, n in enumerate(pn)}
     pair = tuple(rng.choice(["lap", "desk"], 2))
     body = np.where([n.startswith("scale_") for n in pn], base, 0.0)  # proportions only, neutral pose
-    mp = seat(rng, pn, np.repeat(body[None], T, 0), fps, limits, force_rest=pair)
+    mp = seat(rng, pn, np.repeat(body[None], T, 0), fps, limits, force_rest=pair, moves=False)
     arm_idx = {s: [P[f"{s}_{k}"] for k in ARM_KEYS] for s in "lr"}
     head_idx = [P[k] for k in HEAD_KEYS]
     w = {s: np.zeros(T) for s in "lr"}

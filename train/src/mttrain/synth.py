@@ -48,10 +48,10 @@ def synthesize(rng, ch, landmark_model, mp, src_fps=30.0, fps=None, style=None, 
     Xs = {}
     for space in ("image", "world"):
         Xs[space] = X
-        g, sd = style.head_gain[space], style.head_noise_deg[space]
-        if g != 1.0 or sd != 0.0:
-            delta, pivot = _rig(ch, landmark_model)(states, X)
-            Xs[space] = head_lock(Xs[space], delta, pivot, g, head_noise(rng, t, sd))
+        g, nod, sd = np.asarray(style.head_gain[space]), style.head_nod_deg[space], style.head_noise_deg[space]
+        if (g != 1.0).any() or nod != 0.0 or sd != 0.0:
+            delta, C = _rig(ch, landmark_model)(states, X)
+            Xs[space] = head_lock(Xs[space], delta, C, g, np.radians(nod), head_noise(rng, t, sd))
         g, sd = style.hand_gain[space], style.hand_noise_deg[space]
         if g != 1.0 or sd != 0.0:
             hnoise = np.stack([head_noise(rng, t, sd), head_noise(rng, t, sd)], 1)

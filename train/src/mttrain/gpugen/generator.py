@@ -99,10 +99,11 @@ class GpuGenerator:
         dt = torch.diff(tz, dim=1, prepend=(tz[:, :1] - 1.0 / fps[:, None]))
         dt = torch.where(valid, dt, (1.0 / fps)[:, None].expand_as(dt))
         # MediaPipe's partial head and wrist-bend response, separately for the image and world landmarks
-        delta, pivot = self.head_rig(states, X)
+        delta, C = self.head_rig(states, X)
         Xs = {}
         for space in ("image", "world"):
-            Y = head_lock(X, delta, pivot, style.head_gain[space], head_noise(self.gen, dt, style.head_noise_deg[space]))
+            Y = head_lock(X, delta, C, style.head_gain[space], torch.deg2rad(style.head_nod_deg[space]),
+                          head_noise(self.gen, dt, style.head_noise_deg[space]))
             hn = torch.stack([head_noise(self.gen, dt, style.hand_noise_deg[space]) for _ in range(2)], 2)
             Xs[space] = style.placement(hand_lock(Y, style.hand_gain[space], hn))
         Xi, Xw = Xs["image"], Xs["world"]

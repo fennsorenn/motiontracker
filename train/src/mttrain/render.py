@@ -89,11 +89,10 @@ def head_choreography(rng, pn, mp, fps, limits):
     u = np.clip((t - seg * step) / (0.6 * step), 0, 1)
     w = u ** 3 * (10 - 15 * u + 6 * u * u)
     cur = keys[seg] + (keys[seg + 1] - keys[seg]) * w[:, None]  # (n, 3) total turn, nod, tilt in parameter units
-    for k, (neck, head, share) in enumerate((("neck_twist", "head_twist", 0.45), ("neck_bend", "head_bend", 0.5),
-                                            ("neck_lean", "head_lean", 0.6))):
+    from .seated import HEAD_SHARES, clamp
+    for k, (neck, head, share) in enumerate(HEAD_SHARES):
         out[:, P[neck]] = share * cur[:, k]
         out[:, P[head]] = (1 - share) * cur[:, k]
-    from .seated import clamp
     return clamp(pn, out, limits)
 
 
@@ -138,7 +137,7 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
         elif rest_mode or head_mode:
             held = np.repeat(mps[key][s0 + rng.integers(T)][None], T, 0)
             pair = tuple(rng.choice(list(REST), 2))
-            mp = seat(rng, pn, held, FPS, lim, force_rest=pair)
+            mp = seat(rng, pn, held, FPS, lim, force_rest=pair, moves=False)
             if head_mode:
                 mp = head_choreography(rng, pn, mp, FPS, lim)
         else:

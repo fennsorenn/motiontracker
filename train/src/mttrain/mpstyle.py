@@ -48,6 +48,14 @@ the head-vs-chest rotation (relative to MediaPipe's own shoulder/hip frame, Head
 noise, about the neck joint (head_lock); the 3D head
 points are also dropped for some sequences (head3d), so the model can run with or without them.
 
+Revised for m1-v10 (2026-11-11) after m1-v9 regressed (its 8 deg image noise taught the model to
+ignore the 2D head cues; the neck pivot moved the face): on the designed head clips (render prepare
+--head: still torso, large head rotations, exact truth) MediaPipe's 2D cues follow the head with a
+steady gain and high correlation (slope/corr turn 0.63/0.96, nod 0.44/0.82, tilt 0.35/0.57), while
+the 3D head stays nearly locked to the torso (slope ~0.05) at a different constant nod. So: a gain
+per axis (nod, turn, tilt about the chest frame), a fixed nod of the face (3D), the ear midpoint as
+pivot, and no noise. The low correlations above came from the CMU sets' small head motion.
+
 Wrist bend (found 2026-11-11): MediaPipe Pose's hand points (pinky, index, thumb) follow the hand's
 bend away from the forearm only partly too. Image slope/correlation of the bend: against the hand
 model on the recorded session 0.10-0.28 / 0.33-0.46 (the hand model's own error lowers the slope, so
@@ -106,22 +114,36 @@ DEPTH_SLOPE = {"torso": 0.13, "shoulders": -0.12, "hips": 0.0, "neck": 0.20, "ea
                "upper_arm": 0.14, "forearm": 0.24, "hand": 0.09}
 DEPTH_REF_DIST = 1.1  # metres, camera to shoulders (median of the calibration renders)
 
-# head rotation (see docstring): gain on the head-vs-chest rotation and slow rotation noise (std deg,
-# time constant s), per space. Calibrated 2026-11-11 with mttrain.headcal on the four rendered sets
+# head rotation, m1-v9 values (superseded below; kept for the record): gain on the head-vs-chest rotation
+# and slow rotation noise (std deg, time constant s), per space. Calibrated 2026-11-11 with mttrain.headcal on the four rendered sets
 # (pooled slope/corr turn, nod, tilt; MediaPipe vs synthetic): image 0.54/0.54, 0.34/0.40, 0.38/0.40 vs
 # 0.57/0.53, 0.52/0.50, 0.34/0.36; world 0.07/0.18, 0.12/0.18, 0.09/0.09 vs 0.11/0.06, 0.08/0.05,
 # 0.08/0.07 (world correlation is limited by the general landmark jitter; image nod also comes from
 # placement and flattening, so it stays high). The renders' faces are untextured; real faces may
 # respond more, which the per-sequence spread (Style.sample head_spread) is meant to cover.
-HEAD_GAIN = {"world": 0.1, "image": 0.25}
-HEAD_NOISE_DEG = {"world": 1.0, "image": 8.0}
+# HEAD_GAIN = {"world": 0.1, "image": 0.25}; HEAD_NOISE_DEG = {"world": 1.0, "image": 8.0}
+# head rotation, m1-v10 (see docstring): per space, gains per HEAD_AXES on the head-vs-chest rotation,
+# a fixed nod of the face points (deg) and slow rotation noise (std deg, time constant s). Calibrated
+# with mttrain.headcal --sets head1 (2026-11-11, two head clips): synthetic vs MediaPipe image cue slope
+# turn 0.66/0.65, nod 0.46/0.45, tilt 0.37/0.37 (correlation 0.98/0.96, 0.84/0.81, 0.74/0.57); mean image
+# nod cue -0.09/-0.01 (an image nod of +4 deg matched it here but pushed the CMU sets 0.1 above MediaPipe,
+# so none); mean 3D nod +0.3/+1.1 deg (0 deg would give -16). The 3D slopes stay near zero
+# in both (synthetic nod -0.3/corr -0.16 vs MediaPipe +0.09/+0.16: weak either way, not matched further).
+HEAD_AXES = ("nod", "turn", "tilt")  # rotations about the landmark chest frame's x (ear line), y (up), z
+HEAD_GAIN = {"world": (0.10, 0.10, 0.10), "image": (0.45, 0.70, 0.38)}
+HEAD_NOD_DEG = {"world": 25.0, "image": 0.0}
+HEAD_NOISE_DEG = {"world": 0.0, "image": 0.0}
 HEAD_NOISE_TAU = 0.5
+HEAD_SPREAD = 0.2  # per-sequence log-normal spread of each head gain
+HEAD_NOD_SPREAD_DEG = 3.0  # per-sequence normal spread of the fixed nod
 HEAD3D_DROP = 0.3  # fraction of sequences without the 3D head points (world xyz, image z)
 
 # wrist bend (see docstring): gain on the hand's swing away from the forearm direction and slow rotation
 # noise (std deg), per space; image calibrated toward the session (mttrain.headcal --hands)
-HAND_GAIN = {"world": 0.15, "image": 0.3}
-HAND_NOISE_DEG = {"world": 4.0, "image": 5.0}
+# m1-v9: HAND_GAIN = {"world": 0.15, "image": 0.3}, HAND_NOISE_DEG = {"world": 4.0, "image": 5.0}; off for
+# m1-v10 (never validated against the truth, part of v9's regression)
+HAND_GAIN = {"world": 1.0, "image": 1.0}
+HAND_NOISE_DEG = {"world": 0.0, "image": 0.0}
 # per side: elbow, wrist, hand points turned about the wrist (pinky, index, thumb)
 HAND_SIDES = [(I["left_elbow"], I["left_wrist"], [I["left_pinky"], I["left_index"], I["left_thumb"]]),
               (I["right_elbow"], I["right_wrist"], [I["right_pinky"], I["right_index"], I["right_thumb"]])]
@@ -170,13 +192,19 @@ def mat_to_rotvec(M):
     return w * np.where(s > 1e-6, th / np.maximum(2 * s, 1e-12), 0.5)[..., None]
 
 
-def head_lock(X, delta, pivot, gain, noise):
-    """MediaPipe's partial head-rotation response on landmarks X (T, 33, 3), any frame/unit of pivot.
+def head_lock(X, delta, C, gain, nod, noise):
+    """MediaPipe's partial head-rotation response on landmarks X (T, 33, 3), any frame and unit.
     delta (T, 3, 3): the head's rotation relative to the chest, in X's frame (world rotation taking the
-    head as if rigid with the chest to the actual head); pivot (T, 3): the neck joint; noise (T, 3)
-    rotation vectors. The face points are turned as if the head had rotated by noise * delta^gain."""
-    want = rotvec_to_mat(noise) @ rotvec_to_mat(gain * mat_to_rotvec(delta))
+    head as if rigid with the chest to the actual head); C (T, 3, 3): the chest frame (columns, as
+    landmark_frames); gain (3,) per HEAD_AXES; nod (rad): a fixed extra nod; noise (T, 3) rotation
+    vectors. The face points turn about the ear midpoint as if the head-vs-chest rotation, as a rotation
+    vector in the chest frame, were scaled per axis (and nodded by `nod`), then perturbed by noise."""
+    Ct = np.swapaxes(C, -1, -2)
+    r = mat_to_rotvec(Ct @ delta @ C) * np.asarray(gain)
+    r[..., 0] += nod
+    want = rotvec_to_mat(noise) @ C @ rotvec_to_mat(r) @ Ct
     M = want @ np.swapaxes(delta, -1, -2)
+    pivot = 0.5 * (X[..., I["left_ear"], :] + X[..., I["right_ear"], :])
     X = X.copy()
     X[..., FACE, :] = pivot[..., None, :] + np.einsum("tij,tkj->tki", M, X[..., FACE, :] - pivot[..., None, :])
     return X
@@ -202,7 +230,7 @@ class HeadRig:
     """The head's rotation relative to the chest as MediaPipe's points see it: landmark frames (the
     chest from shoulders and hips; MediaPipe ties its face points to those, not to the spine), relative
     to the rest pose. Returns delta (T, 3, 3), the world rotation taking the face as if rigid with the
-    chest frame to the actual face, and the neck joint (T, 3) in metres (the pivot)."""
+    chest frame to the actual face, and the chest frame C (T, 3, 3)."""
 
     def __init__(self, joint_names, rest_state, landmark_model):
         self.n = list(joint_names).index("c_neck")
@@ -213,7 +241,7 @@ class HeadRig:
         """states (T, J, 8); X (T, 33, 3) the true landmarks in metres (before any style)."""
         C, H = landmark_frames(X)
         delta = H @ self.rest_rel.T @ np.swapaxes(C, -1, -2)
-        return delta, states[..., self.n, :3] / 100.0
+        return delta, C
 
 
 def rotvec_between(a, b):
@@ -247,6 +275,12 @@ def head_noise(rng, t, sigma_deg, tau=HEAD_NOISE_TAU):
         r = np.exp(-(t[i] - t[i - 1]) / tau)
         out[i] = r * out[i - 1] + np.sqrt(1 - r * r) * rng.normal(0, s, 3)
     return out
+
+
+def _spread_gain(rng, g, spread):
+    """Per-sequence variation of gains g (array): log-normal, clipped to [0.02, 1]; gains of 1 (off) stay 1."""
+    out = np.clip(g * np.exp(rng.normal(0, spread, np.shape(g))), 0.02, 1.0)
+    return np.where(g >= 1.0, 1.0, out)
 
 
 def _factors(d):
@@ -300,7 +334,8 @@ class Style:
     depth_gain: np.ndarray = field(default_factory=lambda: np.ones(len(DEPTH)))  # per DEPTH_KEYS
     depth_bias: np.ndarray = field(default_factory=lambda: np.zeros(len(DEPTH)))  # metres
     depth_relax: float = 0.0  # 0: render-calibrated flattening, 1: none (see depth_at)
-    head_gain: dict = field(default_factory=lambda: {"world": 1.0, "image": 1.0})  # head_lock gain per space
+    head_gain: dict = field(default_factory=lambda: {"world": np.ones(3), "image": np.ones(3)})  # per HEAD_AXES
+    head_nod_deg: dict = field(default_factory=lambda: {"world": 0.0, "image": 0.0})
     head_noise_deg: dict = field(default_factory=lambda: {"world": 0.0, "image": 0.0})
     head3d: bool = True  # False: the 3D head points are dropped from the model input
     hand_gain: dict = field(default_factory=lambda: {"world": 1.0, "image": 1.0})  # hand_lock gain per space
@@ -314,18 +349,20 @@ class Style:
     def calibrated(cls):
         return cls(HIP_WIDEN, IMAGE_Z, _factors(FACE_PLACEMENT), _factors(FACE_WORLD), dict(LIMB),
                    depth_gain=np.array([g for g, _ in DEPTH.values()]), depth_bias=np.array([b for _, b in DEPTH.values()]),
-                   head_gain=dict(HEAD_GAIN), head_noise_deg=dict(HEAD_NOISE_DEG),
+                   head_gain={k: np.array(g) for k, g in HEAD_GAIN.items()}, head_nod_deg=dict(HEAD_NOD_DEG),
+                   head_noise_deg=dict(HEAD_NOISE_DEG),
                    hand_gain=dict(HAND_GAIN), hand_noise_deg=dict(HAND_NOISE_DEG))
 
     @classmethod
-    def sample(cls, rng, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25, head_spread=0.4):
+    def sample(cls, rng, spread=0.08, offset_cm=0.8, image_z_spread=0.25, depth_spread=0.25, head_spread=HEAD_SPREAD):
         """Calibrated values with per-sequence log-normal spread (face factors shared, so it stays symmetric).
         Image z gets a wider spread: its scale is the least certain and may differ between MediaPipe models.
         Depth gains: log-normal depth_spread, clipped to [0.05, 1]; biases: normal, 1 cm + 30% of the bias;
         depth_relax uniform in [0, 1]: real video may be flattened less than the renders it was calibrated
         on (2026-11-09), so the strength is left for the model to infer.
-        Head and hands: gains log-normal head_spread (clipped to [0.02, 1]), noise std log-normal
-        head_spread; the 3D head points are dropped for HEAD3D_DROP of the sequences."""
+        Head and hands: gains log-normal head_spread (clipped to [0.02, 1]; a gain of 1 stays 1), fixed
+        nod normal HEAD_NOD_SPREAD_DEG, noise std log-normal head_spread; the 3D head points are dropped
+        for HEAD3D_DROP of the sequences."""
         ln = lambda: float(np.exp(rng.normal(0, spread)))
         fp, fw = _factors(FACE_PLACEMENT), _factors(FACE_WORLD)
         fp[FACE] = 1 + (fp[FACE] - 1) * ln()
@@ -335,10 +372,11 @@ class Style:
                    rng.normal(0, offset_cm / 100, (33, 3)),
                    np.clip(g0 * np.exp(rng.normal(0, depth_spread, len(g0))), 0.05, 1.0),
                    b0 + rng.normal(0, 1, len(b0)) * (0.01 + 0.3 * np.abs(b0)), float(rng.uniform(0, 1)),
-                   {k: float(np.clip(g * np.exp(rng.normal(0, head_spread)), 0.02, 1.0)) for k, g in HEAD_GAIN.items()},
+                   {k: _spread_gain(rng, np.array(g), head_spread) for k, g in HEAD_GAIN.items()},
+                   {k: float(v + rng.normal(0, HEAD_NOD_SPREAD_DEG)) for k, v in HEAD_NOD_DEG.items()},
                    {k: float(v * np.exp(rng.normal(0, head_spread))) for k, v in HEAD_NOISE_DEG.items()},
                    bool(rng.random() >= HEAD3D_DROP),
-                   {k: float(np.clip(g * np.exp(rng.normal(0, head_spread)), 0.02, 1.0)) for k, g in HAND_GAIN.items()},
+                   {k: float(_spread_gain(rng, np.array(g), head_spread)) for k, g in HAND_GAIN.items()},
                    {k: float(v * np.exp(rng.normal(0, head_spread))) for k, v in HAND_NOISE_DEG.items()})
 
     def placement(self, X):
