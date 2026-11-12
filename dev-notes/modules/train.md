@@ -149,6 +149,9 @@ Moved to `mtcore.features` (2026-11-12) so the live runtime shares one implement
 - `--check-session`: onnxruntime vs torch on a session (3e-6 on `m1-v10`). Depends on `onnx` + `onnxruntime`.
 - CMU-derived weights: the bundle stays in gitignored `data/`. Bump `version` when the bundle layout changes (`modules/service.md`, Extending).
 
+## Hand model (`mttrain.hands`, planned; M4 hand model WIP 2026-11-12)
+New subpackage `train/src/mttrain/hands/`: procedural finger motion, MHR joints → MediaPipe's 21 hand landmarks, noise model, generator, model, training, export for the learned hand model. Plan: `plans/m4-hand-model.md`.
+
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
 

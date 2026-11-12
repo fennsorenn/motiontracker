@@ -1,4 +1,4 @@
-# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; learned hand model planned)
+# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; learned hand model WIP)
 
 Location: `service/` (uv project, package `mtservice`, CLI `mtservice`). Live runtime: camera or video → MediaPipe Holistic → M1 lifter (ONNX) → VRM bone rotations as VMC over UDP. Usage: `service/README.md`. Plan: `plans/m2-vspark-runtime.md` (steps 0-4 done, step 4 = vspark behavior `learned_tracker` on vspark `feature/learned-tracker`, not merged; step 5, the owner's live test, open). Decisions: `PLAN.md` §7.4. Model: `m1-v10` (`m1-v11`, body co-rotation, discarded by the owner 2026-11-12).
 
@@ -48,10 +48,10 @@ JSON lines; stdout carries only events (MediaPipe and log output go to stderr). 
 - **New output sink** (e.g. the deferred WebSocket): take `(t, bones, conf, present)` per frame like `VmcSender.send`, plus a rest-pose update hook if it sends positions; call it from the main loop next to `vmc.send`. New VMC extension addresses go under the same (provisional) namespace.
 - **New bundle version**: `lifter.json` carries `"format": "motiontracker-lifter", "version": 1`. `LiveLifter` currently checks only the input layout (offsets, frame dim) against `mtcore.features`, not the version. When the bundle format changes (new inputs such as hands/face, other output bones), bump `version` in `mttrain.export` and branch on it in `LiveLifter`; feature changes go into `mtcore.features` so training, export and runtime stay identical.
 - **New output bones**: come from the bundle (`output_bones`); add their Unity names to `vmc.UNITY_NAMES` and parents to `vmc.VRM_PARENT`.
-- **Learned hand model** (planned): replaces `hands.py` behind the same per-frame `{vrmBone: quat}` output for the hands seen; finger names/parents already exist in `vmc.py`.
+- **Learned hand model** (WIP, plan `plans/m4-hand-model.md`): runner planned next to `hands.py`, selectable by flag; replaces `hands.py` behind the same per-frame `{vrmBone: quat}` output for the hands seen; finger names/parents already exist in `vmc.py`.
 - **Learned face path** (`PLAN.md` §3.11/§7.5): may replace the MediaPipe blendshapes or consume them (e.g. as merger input); keep the `{ARKit name: 0..1}` observation key so `vmc.py` is unchanged.
 
 ## Open
-- Owner's live test of face and fingers; finger calibration; learned hand model (planned).
+- Owner's live test of face and fingers; finger calibration; learned hand model (WIP, `plans/m4-hand-model.md`).
 - Checking the stream with vspark's existing `vmc_receiver` (plan step 3) is not recorded as done; only the unit test against its mapping exists.
 - vspark-side smoothing, camera naming (OpenCV indices vs the browser's device list), camera exclusivity with MediaPipe Tracking, the OSC namespace name (plan open questions).
