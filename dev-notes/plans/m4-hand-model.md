@@ -152,3 +152,12 @@ Next steps (v2):
 3. Pair model with absolute rotation and position; training data with interactions, flips and swaps.
 4. Wrist evaluation on renders vs the body model's hand bone; combination step; comparison video.
 5. Finger fixes.
+
+## Recordings and detectors (2026-11-12)
+
+- `hands-v1` recorder protocol (128 s). First take `sessions/2026-11-12T21-40-58-session`: framed on torso
+  and hands, no head: Holistic found the face in 0% and hands in 0-19% of frames (it finds hands from the
+  body). Protocol now asks for head and shoulders in view and has no desk steps. Retake
+  `sessions/2026-11-12T21-56-29-session`: face and pose 100%, hands 70-100% per segment.
+- Hand Landmarker (standalone) evaluated: see `PLAN.md` §5.6. The retake is the real video where both
+  detectors can be compared directly.
