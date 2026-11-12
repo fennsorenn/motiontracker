@@ -106,3 +106,19 @@ Commits on `feature/m4-hand-model`; report to the owner after each step's number
   - Right hand = left hand mirrored across x for the same parameter values (max 0.001 cm): one model for
     both hands, the left mirrored.
   - `mtcore.convert` already maps MHR fingers to VRM finger bones; nothing new needed there.
+- Step 2 (procedural finger motion) done: `mttrain.hands.skeleton`, `mttrain.hands.motion` (20db6c1). 16
+  gestures (thumb poses by IK, pulled toward a natural thumb), coupled random poses (random thumbs are
+  blends of the gestures'), holds and minimum-jerk transitions, per-finger timing offsets, drift,
+  tremor, taps. Previews sent to the owner (gesture sheet, 12 s video).
+- Step 3 (rendered hands) done: `render prepare --hands` with `mttrain.hands.stage` (hands-in-use arms by
+  IK in front of chest and face, palms any way), procedural fingers, 60-95 deg cameras; `fingers.npz` and
+  finger bones in `gt.jsonl` (8e6c34b). MediaPipe finds the hands in about half the frames, like on the
+  real session. Known flaw: an arm can pass through the torso (IK has no body collision).
+- Evaluation (`mttrain.hands.evaluate`, bc489b1): segment directions in a palm frame built from the hand's
+  own points, system vs MHR truth. First numbers (2 test sequences): ported solve on MediaPipe median
+  25.6 deg (p90 58.6), on perfect landmarks 12.2 deg (its own model's floor).
+- **Conversion bugs found and fixed** (749b6dc, `mtcore.convert`): the avatar's palm sat 25.3 deg rolled
+  against MHR's (hand D was the minimal rotation of the finger direction only), and distal finger bones
+  had D = identity (~45 deg off). Ground truth replayed on the avatar is now exact (test). Live runtime:
+  the body model's hand bones turn by 25.3 deg, nothing else changes. Regenerated: m1-v10's offline
+  session poses (runtime test reference) and the ground truth of every render set (`render gt`).
