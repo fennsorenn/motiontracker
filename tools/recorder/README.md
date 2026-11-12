@@ -19,6 +19,10 @@ camera, video size and protocol, then press **Start recording**.
   carry a `variant` tag in `session.json`. It also has two `contact` segments (palms pressed
   together, one hand touching the face) whose true distance is about zero, for the contact
   metric. Prefer it for new recordings.
+- **hands-v1** (about 2 min) is for the hand model: counting and single fingers, wrist bends, palm
+  turns, and two-hand interactions (palms together, fingertips, touching the fingers of one hand with
+  the other, rubbing and clapping, crossing, one hand in front of the other, index fingers
+  approaching), then hands out of view and back. Hands in front of your chest, both in view.
 - **free** has no prompts. Press <kbd>S</kbd> to start and end a "still" segment. Press
   **Stop and save** when done.
 
