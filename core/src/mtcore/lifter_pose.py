@@ -9,7 +9,7 @@ need pymomentum or the MHR assets.
 
 import numpy as np
 
-from .convert import MAP, VRM_CHILD, MhrToVrm
+from .convert import HAND_ACROSS, MAP, VRM_CHILD, MhrToVrm
 
 # camera axes (x right, y down, z forward) -> MHR world for a performer facing the camera
 R0 = np.diag([1.0, -1.0, -1.0])
@@ -69,6 +69,7 @@ class LifterPose:
         rest = {b: np.asarray(p, dtype=np.float64) for b, p in vrm_rest_positions.items()}
         if self.only is not None:  # the bones, their parents' chain is in self.only too, and their direction children
             keep = set(self.only) | {VRM_CHILD[b] for b in self.only if b in VRM_CHILD}
+            keep |= {v for b in self.only if b in HAND_ACROSS for v in HAND_ACROSS[b][0]}  # palm roll
             rest = {b: p for b, p in rest.items() if b in keep}
         self.conv = MhrToVrm(self.jn, self.rest_state, rest)
 
