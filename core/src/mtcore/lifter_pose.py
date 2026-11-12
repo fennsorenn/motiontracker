@@ -9,7 +9,7 @@ need pymomentum or the MHR assets.
 
 import numpy as np
 
-from .convert import MhrToVrm
+from .convert import MAP, VRM_CHILD, MhrToVrm
 
 # camera axes (x right, y down, z forward) -> MHR world for a performer facing the camera
 R0 = np.diag([1.0, -1.0, -1.0])
@@ -40,19 +40,37 @@ def mat_to_quat(R):
 
 
 class LifterPose:
-    def __init__(self, out_joints, out_parent_idx, joint_names, parents, rest_state, vrm_rest_positions):
+    def __init__(self, out_joints, out_parent_idx, joint_names, parents, rest_state, vrm_rest_positions, bones=None):
         """out_joints / out_parent_idx: the lifter's joints and their parents (index into out_joints,
         -1 = none). joint_names, parents, rest_state (J, 8): MHR skeleton at zero pose.
-        vrm_rest_positions: avatar bone -> rest position (normalized VRM)."""
+        vrm_rest_positions: avatar bone -> rest position (normalized VRM). bones: only these VRM bones
+        are needed (live use: far cheaper per frame); None = every bone the avatar has."""
         self.out_joints, self.out_parent_idx = list(out_joints), list(out_parent_idx)
+        self.only = None if bones is None else list(bones)
         self.jn, self.parents = list(joint_names), list(parents)
         self.rest_state = np.asarray(rest_state, dtype=np.float64)
         self.rest_g = quat_to_mat(self.rest_state[:, 3:7])  # (J, 3, 3)
         self.out_idx = [self.jn.index(j) for j in self.out_joints]
+        self.joints = range(len(self.jn))  # MHR joints to compute
+        if self.only is not None:
+            need = set()
+            for b in self.only:
+                need.add(self.jn.index(MAP[b][0]))
+            for m in ("l", "r"):  # forearm twist (MhrToVrm.forearm)
+                need |= {self.jn.index(f"{m}_lowarm"), self.jn.index(f"{m}_wrist_twist")}
+            for j in list(need):
+                while self.parents[j] >= 0:
+                    j = self.parents[j]
+                    need.add(j)
+            self.joints = sorted(need)  # parents come before children in MHR's joint order
         self.set_avatar(vrm_rest_positions)
 
     def set_avatar(self, vrm_rest_positions):
-        self.conv = MhrToVrm(self.jn, self.rest_state, {b: np.asarray(p, dtype=np.float64) for b, p in vrm_rest_positions.items()})
+        rest = {b: np.asarray(p, dtype=np.float64) for b, p in vrm_rest_positions.items()}
+        if self.only is not None:  # the bones, their parents' chain is in self.only too, and their direction children
+            keep = set(self.only) | {VRM_CHILD[b] for b in self.only if b in VRM_CHILD}
+            rest = {b: p for b, p in rest.items() if b in keep}
+        self.conv = MhrToVrm(self.jn, self.rest_state, rest)
 
     def table(self):
         """The MHR part as plain JSON-able data."""
@@ -60,18 +78,20 @@ class LifterPose:
                 "parents": self.parents, "rest_state": self.rest_state.tolist()}
 
     @classmethod
-    def from_table(cls, t, vrm_rest_positions):
-        return cls(t["out_joints"], t["out_parent_idx"], t["joint_names"], t["parents"], t["rest_state"], vrm_rest_positions)
+    def from_table(cls, t, vrm_rest_positions, bones=None):
+        return cls(t["out_joints"], t["out_parent_idx"], t["joint_names"], t["parents"], t["rest_state"], vrm_rest_positions, bones)
 
     def mhr_globals(self, rot):
-        """Rest-relative predictions (T, K, 3, 3) -> MHR world joint rotations (T, J, 3, 3)."""
+        """Rest-relative predictions (T, K, 3, 3) -> MHR world joint rotations (T, J, 3, 3) (with `bones`,
+        only the joints those need; the rest are identity)."""
         T = len(rot)
         Gc = [None] * len(self.out_joints)
         for k, p in enumerate(self.out_parent_idx):
             Gc[k] = rot[:, k] if p < 0 else Gc[p] @ rot[:, k]
-        G = np.empty((T, len(self.jn), 3, 3))
+        G = np.broadcast_to(np.eye(3), (T, len(self.jn), 3, 3)).copy()  # joints not computed: identity
         pred = dict(zip(self.out_idx, range(len(self.out_joints))))
-        for j, p in enumerate(self.parents):
+        for j in self.joints:
+            p = self.parents[j]
             if j in pred:
                 G[:, j] = R0.T @ Gc[pred[j]] @ self.rest_g[j]
             elif p < 0:
@@ -85,4 +105,5 @@ class LifterPose:
         state = np.zeros(rot.shape[:1] + (len(self.jn), 8))
         state[..., 3:7] = mat_to_quat(self.mhr_globals(rot))
         state[..., 7] = 1.0
-        return self.conv.locals(state)
+        out = self.conv.locals(state)
+        return out if self.only is None else {b: q for b, q in out.items() if b in self.only}
