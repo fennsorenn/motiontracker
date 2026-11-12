@@ -25,7 +25,7 @@ def project(C, fx, aspect=4 / 3):
     return np.stack([0.5 + fx * C[..., 0] / C[..., 2], 0.5 + fx * aspect * C[..., 1] / C[..., 2]], -1)
 
 
-def frames(set_dirs, fk=None):
+def frames(set_dirs, fk=None, landmarks="landmarks.jsonl"):
     fk = fk or HandFK()
     rows = []
     for set_dir in set_dirs:
@@ -33,7 +33,7 @@ def frames(set_dirs, fk=None):
             z = np.load(d / "seq.npz")
             Rc, tc, fx = z["R"], z["t"], float(z["fx"])
             truth = Truth(d, fk)
-            for line in open(d / "landmarks.jsonl"):
+            for line in open(d / landmarks):
                 f = json.loads(line)
                 img = {s: project((truth.posed_points(s, f["t"]) - tc) @ Rc.T, fx) for s in "lr"}
                 gap = float(np.linalg.norm(img["l"][[0, 9]].mean(0) - img["r"][[0, 9]].mean(0)))
@@ -115,8 +115,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("sets", type=Path, nargs="+")
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--landmarks", default="landmarks.jsonl", help="landmark file name in each sequence")
     a = ap.parse_args()
-    rows = frames(a.sets)
+    rows = frames(a.sets, landmarks=a.landmarks)
     out = analyse(rows)
     print(json.dumps(out, indent=1))
     if a.json:

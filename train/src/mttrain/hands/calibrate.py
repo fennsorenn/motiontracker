@@ -23,7 +23,7 @@ from .skeleton import HandFK
 MIRROR = np.array([1.0, 1.0, -1.0])  # in the canonical frame: palm and back swapped
 
 
-def collect(set_dir, fk=None):
+def collect(set_dir, fk=None, landmarks="landmarks.jsonl"):
     """Per hand-frame records: seq, side, t, detected, true canonical (21, 3), MediaPipe canonical or None,
     hand size in the image (fraction of the frame width), palm-to-camera angle (deg)."""
     fk = fk or HandFK()
@@ -32,7 +32,7 @@ def collect(set_dir, fk=None):
         z = np.load(d / "seq.npz")
         Rc, tc, fx = z["R"], z["t"], float(z["fx"])
         truth = Truth(d, fk)
-        for line in open(d / "landmarks.jsonl"):
+        for line in open(d / landmarks):
             f = json.loads(line)
             for side, S in (("l", "left"), ("r", "right")):
                 P = truth.points(side, f["t"])
@@ -108,8 +108,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("set", type=Path)
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--landmarks", default="landmarks.jsonl", help="landmark file name in each sequence")
     a = ap.parse_args()
-    out = analyse(collect(a.set))
+    out = analyse(collect(a.set, landmarks=a.landmarks))
     names = ["wrist", "thumb CMC", "thumb MCP", "thumb IP", "thumb tip"] + [
         f"{f} {j}" for f in ("index", "middle", "ring", "pinky") for j in ("MCP", "PIP", "DIP", "tip")]
     print(f"{out['frames']} hand-frames, {out['in_view']} in view; detected {out['detected']} "
