@@ -279,6 +279,13 @@ Frequency-shaped jitter; depth noise ≫ 2D noise; dropouts; confidence-correlat
 
 ### 5.6 Hands `[CLAUDE]` → `[USER]` (2026-11-12)
 Hands have the least permissively licensed mocap → **procedural finger poses** within anatomical joint limits, smooth random trajectories between them. `[USER]` (2026-11-12)
+- Hand model v2 (owner, 2026-11-12, after the h2 comparison video): `[USER]` unless marked
+  - The hand model also outputs the hand's **absolute rotation and position** (camera frame), so it stays independent of the body; the wrist bend is computed downstream from the body's forearm (merger later, a simple combination step first). `[USER]`
+  - **Position and rotation history as input** (helps tell MediaPipe's palm/back flips from real turns); remaining ambiguity to the merger. `[USER]`
+  - **Hands as a pair**: shared per-hand encoder (left mirrored) plus a joint layer seeing both hands, so swaps, occlusion and hand-to-hand contact can be learned; each hand still works alone. `[USER]` Cross-part relations (hand-face, retargeting) stay with the merger (§3.10a). `[CLAUDE]`
+  - **Explicit hand interactions, temporary flips and hand swaps in the training data**: interactions as real two-hand motion (IK choreography), flips and swaps as detector failures calibrated on renders of those interactions through real MediaPipe. `[USER]`
+  - Combination step puts the hand's twist about the forearm onto the lower arm (overriding the body model's), only the bend onto the wrist, with wrist limits and flip rejection. `[CLAUDE]` (owner to confirm)
+  - Order: wrist first, then the finger improvements (independent fingers and counting, bend axis) from the owner's feedback on h2. `[USER]`
 - First learned hand model (plan `dev-notes/plans/m4-hand-model.md`): synthetic MediaPipe hand landmarks from MHR FK plus a noise model calibrated on rendered hands `[USER]`; input = the hand's own landmarks only for now, deferring full-pose context (§3) `[USER]`; judged on rendered hands with exact ground truth against the ported solve `[USER]` (all 2026-11-12).
 
 ### 5.7 Optional real paired data `[CLAUDE]` → `[OPEN]`

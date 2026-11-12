@@ -135,3 +135,20 @@ Commits on `feature/m4-hand-model`; report to the owner after each step's number
   generator. `h2` adds a velocity loss against the jitter.
 - `h2` (velocity loss, `--w-vel 2`) on `hands2`: 13.2 / 47 deg, motion x2.2 (h1 x2.5): same accuracy, a
   little less jitter.
+
+## Owner feedback on h2 and v2 decisions (2026-11-12)
+
+Comparison video (ported vs h2 on the real session): "surprisingly good". Weaknesses: fingers other than
+the index are weak (counting on one hand doesn't show), wrist bends not captured, fingers sometimes
+slightly off their natural bend axis. Decisions for v2: `PLAN.md` §5.6 (absolute hand rotation and
+position output, position/rotation history input, hands as a pair, interactions/flips/swaps explicitly in
+the training data). Order: wrist first, then the finger fixes.
+
+Next steps (v2):
+1. Measure MediaPipe's flips and swaps on the existing renders (durations, when they happen).
+2. Two-hand interaction choreography (IK: palms together, fingertip to other hand, hand over hand,
+   crossing, clapping; real fast palm turns), rendered and run through MediaPipe; calibrate the image-space
+   hand landmarks (orientation, position) and interaction failures (swaps, merges, losses).
+3. Pair model with absolute rotation and position; training data with interactions, flips and swaps.
+4. Wrist evaluation on renders vs the body model's hand bone; combination step; comparison video.
+5. Finger fixes.
