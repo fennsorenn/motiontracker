@@ -1,6 +1,13 @@
-# service (runtime implemented 2026-11-12; vspark behavior planned)
+# service (runtime and vspark behavior implemented 2026-11-12; face/fingers WIP; learned hand model planned)
 
-Location: `service/` (uv project, package `mtservice`, CLI `mtservice`). Live runtime: camera or video → MediaPipe Holistic → M1 lifter (ONNX) → VRM bone rotations as VMC over UDP. Usage: `service/README.md`. Plan: `plans/m2-vspark-runtime.md` (steps 0-3 done; step 4, the vspark behavior `learned_tracker`, and step 5, the owner's live test, open). Decisions: `PLAN.md` §7.4.
+Location: `service/` (uv project, package `mtservice`, CLI `mtservice`). Live runtime: camera or video → MediaPipe Holistic → M1 lifter (ONNX) → VRM bone rotations as VMC over UDP. Usage: `service/README.md`. Plan: `plans/m2-vspark-runtime.md` (steps 0-4 done, step 4 = vspark behavior `learned_tracker` on vspark `feature/learned-tracker`, not merged; step 5, the owner's live test, open). Decisions: `PLAN.md` §7.4. Model: `m1-v10` (`m1-v11`, body co-rotation, discarded by the owner 2026-11-12).
+
+## Face and fingers (WIP, started 2026-11-12)
+Plan: `plans/m2-face-hands.md`; decisions: `PLAN.md` §7.5. Branch `feature/m2-face-hands`.
+- Face: MediaPipe's blendshape model (taken from the Face Landmarker bundle) run on Holistic's face landmarks → 52 ARKit blendshape values, sent as `/VMC/Ext/Blend/Val`.
+- Fingers: Python port of vspark's `hand_landmarks_to_bones`, sent as VMC finger bones.
+- Planned afterwards: a learned hand model (no design recorded yet).
+File layout, VMC details and checks to be documented when done.
 
 Dependencies: `mtcore` without the `mhr` extra (numpy-only modules, `modules/mtcore.md`), mediapipe 0.10.18, onnxruntime, opencv-contrib-python. No torch, no pymomentum, no MHR assets: everything model- and skeleton-specific comes from the bundle written by `mttrain.export` (`modules/train.md`).
 
@@ -40,5 +47,6 @@ JSON lines; stdout carries only events (MediaPipe and log output go to stderr). 
 - **New output bones**: come from the bundle (`output_bones`); add their Unity names to `vmc.UNITY_NAMES` and parents to `vmc.VRM_PARENT`.
 
 ## Open
-- vspark behavior `learned_tracker` (planned, separate vspark branch). Checking the stream with vspark's existing `vmc_receiver` (plan step 3) is not recorded as done; only the unit test against its mapping exists.
+- Face blendshapes and fingers (WIP, above); learned hand model (planned).
+- Checking the stream with vspark's existing `vmc_receiver` (plan step 3) is not recorded as done; only the unit test against its mapping exists.
 - vspark-side smoothing, camera naming (OpenCV indices vs the browser's device list), camera exclusivity with MediaPipe Tracking, the OSC namespace name (plan open questions).
