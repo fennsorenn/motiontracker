@@ -23,9 +23,10 @@ import pymomentum.geometry as geom
 import pymomentum.solver as S
 import torch
 
+from mtcore.lifter_pose import mat_to_quat
 from mtcore.mhr import FLEX_T, limits
 
-from .infer import Runner, mat_to_quat, read_session
+from .infer import Runner, read_session
 from .skeleton import OUT_JOINTS
 
 EXCESS = (np.radians(1.0), np.radians(6.0))

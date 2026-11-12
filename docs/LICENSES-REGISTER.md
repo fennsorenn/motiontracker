@@ -18,6 +18,9 @@ and §8 before adding anything. The project's own license is still open (PLAN.md
 | numpy | https://numpy.org | BSD-3-Clause | `eval/` metrics | |
 | mediapipe 0.10.18 (Python) | https://pypi.org/project/mediapipe/ | Apache 2.0 (PyPI metadata) | `spikes/mp-python-parity`; planned runtime detector (`service/`) | Not bundled. 0.10.18's Holistic Python wrapper needs a workaround (see the spike README). Pulls in its own dependencies (jax, matplotlib, opencv-contrib, sentencepiece, sounddevice): check them before the runtime ships. |
 | opencv-python-headless | https://pypi.org/project/opencv-python-headless/ | Apache 2.0 (OpenCV 4.5+) | `spikes/mp-python-parity` video decoding; planned runtime camera capture | Not bundled. |
+| onnx | https://pypi.org/project/onnx/ (github.com/onnx/onnx) | Apache 2.0 | `train`: ONNX export of the lifter (`mttrain.export`) | Not bundled. |
+| onnxruntime | https://pypi.org/project/onnxruntime/ | MIT | `train`: export parity check; planned runtime model execution (`service/`) | Not bundled. |
+| M1 live bundles (`data/m1/runs/<run>/live/`: `model.onnx`, `lifter.json`) | Exported by `mttrain.export` | As the checkpoints (trained on CMU-derived data); `lifter.json` holds MHR rest data (Apache 2.0) and AvatarSample_D's rest bone positions | Live runtime input | Local only, like the checkpoints. |
 | pytest (dev) | https://pytest.org | MIT | `eval/` tests | |
 | vitest, tsx, typescript (dev) | npm | MIT / MIT / Apache 2.0 | `baseline/` tooling | |
 | Owner's recorded sessions (`sessions/`) | Recorded with `tools/recorder` | Owner's own recordings | Evaluation | Gitignored; contain video of the owner. |

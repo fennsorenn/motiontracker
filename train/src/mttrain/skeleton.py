@@ -12,6 +12,7 @@ Rotations are 3x3 matrices here (numpy); the model uses 6D (first two columns).
 import numpy as np
 
 from mtcore.landmarks import MP33
+from mtcore.lifter_pose import quat_to_mat  # noqa: F401  (re-exported for train)
 
 OUT_JOINTS = ["root", "c_spine0", "c_spine1", "c_spine2", "c_spine3", "c_neck", "c_head"]
 for _s in "lr":
@@ -36,16 +37,6 @@ CONTACT_POINTS = [("l_hand", "l_wrist", ("left_index", "left_pinky")), ("r_hand"
 CONTACT_PARENT = [OUT_JOINTS.index(p) for _, p, _ in CONTACT_POINTS]
 CONTACT_LM = [[MP33.index(n) for n in lms] for _, _, lms in CONTACT_POINTS]
 CONTACT_PAIRS = [(0, 1), (0, 2), (1, 2)]  # hand-hand, left hand-nose, right hand-nose
-
-
-def quat_to_mat(q):
-    """Quaternions (..., 4) xyzw -> rotation matrices (..., 3, 3)."""
-    x, y, z, w = np.moveaxis(q / np.linalg.norm(q, axis=-1, keepdims=True), -1, 0)
-    return np.stack([
-        np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], -1),
-        np.stack([2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], -1),
-        np.stack([2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)], -1),
-    ], -2)
 
 
 class TargetExtractor:

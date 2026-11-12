@@ -40,6 +40,7 @@ import numpy as np
 
 from mtcore.convert import MhrToVrm
 from mtcore.landmarks import MP33, LandmarkModel
+from mtcore.lifter_pose import R0, mat_to_quat
 from mtcore.mhr import limits, load, skeleton_state
 from mtcore.paths import AVATARS, REPO_ROOT
 from mtcore.vrm import load_vrm
@@ -47,7 +48,7 @@ from mtcore.vrm import load_vrm
 from . import choreo
 from .camera import sample_desk_camera
 from .dataset import FITS, clip_table
-from .infer import OUTPUT_BONES, R0, mat_to_quat
+from .infer import OUTPUT_BONES
 from .seated import REST, seat
 from .skeleton import quat_to_mat
 
