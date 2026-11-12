@@ -1,12 +1,13 @@
 """mtservice: camera or video -> MediaPipe Holistic -> M1 lifter -> VMC.
 
     mtservice [--camera N | --video FILE [--realtime]] [--vmc HOST:PORT] [--bundle DIR] [--task FILE]
-              [--stdio] [--dump-poses FILE] [--dump-landmarks FILE] [--no-head3d] [--list-cameras]
+              [--avatar-vrm FILE] [--stdio] [--dump-poses FILE] [--dump-landmarks FILE] [--no-head3d] [--list-cameras]
 
 Standalone: runs until Ctrl+C or the end of the video; log lines go to stderr.
 
 --stdio (driven by a parent such as vspark's Learned Tracking behavior): JSON lines.
-  stdin (commands):  {"cmd": "avatar", "rest_positions": {vrmBone: [x, y, z]} | null}
+  stdin (commands):  {"cmd": "avatar", "vrm_path": "/abs/avatar.vrm"}   avatar rest pose from its file
+                     {"cmd": "avatar", "rest_positions": {vrmBone: [x, y, z]} | null}  (null: default)
                      {"cmd": "camera", "index": n}      switch camera
                      {"cmd": "cameras"}                 list cameras
                      {"cmd": "stop"}                    exit (closing stdin does the same)
@@ -76,6 +77,7 @@ def main(argv=None):
     ap.add_argument("--stdio", action="store_true")
     ap.add_argument("--dump-poses", type=Path)
     ap.add_argument("--dump-landmarks", type=Path)
+    ap.add_argument("--avatar-vrm", type=Path, help="avatar .vrm whose rest pose the bones are computed for")
     ap.add_argument("--no-head3d", action="store_true")
     ap.add_argument("--list-cameras", action="store_true")
     a = ap.parse_args(argv)
@@ -107,6 +109,8 @@ def run(a, emit):
     if a.stdio:
         threading.Thread(target=stdin_commands, args=(commands,), daemon=True).start()
     lifter = LiveLifter(a.bundle, head3d=not a.no_head3d)
+    if a.avatar_vrm:
+        lifter.set_avatar_vrm(a.avatar_vrm)
     detector = Detector(model_path(a.task, log=log))
     vmc = None
     if a.vmc != "off":
@@ -133,7 +137,13 @@ def run(a, emit):
                 if cmd == "stop":
                     return c.get("reason", "stop command")
                 if cmd == "avatar":
-                    lifter.set_avatar(c.get("rest_positions"))
+                    try:
+                        if c.get("vrm_path"):
+                            lifter.set_avatar_vrm(c["vrm_path"])
+                        else:
+                            lifter.set_avatar(c.get("rest_positions"))
+                    except Exception as e:  # keep running with the previous avatar
+                        emit("error", message=f"avatar: {type(e).__name__}: {e}")
                     if vmc:
                         vmc.set_rest(lifter.rest)
                 elif cmd == "cameras":

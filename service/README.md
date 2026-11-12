@@ -23,8 +23,8 @@ controlled over stdio by vspark's "Learned Tracking" behavior, or run on its own
     uv run mtservice --video <file> --vmc off --dump-poses poses.jsonl --dump-landmarks landmarks.jsonl
 
 `--stdio` turns on the control protocol for a parent process (JSON lines; full list in
-`src/mtservice/cli.py`): commands `avatar` (rest bone positions of the avatar being driven, or null
-for the default VRoid rest), `camera`, `cameras`, `stop`; events `ready`, `status` (about once a
+`src/mtservice/cli.py`): commands `avatar` (`vrm_path` of the avatar being driven, read with `mtcore.vrm`;
+or explicit `rest_positions`; null for the default VRoid rest), `camera`, `cameras`, `stop`; events `ready`, `status` (about once a
 second: fps, detection and model time, capture-to-output latency, pose presence), `cameras`,
 `error`, `stopped`. Closing stdin stops the runtime, so it never outlives its parent.
 

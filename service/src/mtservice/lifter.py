@@ -8,6 +8,7 @@ import onnxruntime as ort
 
 from mtcore.features import FRAME_DIM, OFFSETS, StreamFeatures
 from mtcore.lifter_pose import LifterPose
+from mtcore.vrm import load_vrm
 
 
 class LiveLifter:
@@ -32,6 +33,10 @@ class LiveLifter:
         """Avatar rest bone positions (normalized VRM, bone -> xyz); None = the bundle's default avatar."""
         self.rest = self.default_rest if rest_positions is None else {b: np.asarray(p, dtype=float) for b, p in rest_positions.items()}
         self.pose.set_avatar(self.rest)
+
+    def set_avatar_vrm(self, path):
+        """The avatar's rest pose read from its .vrm file (0.x or 1.0), as mttrain.export reads the default."""
+        self.set_avatar(load_vrm(path)[2])
 
     def reset(self):
         self.features = StreamFeatures(self.features.head3d)
