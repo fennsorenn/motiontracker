@@ -16,6 +16,8 @@ and §8 before adding anything. The project's own license is still open (PLAN.md
 | MediaPipe pose landmark model (from the Holistic bundle above) | extracted from `holistic_landmarker.task` (same MD5) into `data/spikes/mp-depth/model/` | Apache 2.0 (per model card; verify) | `spikes/mp-depth-probe`: activation probes | Not committed. A fine-tuned or edited derivative would need the model card license verified first. |
 | MediaPipe test image `male_full_height_hands.jpg` | storage.googleapis.com/mediapipe-assets/ | Apache 2.0 (MediaPipe test assets; verify) | Recorder headless test builds a video from it at run time | Not committed. |
 | numpy | https://numpy.org | BSD-3-Clause | `eval/` metrics | |
+| mediapipe 0.10.18 (Python) | https://pypi.org/project/mediapipe/ | Apache 2.0 (PyPI metadata) | `spikes/mp-python-parity`; planned runtime detector (`service/`) | Not bundled. 0.10.18's Holistic Python wrapper needs a workaround (see the spike README). Pulls in its own dependencies (jax, matplotlib, opencv-contrib, sentencepiece, sounddevice): check them before the runtime ships. |
+| opencv-python-headless | https://pypi.org/project/opencv-python-headless/ | Apache 2.0 (OpenCV 4.5+) | `spikes/mp-python-parity` video decoding; planned runtime camera capture | Not bundled. |
 | pytest (dev) | https://pytest.org | MIT | `eval/` tests | |
 | vitest, tsx, typescript (dev) | npm | MIT / MIT / Apache 2.0 | `baseline/` tooling | |
 | Owner's recorded sessions (`sessions/`) | Recorded with `tools/recorder` | Owner's own recordings | Evaluation | Gitignored; contain video of the owner. |
