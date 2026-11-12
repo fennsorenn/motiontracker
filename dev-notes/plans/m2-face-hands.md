@@ -1,6 +1,6 @@
 # Plan: face blendshapes and fingers in the live runtime
 
-> Branch: `feature/m2-face-hands` (from `feature/m2-vspark-runtime`); vspark `feature/learned-tracker` · Status: draft (2026-11-12)
+> Branch: `feature/m2-face-hands` (from `feature/m2-vspark-runtime`); vspark `feature/learned-tracker` · Status: steps 1-4 done (2026-11-12); step 5 (owner live test) open
 > This plan is the seed context for a worker. It is a starting point, not an
 > airtight spec — the worker is interactive and may ask to refine it.
 
@@ -99,3 +99,13 @@ merging.
   reports `face` and `fingers`. Finger bones go out only for hands seen this frame. Cost on the session
   (guarded, cores 8-15): detect 21.1 vs 20.5 ms, model + fingers 1.92 vs 1.77 ms per frame, so about
   0.7 ms for both.
+- Step 4 done (vspark `feature/learned-tracker`, fe18fbe, 6db9016; not pushed): the VMC receiver collects
+  `Blend/Val` with ARKit names and feeds them to the ARKit chain on `Blend/Apply` (other names ignored);
+  help and kind descriptions (en/de). vspark lint and all tests pass. End to end (runtime on the session
+  video into vspark's real VmcManager and Learned Tracking graph): 670 pose and 667 blendshape publishes,
+  all 30 finger bones, ARKit mapped to the avatar's expressions (eye close, mouth shapes, brows).
+- Open: finger calibration (vspark's MediaPipe Tracking has a `finger_calib` capture; Learned Tracking's
+  graph has none). Not needed for fingers to work; ask the owner after the live test. Smoothing: none,
+  matching vspark's graph.
+- Owner to check: vspark's MediaPipe Tracking likely shows winks on the wrong side (mirrored frames, no
+  swap); Learned Tracking swaps.
