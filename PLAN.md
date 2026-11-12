@@ -277,8 +277,9 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
 ### 5.5 Synthetic noise model `[CLAUDE]`
 Frequency-shaped jitter; depth noise ≫ 2D noise; dropouts; confidence-correlated error; occasional left/right hand swaps; sudden glitches. Calibrate against real MediaPipe output (§5.4). Realistic noise matters more than which anti-hedging loss is chosen.
 
-### 5.6 Hands `[CLAUDE]`
-Hands have the least permissively licensed mocap → **procedural finger poses** within anatomical joint limits, smooth random trajectories between them.
+### 5.6 Hands `[CLAUDE]` → `[USER]` (2026-11-12)
+Hands have the least permissively licensed mocap → **procedural finger poses** within anatomical joint limits, smooth random trajectories between them. `[USER]` (2026-11-12)
+- First learned hand model (plan `dev-notes/plans/m4-hand-model.md`): synthetic MediaPipe hand landmarks from MHR FK plus a noise model calibrated on rendered hands `[USER]`; input = the hand's own landmarks only for now, deferring full-pose context (§3) `[USER]`; judged on rendered hands with exact ground truth against the ported solve `[USER]` (all 2026-11-12).
 
 ### 5.7 Optional real paired data `[CLAUDE]` → `[OPEN]`
 - **Consumer IMU suit** (e.g. Sony mocopi, a few hundred dollars): record yourself with suit + webcam simultaneously → paired real data with rotation labels in the exact target domain. IMU drift is manageable over short clips. Possibly the highest-value purchase in the project.
