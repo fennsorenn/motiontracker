@@ -57,6 +57,8 @@ def generate(rng, ch, lm, pn, base, T, fps, limits):
     body = np.where([n.startswith("scale_") for n in pn], base, 0.0)
     pair = tuple(rng.choice(["lap", "desk"], 2))
     mp = seat(rng, pn, np.repeat(body[None], T, 0), fps, limits, force_rest=pair, moves=False)
+    from .pairs import still_head
+    still_head(mp, pn)  # the seated idle head motion carries nothing for hands (owner, 2026-11-12)
     out = mp.copy()
     for side in "lr":
         idx = [P[f"{side}_{k}"] for k in ARM_KEYS]

@@ -202,9 +202,14 @@ def _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, tries=40, pairs=False):
             continue
         s0 = rng.integers(0, len(mps[key]) - T + 1)
         fingers = {}
+        from .hands.pairs import FINAL_OVERLAP_CM, PairChoreo
+        global _PAIRS
+        if "_PAIRS" not in globals():
+            _PAIRS = PairChoreo(ch, lm, pn, lim, hm)
+        pc = _PAIRS
         if pairs:
-            from .hands.pairs import PairChoreo
-            mp, segs = PairChoreo(ch, lm, pn, lim, hm).generate(rng, mps[key][s0].astype(np.float64), T, FPS)
+            mp, segs = pc.generate(rng, mps[key][s0].astype(np.float64), T, FPS)
+            left = pc.last_overlap
             for side in "lr":
                 fingers[side] = mp[:, hm.fk.idx[side]].astype(np.float32)
             fingers["segments"] = segs
@@ -213,8 +218,13 @@ def _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, tries=40, pairs=False):
             for side in "lr":
                 q, labels = hm.sequence(rng, T / FPS, FPS)
                 mp[:, hm.fk.idx[side]] = q
-                fingers[side] = q.astype(np.float32)
                 fingers[f"{side}_labels"] = np.array(json.dumps(labels))
+            mp, _, after = pc.relaxer(mp)  # fingers pushed out of each other (hands.relax)
+            left = float(after.max())
+            for side in "lr":
+                fingers[side] = mp[:, hm.fk.idx[side]].astype(np.float32)
+        if left > FINAL_OVERLAP_CM:  # hands still pass through each other: draw again
+            continue
         X = lm(skeleton_state(ch, mp)) / 100.0
         cam_state = rng.bit_generator.state
         cam = sample_desk_camera(rng, X, fov=rng.uniform(60, 95))

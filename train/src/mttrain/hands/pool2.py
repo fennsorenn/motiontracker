@@ -9,7 +9,8 @@ two-hand interaction choreography (`pairs`, share P_PAIRS) or hands-in-use arms 
 fingers (`stage` + `motion`), at 30 fps, kept at the runtime's 10 Hz. Writes data/m4/pool2/<split>.npz:
 hands (N, T, 2, 21, 3) MediaPipe's hand points per side (l, r) in MHR world metres, body (N, T, 33, 3) the
 MediaPipe-style body landmarks (camera placement), q (N, T, 2, 27) finger parameters, kind (N,) 0 = stage,
-1 = pairs. CMU-derived (body proportions): local only. CPU (pymomentum IK): run under tools/guarded-run.sh.
+1 = pairs. Every sequence is collision-relaxed (`relax`); ones whose hands still overlap more than
+FINAL_OVERLAP_CM are drawn again (5 tries, then skipped). CMU-derived (body proportions): local only. CPU (pymomentum IK): run under tools/guarded-run.sh.
 """
 
 import argparse
@@ -24,7 +25,7 @@ from mtcore.paths import DATA
 from ..dataset import FITS, clip_table
 from . import stage
 from .motion import HandMotion
-from .pairs import PairChoreo
+from .pairs import FINAL_OVERLAP_CM, PairChoreo
 from .skeleton import HandFK
 
 POOL2 = DATA / "m4" / "pool2"
@@ -53,19 +54,28 @@ def main():
     T = int(a.seconds * FPS)
     step = int(FPS / OUT_FPS)
     H, Bd, Q, K = [], [], [], []
+    skipped = 0
     t0 = time.time()
     for i in range(a.n):
         key = keys[rng.choice(len(keys), p=w / w.sum())]
         clip = np.load(FITS / f"{key}.npz")["mp"]
         base = clip[rng.integers(len(clip))].astype(np.float64)
-        if rng.random() < P_PAIRS:
-            mp, _ = pc.generate(rng, base, T, FPS)
-            kind = 1
+        kind = int(rng.random() < P_PAIRS)
+        for _ in range(5):  # sequences whose hands still overlap after relaxation are drawn again
+            if kind:
+                mp, _ = pc.generate(rng, base, T, FPS)
+                left = pc.last_overlap
+            else:
+                mp = stage.generate(rng, ch, lm, pn, base, T, FPS, lim)
+                for side in "lr":
+                    mp[:, fk.idx[side]] = hm.sequence(rng, T / FPS, FPS)[0]
+                mp, _, after = pc.relaxer(mp)
+                left = float(after.max())
+            if left <= FINAL_OVERLAP_CM:
+                break
         else:
-            mp = stage.generate(rng, ch, lm, pn, base, T, FPS, lim)
-            for side in "lr":
-                mp[:, fk.idx[side]] = hm.sequence(rng, T / FPS, FPS)[0]
-            kind = 0
+            skipped += 1
+            continue
         mp = mp[::step]
         pos = positions(ch, mp.astype(np.float32)) / 100.0
         H.append(np.stack([pos[:, fk.mp21[s]] for s in "lr"], 1).astype(np.float16))
@@ -77,7 +87,8 @@ def main():
     POOL2.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(POOL2 / f"{a.split}.npz", hands=np.stack(H), body=np.stack(Bd), q=np.stack(Q),
                         kind=np.array(K, np.int8), fps=OUT_FPS)
-    print(f"{a.split}: {len(H)} sequences in {time.time() - t0:.0f} s -> {POOL2 / f'{a.split}.npz'}")
+    print(f"{a.split}: {len(H)} sequences ({skipped} skipped: hands still overlapping) in {time.time() - t0:.0f} s"
+          f" -> {POOL2 / f'{a.split}.npz'}")
 
 
 if __name__ == "__main__":
