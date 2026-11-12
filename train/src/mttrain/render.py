@@ -4,6 +4,7 @@
                                            [--head]               # designed head rotations, torso still
                                            [--fovs 50,65,80,95]   # each sequence once per field of view
                                            [--contact]            # designed contact choreography
+                                           [--hands]              # procedural finger motion, hands in view
     uv run python -m mttrain.render video   --out data/m1/renders/v1      # Blender + ffmpeg
     uv run python -m mttrain.render replay  --out data/m1/renders/v1      # headless recorder -> landmarks
                                            [--mode image]         # IMAGE running mode -> landmarks-image.jsonl
@@ -21,6 +22,8 @@ training convention (an unmirrored camera on the MHR performer; the avatar mirro
 Per sequence (data/m1/renders/<set>/seqNN/, CMU-derived: never commit):
   seq.npz        vertices (T, V, 3) MHR metres, faces, camera R/t/fx, model parameters, fps
   gt.jsonl       ground-truth VRM pose track ({t, bones}), camera-relative like the model's output
+  fingers.npz    (--hands) finger parameters per frame (MHR, `mttrain.hands.skeleton.PARAMS` order) of
+                 both hands and the key-pose labels; gt.jsonl then also has the VRM finger bones
   contacts.json  (--contact) contact intervals as session segments ('contact' palms-together /
                  hand-to-face with settleMs 0 and the true 7b distance trueCm; 'near-contact' near-face);
                  replay merges them into session.json for criterion 7b
@@ -53,6 +56,7 @@ from .seated import REST, seat
 from .skeleton import quat_to_mat
 
 FPS = 30.0
+FINGER_WORDS = ("Thumb", "Index", "Middle", "Ring", "Little")
 BLENDER = os.environ.get("MT_BLENDER", "blender")
 SCRIPT = REPO_ROOT / "tools" / "render" / "render_blender.py"
 DRIVER = REPO_ROOT / "tools" / "recorder" / "test" / "drive_headless.mjs"
@@ -98,7 +102,7 @@ def head_choreography(rng, pn, mp, fps, limits):
 
 
 def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fovs=None, contact_mode=False,
-            head_mode=False):
+            head_mode=False, hands_mode=False):
     """`rest_mode`: a held CMU posture with both arms in rest postures (lap, desk, hanging; random per arm)
     plus the seated idle motion (breathing, sway): nearly still ground truth, for noise at rest.
     `head_mode`: as rest_mode, but the head runs the HEAD_POSES choreography relative to the still torso
@@ -106,7 +110,11 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
     `fovs`: horizontal fields of view (deg); each sequence is written once per value (seqNN_fovFF), same
     motion, appearance and camera yaw, height, roll and framing; the distance follows the field of view.
     `contact_mode`: designed contact choreography (mttrain.choreo) on held-out subjects' bodies; the
-    contact intervals go to contacts.json. Also meant as follow-along reference videos for recordings."""
+    contact intervals go to contacts.json. Also meant as follow-along reference videos for recordings.
+    `hands_mode`: hands in use (mttrain.hands.stage: arms authored with IK, hands in front of the chest
+    and face, palms any way) with procedural finger motion (mttrain.hands.motion), on held-out bodies;
+    camera field of view 60-95 deg (the owner's cameras: about 70 and 90), drawn again until at least one
+    hand is in the frame for 70% of the frames. Ground truth gains the finger bones."""
     rng = np.random.default_rng(seed)
     ch = load()
     pn = list(ch.parameter_transform.names)
@@ -141,11 +149,14 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
             mp = seat(rng, pn, held, FPS, lim, force_rest=pair, moves=False)
             if head_mode:
                 mp = head_choreography(rng, pn, mp, FPS, lim)
+        elif hands_mode:
+            mp, cam, cam_state, key, s0, fingers = _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T)
         else:
             mp = seat(rng, pn, mps[key][s0:s0 + T], FPS, lim)
         states = skeleton_state(ch, mp)
-        cam_state = rng.bit_generator.state
-        cam = sample_desk_camera(rng, lm(states) / 100.0)
+        if not hands_mode:
+            cam_state = rng.bit_generator.state
+            cam = sample_desk_camera(rng, lm(states) / 100.0)
         verts = np.asarray(ch.skin_points(states.astype(np.float32))) / 100.0
         skin = np.clip(np.array([0.80, 0.60, 0.48]) * rng.uniform(0.55, 1.1) + rng.normal(0, 0.03, 3), 0.05, 1.0)
         wall = rng.uniform(0.45, 0.9, 3)
@@ -155,7 +166,9 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
                 crng.bit_generator.state = cam_state
                 cam = sample_desk_camera(crng, lm(states) / 100.0, fov=fov)
             name = f"seq{i:02d}" + (f"_fov{fov:.0f}" if fov is not None else "")
-            _write(Path(out) / name, verts, faces, cam, mp, skin, wall, key, states, conv, T)
+            _write(Path(out) / name, verts, faces, cam, mp, skin, wall, key, states, conv, T, fingers=hands_mode)
+            if hands_mode:
+                np.savez_compressed(Path(out) / name / "fingers.npz", **fingers)
             if contacts is not None:
                 (Path(out) / name / "contacts.json").write_text(json.dumps(contacts, indent=1))
         tally = {v: round(sum(c["t1"] - c["t0"] for c in contacts if c["variant"] == v) / 1000, 1)
@@ -164,24 +177,64 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
               + (f", fov {fovs}" if fovs else "") + (f", contact s {tally}" if tally else ""), flush=True)
 
 
-def _write(d, verts, faces, cam, mp, skin, wall, key, states, conv, T):
+def _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, tries=40):
+    """Hands-in-use arms with fingers moving and a camera that sees at least one hand 70% of the time."""
+    from .hands import stage
+    from .hands.motion import HandMotion
+    from .hands.skeleton import HandFK
+    global _HAND_MOTION
+    if "_HAND_MOTION" not in globals():
+        _HAND_MOTION = HandMotion(HandFK(ch))
+    hm = _HAND_MOTION
+    wrists = [MP33.index("left_wrist"), MP33.index("right_wrist")]
+    tips = [MP33.index("left_index"), MP33.index("right_index")]
+    best = None
+    for _ in range(tries):
+        key = keys[rng.choice(len(keys), p=w / w.sum())]
+        if len(mps[key]) < T:
+            continue
+        s0 = rng.integers(0, len(mps[key]) - T + 1)
+        mp = stage.generate(rng, ch, lm, pn, mps[key][s0].astype(np.float64), T, FPS, lim)
+        fingers = {}
+        for side in "lr":
+            q, labels = hm.sequence(rng, T / FPS, FPS)
+            mp[:, hm.fk.idx[side]] = q
+            fingers[side] = q.astype(np.float32)
+            fingers[f"{side}_labels"] = np.array(json.dumps(labels))
+        X = lm(skeleton_state(ch, mp)) / 100.0
+        cam_state = rng.bit_generator.state
+        cam = sample_desk_camera(rng, X, fov=rng.uniform(60, 95))
+        uv, front = cam.project(X)
+        inside = (uv[..., 0] > 0.03) & (uv[..., 0] < 0.97) & (uv[..., 1] > 0.03) & (uv[..., 1] < 0.97) & front
+        seen = (inside[:, wrists] & inside[:, tips]).any(1).mean()
+        if best is None or seen > best[0]:
+            best = (seen, mp, cam, cam_state, key, s0, fingers)
+        if seen >= 0.7:
+            break
+    seen, *rest = best
+    print(f"  hands in view {100 * seen:.0f}% of frames", flush=True)
+    return tuple(rest)
+
+
+def _write(d, verts, faces, cam, mp, skin, wall, key, states, conv, T, fingers=False):
     d.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(d / "seq.npz", verts=verts.astype(np.float32), faces=faces, R=cam.R, t=cam.t,
-                        fx=cam.fx, mp=mp.astype(np.float32), fps=FPS, skin=skin, wall=wall, clip=key)
-    _write_gt(d, states, cam.R, conv, T)
+                        fx=cam.fx, mp=mp.astype(np.float32), fps=FPS, skin=skin, wall=wall, clip=key, fingers=fingers)
+    _write_gt(d, states, cam.R, conv, T, fingers)
 
 
-def _write_gt(d, states, cam_R, conv, T):
+def _write_gt(d, states, cam_R, conv, T, fingers=False):
     # ground truth, camera-relative like the model's output: G' = R0^T R_cam G
     G = quat_to_mat(states[..., 3:7])
     Gc = R0.T @ cam_R @ G
     st = states.copy()
     st[..., 3:7] = mat_to_quat(Gc)
     bones = conv.locals(st)
+    names = OUTPUT_BONES + ([b for b in bones if any(f in b for f in FINGER_WORDS)] if fingers else [])
     with open(d / "gt.jsonl", "w") as f:
         for k in range(T):
             f.write(json.dumps({"t": round(k / FPS * 1000, 1),
-                                "bones": {b: bones[b][k].round(6).tolist() for b in OUTPUT_BONES if b in bones}}) + "\n")
+                                "bones": {b: bones[b][k].round(6).tolist() for b in names if b in bones}}) + "\n")
 
 
 def gt(out, avatar="AvatarSample_D"):
@@ -192,7 +245,8 @@ def gt(out, avatar="AvatarSample_D"):
                     load_vrm(AVATARS / f"{avatar}.vrm")[2])
     for d in sorted(Path(out).glob("seq*")):
         z = np.load(d / "seq.npz")
-        _write_gt(d, skeleton_state(ch, z["mp"].astype(np.float64)), z["R"], conv, len(z["mp"]))
+        _write_gt(d, skeleton_state(ch, z["mp"].astype(np.float64)), z["R"], conv, len(z["mp"]),
+                  bool(z["fingers"]) if "fingers" in z else False)
         print(f"{d.name}: gt.jsonl rewritten", flush=True)
 
 
@@ -260,13 +314,15 @@ def main():
     ap.add_argument("--rest", action="store_true", help="held posture, arms resting (noise at rest)")
     ap.add_argument("--head", action="store_true", help="held posture, arms resting, designed head rotations")
     ap.add_argument("--contact", action="store_true", help="designed contact choreography (mttrain.choreo)")
+    ap.add_argument("--hands", action="store_true", help="procedural finger motion, hands kept in view")
     ap.add_argument("--mode", choices=("video", "image"), default="video",
                     help="replay: detector running mode (image: frame-stepped; still smoothed in 0.10.17)")
     ap.add_argument("--fovs", type=lambda v: [float(x) for x in v.split(",")], default=None,
                     help="comma-separated horizontal fields of view (deg): each sequence once per value")
     a = ap.parse_args()
     if a.step == "prepare":
-        prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest, fovs=a.fovs, contact_mode=a.contact, head_mode=a.head)
+        prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest, fovs=a.fovs, contact_mode=a.contact, head_mode=a.head,
+                hands_mode=a.hands)
     elif a.step == "video":
         video(a.out, a.threads)
     elif a.step == "gt":
