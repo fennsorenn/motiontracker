@@ -161,3 +161,11 @@ Next steps (v2):
   `sessions/2026-11-12T21-56-29-session`: face and pose 100%, hands 70-100% per segment.
 - Hand Landmarker (standalone) evaluated: see `PLAN.md` §5.6. The retake is the real video where both
   detectors can be compared directly.
+
+## v2 progress (2026-11-12)
+
+- Interaction choreography `mttrain.hands.pairs` + `render --pairs` (8e7590d); set `pairs1` (10 x 20 s) rendering.
+- Hand orientation baselines on `hands2` (`mttrain.hands.imagecal`; camera-frame palm frame from image
+  landmarks vs truth): Holistic median 28.3 deg (p90 164: 14% mirrored), Hand Landmarker 24.8 deg (p90 43,
+  1% mirrored); both see the hand about 15% small. m1-v10's hand bone: 67.5 deg global (lower arm 49.5, wrist
+  35.4): the body model barely knows how the hand is turned, matching the owner's wrist observation.
