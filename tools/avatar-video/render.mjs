@@ -1,5 +1,9 @@
 // Render a side-by-side avatar video: mirrored webcam | one avatar per system (tracks from prepare.py).
 // Usage: node render.mjs <out dir with tracks.json> <avatar.vrm> <session dir> [--size 600] [--from s] [--to s] [--keep-frames]
+//        [--arkit-map <vspark checkout>/packages/shared/src/arkit_tables.ts]
+// Panels with blendshapes (prepare.py --blendshapes) drive the avatar's face like vspark's default
+// face mapper: ARKit -> VRoid Fcl_* morph targets with vspark's ARKIT_TO_FCL table, read from a local
+// vspark checkout at render time (default: a `vspark` folder next to this repo; not copied here).
 // Frames at 60 Hz (the tracks' render rate) go to <out>/frames (deleted after a successful encode
 // unless --keep-frames), the video to <out>/compare.mp4.
 // Needs google-chrome, ffmpeg, python3, node >= 22 and network access (three.js from jsDelivr).
@@ -13,6 +17,7 @@ const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args.splice(i, 2)[1] : d; };
 const keep = args.includes('--keep-frames') && args.splice(args.indexOf('--keep-frames'), 1);
 const size = Number(opt('--size', 600)), from = opt('--from'), to = opt('--to');
+const arkitMap = opt('--arkit-map');
 const [outDir, avatar, sessionDir] = args.map((a) => path.resolve(a));
 const here = path.dirname(fileURLToPath(import.meta.url));
 const www = path.join(outDir, 'www'), frames = path.join(outDir, 'frames');
@@ -23,6 +28,17 @@ fs.mkdirSync(frames, { recursive: true });
 fs.copyFileSync(path.join(here, 'render.html'), path.join(www, 'render.html'));
 fs.symlinkSync(path.join(outDir, 'tracks.json'), path.join(www, 'tracks.json'));
 fs.symlinkSync(avatar, path.join(www, 'avatar.vrm'));
+if (JSON.parse(fs.readFileSync(path.join(outDir, 'tracks.json'), 'utf8')).panels.some((p) => p.arkit)) {
+  // ARKIT_TO_FCL entries are `  name: [['Fcl_X', 1.0], ...],` lines in vspark's arkit_tables.ts.
+  const src = fs.readFileSync(arkitMap ?? path.join(here, '../../../vspark/packages/shared/src/arkit_tables.ts'), 'utf8');
+  const block = src.slice(src.indexOf('ARKIT_TO_FCL'), src.indexOf('};', src.indexOf('ARKIT_TO_FCL')));
+  const table = {};
+  for (const [, name, targets] of block.matchAll(/^\s*(\w+):\s*\[(.*)\],?\s*$/gm))
+    table[name] = [...targets.matchAll(/\['(\w+)',\s*(-?[\d.]+)\]/g)].map((m) => [m[1], Number(m[2])]);
+  if (!Object.keys(table).length) { console.error('no ARKIT_TO_FCL table found'); process.exit(1); }
+  console.log(`ARKit -> Fcl table: ${Object.keys(table).length} shapes`);
+  fs.writeFileSync(path.join(www, 'arkit_map.json'), JSON.stringify(table));
+}
 
 const port = 8790 + Math.floor(Math.random() * 100), dbg = port + 1000;
 const server = spawn('python3', ['-m', 'http.server', String(port), '-d', www], { stdio: 'ignore' });

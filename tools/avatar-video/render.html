@@ -41,6 +41,23 @@ async function loadVrm() {
   return vrm;
 }
 
+// Face: ARKit -> Fcl_* morph weights like vspark's arkit_vrm_mapper in 'fcl' mode (sum of weight x
+// scale per target, clamped to 0..1), written to the morph targets after vrm.update() like vspark's
+// viewport does, so expression presets bound to the same morphs don't overwrite them.
+const arkitMap = data.panels.some((p) => p.arkit) ? await (await fetch('arkit_map.json')).json() : null;
+const mapTargets = arkitMap ? [...new Set(Object.values(arkitMap).flat().map(([n]) => n))] : [];
+function morphTargets(vrm) {
+  const m = new Map();
+  vrm.scene.traverse((o) => {
+    if (!o.morphTargetDictionary || !o.morphTargetInfluences) return;
+    for (const [name, idx] of Object.entries(o.morphTargetDictionary)) {
+      if (!m.has(name)) m.set(name, []);
+      m.get(name).push([o, idx]);
+    }
+  });
+  return m;
+}
+
 const panels = [];
 for (const p of data.panels) {
   const vrm = await loadVrm();
@@ -51,7 +68,7 @@ for (const p of data.panels) {
   sun.position.set(0.5, 1.5, 2.0);
   scene.add(sun);
   scene.add(vrm.scene);
-  panels.push({ ...p, vrm, scene, vrm0: vrm.meta?.metaVersion === '0', i: 0 });
+  panels.push({ ...p, vrm, scene, vrm0: vrm.meta?.metaVersion === '0', i: 0, j: 0, morphs: p.arkit ? morphTargets(vrm) : null });
 }
 
 // Camera: in front, at upper-chest height, framing hips to above the head and a full arm reach.
@@ -85,21 +102,50 @@ function poseAt(p, t) {
   p.vrm.humanoid.resetNormalizedPose();
   p.vrm.humanoid.setNormalizedPose(pose);
   p.vrm.update(1 / 60);
+  if (p.arkit) faceAt(p, t);
+}
+
+function faceAt(p, t) {
+  const a = p.arkit;
+  while (p.j + 1 < a.t.length && a.t[p.j + 1] <= t) p.j++;
+  const v = a.t[p.j] <= t ? a.values[p.j] : null;
+  const w = {};
+  if (v)
+    for (const [shape, x] of Object.entries(v))
+      for (const [target, s] of arkitMap[shape] ?? []) w[target] = (w[target] ?? 0) + x * s;
+  // Every morph the mapper can drive is written each frame (0 when not driven), as vspark releases them.
+  for (const target of mapTargets)
+    for (const [mesh, idx] of p.morphs.get(target) ?? [])
+      mesh.morphTargetInfluences[idx] = Math.min(1, Math.max(0, w[target] ?? 0));
 }
 
 function segmentAt(t) {
   return data.segments.find((s) => s.t0 <= t && t < s.t1);
 }
 
+// Face close-up inset (bottom right) for panels with blendshapes: follows the head.
+const faceCam = new THREE.PerspectiveCamera(30, 1, 0.05, 20);
+const headPos = new THREE.Vector3();
+
 window.renderAt = (t) => {
   panels.forEach((p, k) => {
     poseAt(p, t);
+    if (p.arkit) {
+      p.vrm.humanoid.getRawBoneNode('head').getWorldPosition(headPos);
+      faceCam.position.set(headPos.x, headPos.y + 0.07, headPos.z + 0.62);
+      faceCam.lookAt(headPos.x, headPos.y + 0.07, headPos.z);
+    }
     renderer.setViewport(k * S, 0, S, S);
     renderer.setScissor(k * S, 0, S, S);
     renderer.render(p.scene, camera);
     renderer.setViewport(k * S + S - I - 6, S - I - S / 15 - 6, I, I);
     renderer.setScissor(k * S + S - I - 6, S - I - S / 15 - 6, I, I);
     renderer.render(p.scene, side);
+    if (p.arkit) {
+      renderer.setViewport(k * S + S - I - 6, S / 16 + 6, I, I);
+      renderer.setScissor(k * S + S - I - 6, S / 16 + 6, I, I);
+      renderer.render(p.scene, faceCam);
+    }
   });
   ctx.drawImage(renderer.domElement, 0, 0);
   ctx.font = `bold ${Math.round(S / 26)}px sans-serif`;
@@ -115,6 +161,10 @@ window.renderAt = (t) => {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.font = `${Math.round(S / 40)}px sans-serif`;
     ctx.fillText('side view (webcam to the right)', k * S + S - I - 2, S / 15 + 10);
+    if (p.arkit) {
+      ctx.strokeRect(k * S + S - I - 6, S - S / 16 - 6 - I, I, I);
+      ctx.fillText('face', k * S + S - I - 2, S - S / 16 - 2 - I);
+    }
     ctx.font = `bold ${Math.round(S / 26)}px sans-serif`;
   });
   const seg = segmentAt(t);

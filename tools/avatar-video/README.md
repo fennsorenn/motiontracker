@@ -32,6 +32,12 @@ detector frame is over 300 ms old (the detector runs at ~10 fps).
   the baseline's fingers stay at rest too); the torso/neck/head chain is kept per system, since
   systems split the same head pose differently (the baseline has no hips, upperChest or head bone).
   `prepare.py --all-bones` keeps everything.
+- Face (optional): `prepare.py --blendshapes NAME=FILE` (e.g. the runtime's `--dump-landmarks`) gives
+  panel NAME ARKit blendshapes. They drive the face like vspark's default face mapper (ARKit ->
+  VRoid `Fcl_*` morphs with vspark's `ARKIT_TO_FCL` table, read from a local vspark checkout at render
+  time: `render.mjs --arkit-map <vspark>/packages/shared/src/arkit_tables.ts`, default a `vspark`
+  folder next to this repo), held per detector frame, and that panel gets a face close-up inset.
+  Fingers: `--all-bones` keeps them (e.g. the runtime's finger bones).
 - Not reproduced: vspark's arm calibration, tracking-loss fades, root motion and IK mode. No
   retargeting: rotations are copied onto the avatar as they are.
 - Webcam panel: the session's `video.webm` mirrored, resampled to 60 fps; landmark times count from
