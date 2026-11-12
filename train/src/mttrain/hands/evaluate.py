@@ -85,16 +85,30 @@ class Truth:
     def __init__(self, seq_dir, fk):
         d = Path(seq_dir)
         z = np.load(d / "fingers.npz")
-        self.fps = float(np.load(d / "seq.npz")["fps"])
+        seq = np.load(d / "seq.npz")
+        self.fps = float(seq["fps"])
+        self.mp = seq["mp"]
         self.q = {s: z[s] for s in "lr"}
         self.fk = fk
         self.cache = {}
 
+    def frame(self, t_ms):
+        return min(len(self.q["l"]) - 1, max(0, int(round(t_ms / 1000 * self.fps))))
+
     def points(self, side, t_ms):
-        k = min(len(self.q[side]) - 1, max(0, int(round(t_ms / 1000 * self.fps))))
+        """The hand's shape: finger pose on MHR's rest body (orientation meaningless; shape metrics only)."""
+        k = self.frame(t_ms)
         if (side, k) not in self.cache:
             self.cache[side, k] = self.fk.points(self.q[side][k], side)
         return self.cache[side, k]
+
+    def posed_points(self, side, t_ms):
+        """The hand as rendered (posed body), MHR world metres."""
+        from mtcore.mhr import positions
+        k = self.frame(t_ms)
+        if ("posed", side, k) not in self.cache:
+            self.cache["posed", side, k] = positions(self.fk.ch, self.mp[k])[self.fk.mp21[side]] / 100.0
+        return self.cache["posed", side, k]
 
 
 def ported(rest):

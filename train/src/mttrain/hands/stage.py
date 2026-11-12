@@ -17,8 +17,15 @@ from ..seated import ARM_KEYS, clamp, min_jerk, seat
 # hand points in the hand frame (cm, from MHR's rest hand): along the fingers, toward the thumb, palm side
 HAND_POINTS = {"wrist": (0.0, 0.0, 0.0), "middle1": (8.2, 0.0, 0.0), "index1": (8.3, 2.1, 0.7),
                "pinky1": (6.4, -3.8, 0.7)}
-WEIGHTS = {"wrist": 1.0, "middle1": 1.0, "index1": 0.5, "pinky1": 0.5}
+WEIGHTS = {"wrist": 1.0, "middle1": 1.0, "index1": 2.0, "pinky1": 2.0}  # knuckles set the palm's roll
 MAX_RESIDUAL_CM = 2.5
+MAX_PALM_DEG = 30.0  # achieved vs asked palm direction (the knuckle targets are only cm apart)
+
+
+def _palm_normal(w, m, i, p):
+    f = _unit(m - w)
+    s = i - p
+    return np.cross(f, _unit(s - (s @ f) * f))
 
 
 def _unit(v):
@@ -65,13 +72,18 @@ def generate(rng, ch, lm, pn, base, T, fps, limits):
                 m0[idx] = cur
                 X = lm(skeleton_state(ch, m0)[None])[0]
                 pose = cur
-                for _ in range(6):
+                for _ in range(10):
                     tg = hand_targets(rng, X, side)
                     sol = choreo._solve(ch, pn, jn, m0, (side,), tg)
                     prim = [(j, p) for j, p, _, pr in tg if pr]
                     res = np.linalg.norm(choreo._joint_pos(ch, sol, [j for j, _ in prim], jn)
                                          - np.stack([p for _, p in prim]), axis=-1)
-                    if res.max() < MAX_RESIDUAL_CM:
+                    four = [f"{side}_{j}" for j in ("wrist", "middle1", "index1", "pinky1")]
+                    want = dict((j, p) for j, p, _, _ in tg)
+                    got = choreo._joint_pos(ch, sol, four, jn)
+                    palm_err = np.degrees(np.arccos(np.clip(
+                        _palm_normal(*got) @ _palm_normal(*(want[j] for j in four)), -1, 1)))
+                    if res.max() < MAX_RESIDUAL_CM and palm_err < MAX_PALM_DEG:
                         pose = sol[idx]
                         break
             keys.append((k, km, pose))
