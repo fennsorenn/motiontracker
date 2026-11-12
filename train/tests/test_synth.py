@@ -210,7 +210,7 @@ def test_head_moves():
 
 
 def test_head3d_mask():
-    from mttrain.features import HEAD3D_DIMS, frame_features
+    from mtcore.features import HEAD3D_DIMS, frame_features
     rng = np.random.default_rng(0)
     T = 5
     world, image = rng.normal(0, 0.3, (T, 33, 3)), rng.uniform(0, 1, (T, 33, 3))

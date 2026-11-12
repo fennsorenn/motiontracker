@@ -22,7 +22,7 @@ from mtcore.mhr import load, skeleton_state
 from mtcore.paths import AVATARS
 from mtcore.vrm import load_vrm
 
-from .features import frame_features, history_indices, model_input
+from mtcore.features import frame_features, history_indices, model_input
 from .model import Lifter
 from .skeleton import OUT_JOINTS, PARENT_IDX, quat_to_mat
 

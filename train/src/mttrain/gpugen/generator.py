@@ -21,7 +21,7 @@ from mtcore.landmarks import LandmarkModel
 from mtcore.mhr import limits, load, skeleton_state
 
 from ..dataset import SRC_FPS, source_table
-from ..features import OFFSETS
+from mtcore.features import OFFSETS
 from . import features as GF
 from .fk import MhrFK
 from .geom import (HeadRig, Landmarks, Style, Targets, flat_image_z, hand_lock, head_lock, head_noise, project,

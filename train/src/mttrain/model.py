@@ -10,7 +10,7 @@ caller keeps a ring buffer of past frames (`features.history_indices`).
 import torch
 from torch import nn
 
-from .features import FRAME_DIM, OFFSETS
+from mtcore.features import FRAME_DIM, OFFSETS
 from .skeleton import OUT_JOINTS
 
 IDENTITY_6D = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])

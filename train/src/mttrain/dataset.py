@@ -14,7 +14,7 @@ from mtcore.landmarks import LandmarkModel
 from mtcore.mhr import limits, load, skeleton_state
 from mtcore.paths import DATA, REPO_ROOT
 
-from .features import OFFSETS, frame_features, history_indices, model_input
+from mtcore.features import OFFSETS, frame_features, history_indices, model_input
 from .seated import clamp, seat
 from .skeleton import TargetExtractor
 from .synth import synthesize
