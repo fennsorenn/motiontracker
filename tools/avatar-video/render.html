@@ -123,6 +123,23 @@ function segmentAt(t) {
   return data.segments.find((s) => s.t0 <= t && t < s.t1);
 }
 
+// Hand close-ups (data.handInsets): the avatar's right hand bottom left, its left hand bottom right (it
+// faces the viewer), each camera in front of the hand, aimed between the wrist and the middle knuckle.
+const handCam = new THREE.PerspectiveCamera(30, 1, 0.05, 20);
+const handPos = new THREE.Vector3(), knuckle = new THREE.Vector3();
+const HI = Math.round(S * 0.3);
+function renderHand(p, k, bone, x0) {
+  const side = bone.startsWith('left') ? 'left' : 'right';
+  p.vrm.humanoid.getRawBoneNode(bone).getWorldPosition(handPos);
+  p.vrm.humanoid.getRawBoneNode(`${side}MiddleProximal`).getWorldPosition(knuckle);
+  const c = handPos.clone().lerp(knuckle, 0.7);
+  handCam.position.set(c.x, c.y + 0.03, c.z + 0.34);
+  handCam.lookAt(c);
+  renderer.setViewport(k * S + x0, S / 16 + 6, HI, HI);
+  renderer.setScissor(k * S + x0, S / 16 + 6, HI, HI);
+  renderer.render(p.scene, handCam);
+}
+
 // Face close-up inset (bottom right) for panels with blendshapes: follows the head.
 const faceCam = new THREE.PerspectiveCamera(30, 1, 0.05, 20);
 const headPos = new THREE.Vector3();
@@ -141,6 +158,10 @@ window.renderAt = (t) => {
     renderer.setViewport(k * S + S - I - 6, S - I - S / 15 - 6, I, I);
     renderer.setScissor(k * S + S - I - 6, S - I - S / 15 - 6, I, I);
     renderer.render(p.scene, side);
+    if (data.handInsets) {
+      renderHand(p, k, 'rightHand', 6);
+      renderHand(p, k, 'leftHand', S - HI - 6);
+    }
     if (p.arkit) {
       renderer.setViewport(k * S + S - I - 6, S / 16 + 6, I, I);
       renderer.setScissor(k * S + S - I - 6, S / 16 + 6, I, I);
@@ -161,6 +182,12 @@ window.renderAt = (t) => {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.font = `${Math.round(S / 40)}px sans-serif`;
     ctx.fillText('side view (webcam to the right)', k * S + S - I - 2, S / 15 + 10);
+    if (data.handInsets) {
+      for (const [x0, label] of [[6, 'right hand'], [S - HI - 6, 'left hand']]) {
+        ctx.strokeRect(k * S + x0, S - S / 16 - 6 - HI, HI, HI);
+        ctx.fillText(label, k * S + x0 + 4, S - S / 16 - 2 - HI);
+      }
+    }
     if (p.arkit) {
       ctx.strokeRect(k * S + S - I - 6, S - S / 16 - 6 - I, I, I);
       ctx.fillText('face', k * S + S - I - 2, S - S / 16 - 2 - I);

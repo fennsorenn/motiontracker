@@ -37,7 +37,8 @@ detector frame is over 300 ms old (the detector runs at ~10 fps).
   VRoid `Fcl_*` morphs with vspark's `ARKIT_TO_FCL` table, read from a local vspark checkout at render
   time: `render.mjs --arkit-map <vspark>/packages/shared/src/arkit_tables.ts`, default a `vspark`
   folder next to this repo), held per detector frame, and that panel gets a face close-up inset.
-  Fingers: `--all-bones` keeps them (e.g. the runtime's finger bones).
+  Fingers: `--all-bones` keeps them (e.g. the runtime's finger bones); `--hand-insets` adds close-ups of
+  both hands to every avatar panel. Learned fingers on a body track: `mttrain.hands.infer --body`.
 - Not reproduced: vspark's arm calibration, tracking-loss fades, root motion and IK mode. No
   retargeting: rotations are copied onto the avatar as they are.
 - Webcam panel: the session's `video.webm` mirrored, resampled to 60 fps; landmark times count from

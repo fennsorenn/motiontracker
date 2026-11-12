@@ -14,6 +14,8 @@ baseline has no hips, upperChest or head bone; see `mteval.metrics.with_head_glo
 `--blendshapes NAME=FILE` adds ARKit blendshapes to panel NAME: a JSONL file with `t` (ms) and
 `blendshapes` ({ARKit name: 0..1}) per line, such as the runtime's `--dump-landmarks` output. The
 renderer drives the avatar's face with them (render.mjs `--arkit-map`).
+
+`--hand-insets`: every avatar panel gets close-ups of both hands along the bottom (for finger tracks).
 """
 
 import argparse
@@ -34,6 +36,7 @@ def main():
     ap.add_argument("--system", action="append", required=True)
     ap.add_argument("--all-bones", action="store_true")
     ap.add_argument("--blendshapes", action="append", default=[], metavar="NAME=FILE")
+    ap.add_argument("--hand-insets", action="store_true", help="close-ups of both hands in every avatar panel")
     a = ap.parse_args()
     session = load_session(a.session)
     results = [run_system(s, session) for s in a.system]
@@ -55,7 +58,8 @@ def main():
     meta = json.loads((Path(a.session) / "session.json").read_text())
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "tracks.json").write_text(json.dumps({"segments": meta.get("segments", []), "panels": panels}))
+    (out / "tracks.json").write_text(json.dumps({"segments": meta.get("segments", []), "panels": panels,
+                                                 "handInsets": a.hand_insets}))
     dropped = sorted(set.union(*(set(r.track.bones) for r in results)) - common - set(HEAD_CHAIN))
     if dropped and not a.all_bones:
         print(f"bones not shared by every system, left at rest: {', '.join(dropped)}")
