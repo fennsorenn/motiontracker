@@ -139,20 +139,30 @@ def evaluate(set_dir, system, avatar="AvatarSample_D"):
         run = LearnedHands(system, fk)
     else:
         run = system
-    errs, seen, total = [], 0, 0
+    errs, seen, total, motion = [], 0, 0, []
     for d in sorted(Path(set_dir).glob("seq*")):
         if hasattr(run, "reset"):
             run.reset()
         truth = Truth(d, fk)
+        prev = {}
         for line in open(d / "landmarks.jsonl"):
             f = json.loads(line)
             out = run(f)
             for side in "lr":
                 total += 1
-                if side in out:
-                    seen += 1
-                    errs.append(angle_errors(out[side], truth.points(side, f["t"])))
+                if side not in out:
+                    prev.pop(side, None)
+                    continue
+                seen += 1
+                T = truth.points(side, f["t"])
+                errs.append(angle_errors(out[side], T))
+                cur = (f["t"], segment_dirs(out[side]), segment_dirs(T))
+                if side in prev and cur[0] - prev[side][0] < 150:  # consecutive detected frames (10 Hz)
+                    ang = lambda a, b: np.degrees(np.arccos(np.clip((a * b).sum(-1), -1, 1)))
+                    motion.append((ang(prev[side][1], cur[1]), ang(prev[side][2], cur[2])))
+                prev[side] = cur
     E = np.array(errs)  # (n, 15)
+    evaluate.motion = np.array(motion)  # (m, 2, 15): system, truth segment motion per frame (deg)
     return E, seen / max(total, 1)
 
 
@@ -162,6 +172,11 @@ def report(E, rate, name):
     for i, f in enumerate(("thumb", *FINGERS)):
         v = E[:, 3 * i:3 * i + 3]
         print(f"  {f:7s} median {np.median(v):5.1f}  p90 {np.percentile(v, 90):5.1f}")
+    M = getattr(evaluate, "motion", None)
+    if M is not None and len(M):
+        sys_m, true_m = M[:, 0].mean(), M[:, 1].mean()
+        print(f"  frame-to-frame segment motion: system {sys_m:.1f} deg, truth {true_m:.1f} deg "
+              f"(x{sys_m / max(true_m, 1e-9):.2f}; above 1 = jitter)")
 
 
 def main():

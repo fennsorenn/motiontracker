@@ -6,7 +6,8 @@ Runs in data/m4/runs/<name>: config.json, log.jsonl, best.pt / last.pt. Each sam
 of a pool sequence (`pool`), truth hand points by GPU forward kinematics (MHR's left hand), canonical
 form, synthetic observations (`observe.Observer`); target = the finger parameters at the newest frame.
 Losses: Laplace NLL on the parameters (with the predicted scale) + L1 on the canonical points of the
-predicted hand (FK), the quantity the evaluation scores. Validation: the val pool, fixed noise.
+predicted hand (FK), the quantity the evaluation scores, + optionally (`--w-vel`) the frame-to-frame change
+of the prediction against the true change (the model is also run one frame earlier). Validation: the val pool, fixed noise.
 """
 
 import argparse
@@ -49,26 +50,33 @@ class Batches:
         return canonical_t(P)
 
     def sample(self, B):
+        """HISTORY + 1 frames, so the model can also be run one frame earlier (velocity loss):
+        x (B, H + 1, FRAME_DIM) newest first, q (B, 2, 27) and truth (B, 2, 21, 3) at the newest two."""
         N, T, _ = self.q.shape
         s = torch.randint(0, N, (B,), device=self.device, generator=self.gen)
-        t = torch.randint(HISTORY - 1, T, (B,), device=self.device, generator=self.gen)
-        frames = t[:, None] - torch.arange(HISTORY, device=self.device)[None]  # newest first
-        q = self.q[s[:, None], frames]  # (B, H, 27)
-        truth = self.points(q)
-        obs, lost = self.obs(truth.flip(1), self.gen)  # observer runs forward in time
+        t = torch.randint(HISTORY, T, (B,), device=self.device, generator=self.gen)
+        frames = t[:, None] - torch.arange(HISTORY + 1, device=self.device)[None]  # newest first
+        q = self.q[s[:, None], frames]  # (B, H + 1, 27)
+        truth = self.points(q[:, :2])
+        full = self.points(q)
+        obs, lost = self.obs(full.flip(1), self.gen)  # observer runs forward in time
         obs, lost = obs.flip(1), lost.flip(1)
-        return frame_input(obs, lost), q[:, 0], truth[:, 0]
+        return frame_input(obs, lost), q[:, :2], truth
 
 
 def losses(model, batches, x, q, truth):
-    pred, log_s = model(x)
-    target = q[:, OUT_IDX]
+    """Laplace NLL and point L1 at the newest frame; velocity: the change between the predictions at the
+    newest and the previous frame against the true change (frame-to-frame jitter)."""
+    pred, log_s = model(x[:, :HISTORY])
+    prev, _ = model(x[:, 1:])
+    target = q[:, 0, OUT_IDX]
     nll = (torch.abs(pred - target) * torch.exp(-log_s) + log_s).mean()
-    full = q.clone()
+    full = q[:, 0].clone()
     full[:, OUT_IDX] = pred
-    pts = (batches.points(full) - truth).abs().sum(-1).mean()
+    pts = (batches.points(full) - truth[:, 0]).abs().sum(-1).mean()
+    vel = torch.abs((pred - prev) - (target - q[:, 1, OUT_IDX])).mean()
     ang = torch.abs(pred - target).mean()
-    return nll, pts, ang
+    return nll, pts, ang, vel
 
 
 def main():
@@ -79,6 +87,7 @@ def main():
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--w-points", type=float, default=2.0)
+    ap.add_argument("--w-vel", type=float, default=0.0, help="velocity loss weight (frame-to-frame jitter)")
     ap.add_argument("--eval-every", type=int, default=1000)
     ap.add_argument("--device", default="cuda:1")
     ap.add_argument("--seed", type=int, default=0)
@@ -97,8 +106,8 @@ def main():
     log = open(run / "log.jsonl", "a")
     for step in range(1, a.steps + 1):
         model.train()
-        nll, pts, ang = losses(model, train, *train.sample(a.batch))
-        loss = nll + a.w_points * pts
+        nll, pts, ang, vel = losses(model, train, *train.sample(a.batch))
+        loss = nll + a.w_points * pts + a.w_vel * vel
         opt.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -109,7 +118,8 @@ def main():
             with torch.no_grad():
                 v = np.mean([[float(z) for z in losses(model, val, *b)] for b in vx], 0)
             rec = {"step": step, "train_nll": float(nll), "train_pts": float(pts), "val_nll": v[0], "val_pts": v[1],
-                   "val_ang_deg": float(np.degrees(v[2])), "min": round((time.time() - t0) / 60, 1)}
+                   "val_ang_deg": float(np.degrees(v[2])), "val_vel_deg": float(np.degrees(v[3])),
+                   "min": round((time.time() - t0) / 60, 1)}
             log.write(json.dumps(rec) + "\n")
             log.flush()
             print(json.dumps(rec), flush=True)
