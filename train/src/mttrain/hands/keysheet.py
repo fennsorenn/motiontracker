@@ -2,12 +2,16 @@
 whole sets).
 
     uv run python -m mttrain.hands.keysheet --out <dir> [--seed 0] [--body 0] [--events palms,rub,...]
+        [--clips palms,rub,clap] [--exposure -0.8]
 
 For each event, one key pose through the real pipeline (`pairs.PairChoreo._solve`: contacts against the
 actual pose, wrist anatomy, collision relaxation), rendered in Blender as a front close-up of the hands on
 the body of held-out clip `--body`; tiles labelled with event, overlap after relaxation, wrist flexion and
 deviation per hand, and PASS / FAIL (with the reason). Events that cannot be solved show a FAIL tile.
-Writes <dir>/sheet.png and <dir>/labels.json. CPU + GPU (Blender): use tools/guarded-run.sh.
+Writes <dir>/sheet.png and <dir>/labels.json. `--clips`: those events also as short videos of their whole key
+sequence (moves, holds, collision relaxation) from the front and from above-front-side, side by side
+(<dir>/clip_<event>.mp4). `--exposure`: Blender exposure (review renders read better darker).
+CPU + GPU (Blender): use tools/guarded-run.sh.
 """
 
 import argparse
@@ -39,8 +43,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--body", type=int, default=0)
     ap.add_argument("--events", default=",".join(DEFAULT))
+    ap.add_argument("--clips", default="")
+    ap.add_argument("--exposure", type=float, default=-0.8)
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
+    import os
+    os.environ["MT_EXPOSURE"] = str(a.exposure)
     ch = load()
     pn = list(ch.parameter_transform.names)
     jn = list(ch.skeleton.joint_names)
@@ -100,6 +108,8 @@ def main():
         subprocess.run(["blender", "-b", "-t", "8", "--python", str(BLENDER_SCRIPT), "--", str(npz), str(a.out / f"k{i:02d}")],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         tiles.append(a.out / f"k{i:02d}" / "00000.png")
+    for kind in [k for k in a.clips.split(",") if k]:
+        clip(pc, ch, m, X, rng, kind, a.out)
     (a.out / "labels.json").write_text(json.dumps(labels, indent=1))
     print("\n".join(labels))
     # sheet: 4 columns, tiles 480x360, label on top
@@ -125,6 +135,63 @@ def main():
     graph = ";".join(filt) + ";" + "".join(f"[v{k}]" for k in range(rows * cols)) + f"xstack=inputs={rows * cols}:layout={layout}"
     subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", graph, "-frames:v", "1", str(a.out / "sheet.png")], check=True)
     print(f"sheet: {a.out / 'sheet.png'}")
+
+
+
+def _camera(c, eye):
+    f_ = c - eye
+    f_ /= np.linalg.norm(f_)
+    up = np.array([0.0, 1.0, 0.0])
+    dn = -(up - (up @ f_) * f_)
+    dn /= np.linalg.norm(dn)
+    return np.stack([np.cross(dn, f_), dn, f_]), eye
+
+
+def clip(pc, ch, m, X, rng, kind, out, fps=30.0):
+    """The event's whole key sequence on this body as a two-view video: front, and from above-front-side."""
+    pn = pc.pn
+    for slack in ((0.0, 1.0, 2.0) if kind in CONTACT else (0.0, 0.0, 0.0)):
+        keys_spec = pc.event(rng, kind, X, slack)
+        sols = [pc._solve(m, specs, kind in PALM_CHECKED) for _, _, specs in keys_spec]
+        if all(sols):
+            break
+    else:
+        print(f"clip {kind}: no solve")
+        return
+    keys = {s: [(0, 0, m[pc.arm[s]].copy(), m[pc.fing[s]].copy())] for s in "lr"}
+    k = 0
+    first = True
+    for (move, hold, _), sol in zip(keys_spec, sols):
+        end = k + (1 if first else max(1, int(move * fps)))
+        for s, v in sol.items():
+            keys[s].append((k, end, *v))
+        k = end + int((0.4 if first else hold) * fps)
+        first = False
+    T = k + int(0.4 * fps)
+    b = pc._blend(keys, T)
+    mp = np.repeat(m[None], T, 0)
+    for s in "lr":
+        mp[:, pc.arm[s]] = b[s][0]
+        mp[:, pc.fing[s]] = b[s][1]
+    mp, before, after = pc.relaxer(mp)
+    print(f"clip {kind}: {T} frames, overlap before up to {before.max():.1f} cm, after up to {after.max():.2f} cm")
+    P = positions(ch, mp.astype(np.float32))
+    verts = np.asarray(ch.skin_points(skeleton_state(ch, mp).astype(np.float32))) / 100.0
+    sh, lat, up, fwd = choreo._body_frame(X)
+    c = P[:, [pc.hm.fk.mp21["l"][9], pc.hm.fk.mp21["r"][9]]].reshape(-1, 3).mean(0) / 100.0
+    views = {"front": c + 0.6 * fwd + 0.06 * up, "above": c + 0.42 * fwd + 0.38 * up - 0.25 * lat}
+    for name, eye in views.items():
+        R, t = _camera(c, eye)
+        npz = out / f"clip_{kind}_{name}.npz"
+        np.savez_compressed(npz, verts=verts.astype(np.float32), faces=np.asarray(ch.mesh.faces, np.int32), R=R, t=t,
+                            fx=0.5 / np.tan(np.radians(22)), mp=mp.astype(np.float32), fps=fps,
+                            skin=np.array([0.78, 0.58, 0.46]), wall=np.array([0.75, 0.78, 0.82]), clip=kind)
+        subprocess.run(["blender", "-b", "-t", "8", "--python", str(BLENDER_SCRIPT), "--", str(npz), str(out / f"clip_{kind}_{name}")],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-framerate", str(fps), "-i", str(out / f"clip_{kind}_front" / "%05d.png"),
+                    "-framerate", str(fps), "-i", str(out / f"clip_{kind}_above" / "%05d.png"),
+                    "-filter_complex", f"[0][1]hstack,drawtext=fontfile={FONT}:text='{kind}':x=10:y=10:fontsize=24:fontcolor=white,format=yuv420p",
+                    "-c:v", "libx264", "-crf", "22", "-movflags", "+faststart", str(out / f"clip_{kind}.mp4")], check=True)
 
 
 if __name__ == "__main__":

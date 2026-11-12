@@ -87,6 +87,7 @@ r.engine = "BLENDER_EEVEE"
 r.resolution_x, r.resolution_y, r.resolution_percentage = 640, 480, 100
 r.image_settings.file_format = "PNG"
 scene.view_settings.view_transform = "Standard"
+scene.view_settings.exposure = float(__import__("os").environ.get("MT_EXPOSURE", "0"))  # review sheets: darker
 
 co = np.empty(len(V[0]) * 3, dtype=np.float32)
 for i in range(len(V)):
