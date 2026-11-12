@@ -6,7 +6,7 @@ a VMC rotation (x, y, z, w) to its pose space as (x, -y, -z, w) (rhylive_bone_ma
 lifter's VRM output is already in, so the sender applies the same (self-inverse) map. Positions are
 the avatar's rest offsets from the parent bone, mapped the same way (x, y, z) -> (-x, y, z).
 Face blendshapes go out as /VMC/Ext/Blend/Val <ARKit name> <0..1> per shape, then one /VMC/Ext/Blend/Apply
-(the VMC "perfect sync" naming; the person's own left/right).
+(the VMC "perfect sync" naming; left/right mirrored like the bones, see detector.detect).
 Extensions (receivers ignore unknown addresses): /MT/Present, /MT/Conf <joint> <0..1>. The namespace
 name is provisional (PLAN.md §7.2, [OPEN]).
 """

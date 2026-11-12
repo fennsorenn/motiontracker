@@ -20,8 +20,8 @@ Decisions: `PLAN.md` §7.5.
   so no extra interpreter is needed.
 - Face mesh: Face Landmarker's full mesh swapped into the Holistic bundle by default, `--face-mesh lite`
   for stock Holistic; flag only, no vspark setting. `[USER]` (2026-11-12) See `PLAN.md` §7.5.
-- Blendshapes follow ARKit's left/right (the person's own); the runtime swaps MediaPipe's image-side
-  names because its frames are mirrored. `[CLAUDE]`
+- Blendshapes keep MediaPipe's left/right, which mirrors the person like the body does (pose "left" is
+  the person's right on the mirrored frames). `[CLAUDE]` (an earlier swap was wrong, see `PLAN.md` §7.5)
 - Hands: port vspark's `hand_landmarks_to_bones` first (identical to the frozen copy in
   `baseline/vendor/backend/signal/nodes/hand_landmarks_to_bones.ts`), learned hand model after. `[USER]` (2026-11-12)
 - Body stays m1-v10. `[USER]`
@@ -86,8 +86,8 @@ merging.
 
 ## Progress (2026-11-12)
 
-- Step 1 done: blendshapes in the runtime (`detector.py`: `--face-mesh full|lite`, `--no-face`, left/right
-  swap; `vmc.py`: `Blend/Val` + `Blend/Apply`). On the session video, against Face Landmarker on the same
+- Step 1 done: blendshapes in the runtime (`detector.py`: `--face-mesh full|lite`, `--no-face`;
+  `vmc.py`: `Blend/Val` + `Blend/Apply`). On the session video, against Face Landmarker on the same
   frames (662 frames): full mesh mean abs 0.018, median correlation 0.87 over 33 active shapes; lite
   0.028 / 0.72. Body output bit-identical with full, lite and no face.
 - Step 2 done: `hands.py`, a line-for-line port of the finger solve; `baseline/src/hands-cli.ts` runs the
@@ -107,5 +107,5 @@ merging.
 - Open: finger calibration (vspark's MediaPipe Tracking has a `finger_calib` capture; Learned Tracking's
   graph has none). Not needed for fingers to work; ask the owner after the live test. Smoothing: none,
   matching vspark's graph.
-- Owner to check: vspark's MediaPipe Tracking likely shows winks on the wrong side (mirrored frames, no
-  swap); Learned Tracking swaps.
+- Corrected: the left/right swap of step 1 was wrong (face mirrored the other way from the body);
+  removed. vspark's MediaPipe Tracking was right not to swap.

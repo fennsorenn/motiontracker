@@ -99,21 +99,6 @@ def prepare(frame_bgr):
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
-def unmirror_blendshapes(shapes):
-    """MediaPipe names *Left/*Right by image side: "Left" is the person's left only on an unmirrored
-    image (measured on the recorded session: the eyeLook shapes follow gaze toward the image's right on
-    mirrored and unmirrored frames alike). The runtime's frames are mirrored, so swap to ARKit's
-    convention (the person's own left), as RhyLive and other ARKit sources send it."""
-    out = {}
-    for name, v in shapes.items():
-        if name.endswith("Left"):
-            name = name[:-4] + "Right"
-        elif name.endswith("Right"):
-            name = name[:-5] + "Left"
-        out[name] = v
-    return out
-
-
 class Detector:
     def __init__(self, task_path, blendshapes=True):
         opts = vision.HolisticLandmarkerOptions(
@@ -131,8 +116,12 @@ class Detector:
     def detect(self, rgb, ts_ms):
         """Mirrored 320x240 RGB frame, timestamp (ms, strictly increasing) -> dict of landmark arrays:
         pose (33, 4) world xyz + image visibility, pose2d (33, 4) image xyz + visibility, face (478, 3),
-        hands as (21, 3); blendshapes {ARKit name: 0..1} (the person's own left/right); absent streams are
-        missing from the dict."""
+        hands as (21, 3); blendshapes {ARKit name: 0..1}; absent streams are missing from the dict.
+        Left/right everywhere is MediaPipe's on the mirrored frame, so the avatar mirrors the person: the
+        pose's "left" shoulder is the person's right (image right in every frame of the recorded
+        session), and the *Left blendshapes follow the image's right side too (measured: eyeLook shapes
+        track gaze toward image right on mirrored and unmirrored frames alike). Face and body agree, so
+        the blendshapes are passed on unswapped, as vspark's MediaPipe Tracking does."""
         ts_ms = max(int(ts_ms), self.last_ts + 1)
         self.last_ts = ts_ms
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
@@ -158,7 +147,7 @@ class Detector:
                 msg.MergeFrom(packet_getter.get_proto(p))
                 shapes = {c.label: c.score for c in msg.classification if c.label != "_neutral"}
                 if shapes:
-                    out["blendshapes"] = unmirror_blendshapes(shapes)
+                    out["blendshapes"] = shapes
         if "pose" in out and "pose2d" in out:
             out["pose"][:, 3] = out["pose2d"][:, 3]  # vspark/recorder: world points, image visibility
         return out

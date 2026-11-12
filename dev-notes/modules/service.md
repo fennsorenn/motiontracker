@@ -4,7 +4,7 @@ Location: `service/` (uv project, package `mtservice`, CLI `mtservice`). Live ru
 
 ## Face and fingers (implemented 2026-11-12, owner's live test pending)
 Plan: `plans/m2-face-hands.md` (steps 1-4 done, numbers in its Progress section); decisions: `PLAN.md` §7.5. Branch `feature/m2-face-hands` (commits 1f7f7db, ec0904d).
-- Face: Holistic's own blendshape output (`output_face_blendshapes`, same model as Face Landmarker's) → 52 ARKit values (0..1), observation key `blendshapes`, sent as `/VMC/Ext/Blend/Val`. `--face-mesh full` (default) uses a cached copy of the pinned Holistic bundle with the pinned Face Landmarker bundle's full face mesh swapped in (closer to Face Landmarker than stock Holistic); `lite` = stock Holistic; `--no-face` disables. Left/Right names are swapped (`unmirror_blendshapes`): MediaPipe names them by image side and the frames are mirrored; ARKit means the person's own left.
+- Face: Holistic's own blendshape output (`output_face_blendshapes`, same model as Face Landmarker's) → 52 ARKit values (0..1), observation key `blendshapes`, sent as `/VMC/Ext/Blend/Val`. `--face-mesh full` (default) uses a cached copy of the pinned Holistic bundle with the pinned Face Landmarker bundle's full face mesh swapped in (closer to Face Landmarker than stock Holistic); `lite` = stock Holistic; `--no-face` disables. Left/Right names are passed on as MediaPipe gives them: like the bones they mirror the person (pose "left" is the person's right on the mirrored frames), as in vspark's MediaPipe Tracking.
 - Fingers: `hands.py`, line-for-line port of vspark's `hand_landmarks_to_bones` (finger bones only, no wrist, from hand world landmarks), within 3e-6 deg of the TypeScript. Sent only for hands seen in that frame; `--no-fingers` disables. No smoothing, matching vspark's graph.
 - Cost: about 0.7 ms/frame for face and fingers together.
 - vspark side (vspark `feature/learned-tracker`, not pushed): the VMC receiver takes `Blend/Val` with ARKit names into its ARKit chain on `Blend/Apply`; other names are ignored.
@@ -41,7 +41,7 @@ JSON lines; stdout carries only events (MediaPipe and log output go to stderr). 
 ## Checks (2026-11-12, recorded seated-v1 session video)
 - Bones within 0.12 deg of offline `mttrain.infer` on the same landmarks; ONNX vs torch 3e-6.
 - Per frame: detection ~21 ms (CPU), features + ONNX + VRM conversion ~1.4 ms.
-- Tests (`service/tests/`, `uv run pytest`): VMC encoding against vspark's mapping (bones, Blend/Val + Apply, finger names and rest offsets); streaming vs offline inference (skips without the local bundle and session); detector (blendshape unmirroring); finger port vs the TS reference on synthetic hands (`tests/fixtures`, generator `make_hands_input.py`).
+- Tests (`service/tests/`, `uv run pytest`): VMC encoding against vspark's mapping (bones, Blend/Val + Apply, finger names and rest offsets); streaming vs offline inference (skips without the local bundle and session); finger port vs the TS reference on synthetic hands (`tests/fixtures`, generator `make_hands_input.py`).
 
 ## Extending
 - **New frame source**: a class with `__iter__` yielding `(t seconds, BGR frame)` at the lifter's frame rate (10 FPS; the model's history offsets assume it) and `close()`; `CameraSource` also exposes `t0` for the latency stat. Wire it into `open_source` in `cli.py`. Keep the recorder's capture settings (mirroring happens in `detector.prepare`).
