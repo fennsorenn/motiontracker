@@ -223,6 +223,7 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
   - Start the face head as a **temporal refiner on top of MediaPipe's blendshape model** (fine-tune from Google's weights rather than train from scratch).
   - Labels: **rendered Perfect Sync VRoid avatars** with random blendshape sequences (exact labels); and **ARKit-as-teacher self-recordings** (iPhone + webcam simultaneously → ARKit blendshape + head-pose labels for webcam frames, no license issue).
   - Expression-as-context: add blendshapes to the shared context channel **now, with masking**, so architecture supports it; learn the correlation later from real paired recordings (ARKit+webcam sessions naturally contain face–body co-occurrence). Synthetic data with independent expressions would teach "unrelated" (harmless, useless).
+- **First slice (2026-11-12): MediaPipe's own blendshape model on Holistic's face landmarks** in the runtime, no learned face head yet. `[USER]` Revisit later: the merger may want blendshapes (or the face model's features) as input. `[USER]` See §7.5.
 - **MediaPipe face cost**: owner remembered the blendshape variant as much heavier. Claude's explanation: blendshape stage is <1 ms; heaviness was likely plumbing: running legacy Face Mesh *and* Face Landmarker (double detection), IMAGE running mode (no tracking), or GPU delegate overhead on a tiny model. `[CLAUDE]` → worth re-checking in baseline.
 
 ### 3.12 Out of scope
@@ -350,6 +351,12 @@ Pulled forward from M2 so the model can be tried live. Plan: `dev-notes/plans/m2
 - Weights stay in this repo's gitignored `data/`; vspark never holds them. `[CLAUDE]`
 - Repo made public 2026-11-12 without a license yet (all rights reserved). Weights to be published separately later (release asset with model card), never CMU-derived data. `[USER]`
 
+### 7.5 Face and hands in the runtime (2026-11-12)
+Plan: `dev-notes/plans/m2-face-hands.md`. Model stays m1-v10 for the body. `[USER]`
+- **Face:** MediaPipe's blendshape model (from the Face Landmarker bundle) run on the face landmarks Holistic already produces, 52 ARKit values out over VMC; no second face detector (vspark runs Holistic + Face Landmarker today, detecting the face twice). `[USER]` To revisit when the merger is built (blendshapes as merger input). `[USER]`
+- **Hands:** port vspark's algorithmic finger solve into the runtime first so fingers work end to end, then replace it with a learned hand model (procedural finger poses, §5.6). `[USER]`
+- Same runtime, same VMC stream (blendshapes as `/VMC/Ext/Blend/Val` with ARKit names, fingers as bones). `[CLAUDE]` vspark's VMC receiver reads ARKit only from RhyLive's `/Face` today, so it gets standard `Blend/Val` support. `[CLAUDE]`
+
 ---
 
 ## 8. Discarded and deprioritized approaches
@@ -378,6 +385,7 @@ Pulled forward from M2 so the model can be tried live. Plan: `dev-notes/plans/m2
 | **Training amplitude exaggeration / gains / deadzones as knobs** | `[DISCARDED]` `[CLAUDE]` | Simple post-processing; no need to learn. |
 | **100STYLE** | Deprioritized | License unconfirmed; locomotion-only. |
 | **CMU FBX conversion on 4TU.ResearchData** | `[DISCARDED]` | Relicensed CC BY-NC. Use original/cgspeed BVH. |
+| **Synthetic MediaPipe body co-rotation with the head** (m1-v11) | `[DISCARDED]` by `[USER]` (2026-11-12) | Better on renders, but on the real session the avatar slumped and looked down, and head turns looked better coming from the head in v10; nothing visibly improved. A follow-up with wider torso-tilt randomness was not trained: the session's MediaPipe torso pitch (median -14 deg) already sits mid-distribution of the synthetic data (median -16 deg). Plan: `dev-notes/plans/m1-v11-body-corot.md` (branch `feature/m1-v11-body-corot`). |
 
 ---
 
