@@ -313,7 +313,7 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 
 ### 7.1 Shape
 - **Standalone service first**, connected via WebSocket/UDP/etc; **language-specific libraries later** for lower latency. `[USER]`
-- **Service owns the camera** and sends only poses (a few hundred bytes/frame) by default; shipping frames between processes is where cost goes. `[CLAUDE]`
+- **Service owns the camera** and sends only poses (a few hundred bytes/frame) by default; shipping frames between processes is where cost goes. `[USER]` (2026-11-12: camera, MediaPipe and the pose model in one runtime, since feature taps need direct access to the MediaPipe models)
 - **Also support an incoming media stream** (owner's idea), e.g. a **browser client** for testing the service without the full consumer app. `[USER]`
   - Frame-source abstraction: local camera, video file (repeatable tests), remote stream. `[CLAUDE]`
   - Remote stream options: **JPEG over WebSocket** (simplest, fine for test client) → **WebRTC** later (proper real-time; enables phone-as-camera). `[CLAUDE]`
@@ -334,9 +334,21 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 - Local transport latency is sub-millisecond; camera exposure/buffering and inference dominate. `[CLAUDE]`
 
 ### 7.3 Implementation language
-- **POC service in Python** (ONNX Runtime, MediaPipe), with an interface matching what the native core will expose. `[CLAUDE]`
+- **POC service in Python** (ONNX Runtime, MediaPipe), with an interface matching what the native core will expose. `[USER]` (2026-11-12)
 - Later: **native core library (C++ or Rust)**, service as thin wrapper; language libs = bindings (N-API for Node, Python, C# for Unity). `[CLAUDE]` → language choice `[OPEN]`
 - Feature taps require **leaving the MediaPipe Tasks API** (it doesn't expose intermediate tensors): run the models directly and **reimplement detect-then-track plumbing** (pose ROI from previous frame's auxiliary landmarks 33/34, etc). Real engineering work; plan the keypoint-only lifter as a complete milestone first. `[CLAUDE]`
+
+### 7.4 vspark integration (2026-11-12)
+Pulled forward from M2 so the model can be tried live. Plan: `dev-notes/plans/m2-vspark-runtime.md`.
+- **vspark gets its own behavior** (kind `learned_tracker`, label "Learned Tracking") so the runtime feels native. `[USER]`
+- **Runtime loaded lazily from this repo, not bundled into vspark**: vspark starts it through `uv` from a local checkout now, from the public git URL later. `[USER]`
+- **Output: VMC** (OSC over localhost UDP); confidence and presence under an own OSC namespace. `[USER]` ("VMC if that's the most suitable format")
+- **Control over the child process's stdin/stdout** (JSON lines: start/stop, camera, avatar; status and camera list back). WebSocket deferred to the browser viewer. `[USER]` (deviates for now from §7.2's WebSocket-first shape)
+- **Avatar rest pose passed by vspark at start** (limb rest directions for MHR → VRM), VRoid rest as the default. `[USER]` All CC0 VRoid samples share the same rest offsets from an ideal T-pose (upper arm 2.7, forearm 4.7, hand ~8.3 deg).
+- **The model drives every bone it predicts**, head included; vspark's mixer combines it with other sources. `[USER]`
+- **First model: m1-v10.** `[USER]`
+- Weights stay in this repo's gitignored `data/`; vspark never holds them. `[CLAUDE]`
+- Repo made public 2026-11-12 without a license yet (all rights reserved). Weights to be published separately later (release asset with model card), never CMU-derived data. `[USER]`
 
 ---
 
