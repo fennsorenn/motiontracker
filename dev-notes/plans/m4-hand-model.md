@@ -122,3 +122,14 @@ Commits on `feature/m4-hand-model`; report to the owner after each step's number
   had D = identity (~45 deg off). Ground truth replayed on the avatar is now exact (test). Live runtime:
   the body model's hand bones turn by 25.3 deg, nothing else changes. Regenerated: m1-v10's offline
   session poses (runtime test reference) and the ground truth of every render set (`render gt`).
+- Step 4 (synthetic observations) done: `mttrain.hands.calibrate` on `hands1` (10 x 20 s rendered): MediaPipe
+  pulls hands toward an average shape (per-coordinate slope 0.52; 0.45 on `hands2`), residual 0.13 palm
+  lengths, lag-1 correlation 0.85 at 10 Hz, mirrored (palm/back confused) 10%, 77% of fully visible hands
+  detected. `observe.Observer` reproduces this with per-sequence randomization. Shared input form:
+  `mtcore.hand_features.canonical` (MediaPipe's hand world landmarks are not camera-aligned).
+- Step 5-6 (model, training, evaluation): `HandNet` (8 frames at 10 Hz -> 23 finger parameters), GPU
+  training (`mttrain.hands.train`, 20k steps in 11 min). `h1` on the evaluation set `hands2` (8 x 20 s,
+  seeds not used for anything else), segment direction error median / p90, motion vs truth:
+  constant average hand 31.0 / 86; ported solve 28.4 / 68, x5.0; **h1 13.2 / 47, x2.5**. On `hands1`
+  (calibration set): ported 26.0, h1 11.0. Caveat: rendered finger motion comes from the training
+  generator. `h2` adds a velocity loss against the jitter.
