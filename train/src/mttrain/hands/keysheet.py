@@ -62,6 +62,7 @@ def main():
     m = seat(rng, pn, np.repeat(pc.body[None].astype(np.float64), 3, 0), 30.0, lim, force_rest=("lap", "lap"), moves=False)[1]
     pairs.still_head(m[None], pn)
     X = lm(skeleton_state(ch, m)[None])[0]
+    pc.set_pose(m)
     sh, lat, up, fwd = choreo._body_frame(X)
     labels, tiles = [], []
     for i, kind in enumerate(a.events.split(",")):
@@ -89,6 +90,9 @@ def main():
         bad = []
         if after[0] > pairs.FINAL_OVERLAP_CM:
             bad.append(f"overlap {after[0]:.1f}")
+        body = pc.collider.penetration(mm[None])[1][0]
+        if body > 0.0:
+            bad.append(f"body {body:.1f}")
         if any(not (pairs.WRIST_FLEX[0] <= f <= pairs.WRIST_FLEX[1] and pairs.WRIST_DEV[0] <= d <= pairs.WRIST_DEV[1]) for f, d in wr.values()):
             bad.append("wrist")
         labels.append(f"{i}: {kind} | overlap {before[0]:.1f} -> {after[0]:.1f} cm | wrist flex,dev {wr} | "
@@ -150,10 +154,17 @@ def _camera(c, eye):
 def clip(pc, ch, m, X, rng, kind, out, fps=30.0):
     """The event's whole key sequence on this body as a two-view video: front, and from above-front-side."""
     pn = pc.pn
-    for slack in ((0.0, 1.0, 2.0) if kind in CONTACT else (0.0, 0.0, 0.0)):
-        keys_spec = pc.event(rng, kind, X, slack)
-        sols = [pc._solve(m, specs, kind in PALM_CHECKED) for _, _, specs in keys_spec]
+    for attempt in range(10):
+        slack = float(attempt % 3) if kind in CONTACT else 0.0
+        pc.prev = {}
+        neutral = pc._solve(m, {s: pc.neutral(rng, X, s) for s in "lr"})  # start and end from loose hands
+        if neutral is None:
+            continue
+        keys_spec = [(0.0, 0.4, None)] + pc.event(rng, kind, X, slack)
+        sols = [neutral] + [pc._solve(m, specs, kind in PALM_CHECKED) for _, _, specs in keys_spec[1:]]
         if all(sols):
+            keys_spec.append((0.8, 0.4, None))
+            sols.append(neutral)
             break
     else:
         print(f"clip {kind}: no solve")
@@ -162,7 +173,7 @@ def clip(pc, ch, m, X, rng, kind, out, fps=30.0):
     k = 0
     first = True
     for (move, hold, _), sol in zip(keys_spec, sols):
-        end = k + (1 if first else max(1, int(move * fps)))
+        end = k + (1 if first else max(1, int(max(move, 0.6 if sol is sols[1] else move) * fps)))
         for s, v in sol.items():
             keys[s].append((k, end, *v))
         k = end + int((0.4 if first else hold) * fps)

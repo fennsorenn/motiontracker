@@ -1,23 +1,29 @@
-"""Interpenetration check for authored hand motion (owner, 2026-11-12: renders showed hands passing through
-each other).
+"""Interpenetration check for authored hand motion, on MHR's own collision capsules (owner, 2026-11-12: renders
+showed hands passing through each other and forearms inside the belly).
 
-Hands and forearms are approximated by capsules on MHR's joints: finger segments (radius 0.7-0.95 cm),
-the palm (wrist and knuckle segments, 1.3 cm), the forearm (elbow -> wrist, 3 cm); the torso by a thin
-capsule chain along the spine (10 cm: catches gross hand-into-body cases only; the torso is wider and its
-spine joints sit toward the back). `penetration(ch, mp)` gives per frame the deepest overlap (cm) between the
-two arms (hand-hand, hand-forearm, forearm-forearm) and between either hand and the torso. Touching is
-allowed: contacts are placed surface to surface, so overlaps above a few millimetres are errors.
+Arm against body: MHR's 77 tapered capsules (`Character.collision_geometry`: parent joint, local 4x4 transform,
+length along the local x axis, a radius at each end), scaled with the body; each forearm and hand against spine,
+pelvis, neck and head (not the thighs, which hands and forearms rest on). They are coarser than the mesh: hands
+resting in the lap read 2.5 cm, forearms inside the belly the owner flagged 6.6-13.9 cm; BODY_TOL_CM sits between.
+Hand against hand: MHR's palm capsules are too thick (a palm almost 5 cm deep: touching palms read 3 cm), so the
+two arms are checked with finer capsules on the joints (fingers 0.7-0.95 cm, palm 1.3, forearm 3; `_segments`).
+`penetration(mp)`: per frame the deepest overlap (cm, <= 0: apart) arm-arm and arm-body. Touching is allowed;
+contacts are placed surface to surface, so overlaps above a few millimetres are errors.
 """
 
 import numpy as np
 
-from mtcore.mhr import positions
+from mtcore.convert import qrot
+from mtcore.mhr import positions, skeleton_state
 
 from .skeleton import MP21
 
+ARM = ("uparm", "lowarm", "wrist", "thumb", "index", "middle", "ring", "pinky")
+ARM_VS_BODY = ("lowarm", "wrist", "thumb", "index", "middle", "ring", "pinky")
+BODY = ("c_spine", "root", "c_neck", "c_head")  # not the thighs: hands and forearms rest on them
+BODY_TOL_CM = 3.0
 FINGER_R = {"thumb": 0.95, "index": 0.85, "middle": 0.85, "ring": 0.8, "pinky": 0.72}
-PALM_R, FOREARM_R, TORSO_R = 1.3, 3.0, 10.0
-TORSO = ("c_spine0", "c_spine1", "c_spine2", "c_spine3", "c_neck")
+PALM_R, FOREARM_R = 1.3, 3.0
 
 
 def _segments(side):
@@ -32,8 +38,8 @@ def _segments(side):
     return segs
 
 
-def seg_dist(a1, b1, a2, b2):
-    """Closest distance between segments a1-b1 and a2-b2 (broadcast over leading dims, (..., 3))."""
+def seg_closest(a1, b1, a2, b2):
+    """Closest points between segments a1-b1 and a2-b2 (broadcast, (..., 3)) -> (distance, s, t) with s, t in [0, 1]."""
     d1, d2, r = b1 - a1, b2 - a2, a1 - a2
     a, e, f = (d1 * d1).sum(-1), (d2 * d2).sum(-1), (d2 * r).sum(-1)
     c, b = (d1 * r).sum(-1), (d1 * d2).sum(-1)
@@ -42,35 +48,93 @@ def seg_dist(a1, b1, a2, b2):
     t = (b * s + f) / np.maximum(e, 1e-12)
     t_c = np.clip(t, 0, 1)
     s = np.where((t < 0) | (t > 1), np.clip((b * t_c - c) / np.maximum(a, 1e-12), 0, 1), s)
-    p1 = a1 + d1 * s[..., None]
-    p2 = a2 + d2 * t_c[..., None]
-    return np.linalg.norm(p1 - p2, axis=-1)
+    return np.linalg.norm(a1 + d1 * s[..., None] - a2 - d2 * t_c[..., None], axis=-1), s, t_c
+
+
+def seg_dist(a1, b1, a2, b2):
+    return seg_closest(a1, b1, a2, b2)[0]
+
+
+class Capsules:
+    """MHR's collision capsules: parent joints, local start points and axes (length included), end radii."""
+
+    def __init__(self, ch):
+        jn = list(ch.skeleton.joint_names)
+        cg = ch.collision_geometry
+        self.parent = np.array([c.parent for c in cg])
+        T = np.stack([np.asarray(c.transformation) for c in cg])
+        self.start = T[:, :3, 3]
+        self.axis = T[:, :3, 0] * np.array([c.length for c in cg])[:, None]
+        self.r = np.array([list(c.radius) for c in cg], dtype=np.float64)  # (C, 2)
+        self.name = [jn[p] for p in self.parent]
+
+    def world(self, states):
+        """Skeleton states (..., J, 8) -> start, end (..., C, 3) and radii (..., C, 2), body scale applied."""
+        st = states[..., self.parent, :]
+        t, q, s = st[..., :3], st[..., 3:7], st[..., 7:8]
+        a = t + s * qrot(q, self.start)
+        b = t + s * qrot(q, self.start + self.axis)
+        return a, b, self.r * s
+
+    def select(self, prefixes, side=None):
+        out = []
+        for k, n in enumerate(self.name):
+            base = n[2:] if n[:2] in ("l_", "r_") else n
+            if side is not None and not n.startswith(f"{side}_"):
+                continue
+            if any(base.startswith(p) or n.startswith(p) for p in prefixes):
+                out.append(k)
+        return np.array(out)
+
+
+def overlaps(A, B, ia, ib, a, b, r):
+    """Overlap (cm) between capsule sets ia and ib: (..., len(ia), len(ib))."""
+    d, s, t = seg_closest(a[..., ia, :][..., :, None, :], b[..., ia, :][..., :, None, :],
+                          a[..., ib, :][..., None, :, :], b[..., ib, :][..., None, :, :])
+    ra0, ra1 = r[..., ia, 0][..., :, None], r[..., ia, 1][..., :, None]
+    rb0, rb1 = r[..., ib, 0][..., None, :], r[..., ib, 1][..., None, :]
+    ra = ra0 + (ra1 - ra0) * s
+    rb = rb0 + (rb1 - rb0) * t
+    return ra + rb - d
 
 
 class Collider:
     def __init__(self, ch):
         self.ch = ch
         jn = list(ch.skeleton.joint_names)
+        # hand against hand: fine capsules on the joints (attributes used by relax.Relaxer)
         self.L, self.R = _segments("l"), _segments("r")
         idx = lambda segs: (np.array([jn.index(a) for a, _, _ in segs]), np.array([jn.index(b) for _, b, _ in segs]),
                             np.array([r for _, _, r in segs]))
         self.l, self.r = idx(self.L), idx(self.R)
-        t = [jn.index(n) for n in TORSO]
-        self.torso = (np.array(t[:-1]), np.array(t[1:]))
-        self.hand_only = {s: np.array([not a.endswith("lowarm") for a, _, _ in segs]) for s, segs in (("l", self.L), ("r", self.R))}
+        # arm against body: MHR's capsules
+        self.caps = Capsules(ch)
+        c = self.caps
+        self.hand_fore = {s: c.select(ARM_VS_BODY, s) for s in "lr"}
+        self.body = c.select(BODY)
+        rest = skeleton_state(ch, np.zeros(len(ch.parameter_transform.names)))
+        a, b, r = c.world(rest)
+        self.mask_body = {s: overlaps(None, None, self.hand_fore[s], self.body, a, b, r) <= 0.0 for s in "lr"}
+
+    def arms(self, P):
+        """Joint positions (T, J, 3) cm -> deepest overlap between the two arms (T,)."""
+        (la, lb, lr), (ra, rb, rr) = self.l, self.r
+        d = seg_dist(P[:, la, None], P[:, lb, None], P[:, None, ra], P[:, None, rb])
+        pair = lr[:, None] + rr[None, :] - d
+        pair[:, -1, -1] -= 2.0  # forearm-forearm only when deep (thick capsules; crossed arms rest on each other)
+        return pair.max((1, 2))
 
     def penetration(self, mp):
-        """mp (T, P) -> (arm-arm overlap (T,), hand-torso overlap (T,)) in cm (<= 0: apart)."""
-        P = positions(self.ch, np.asarray(mp, np.float32))  # (T, J, 3) cm
-        (la, lb, lr), (ra, rb, rr) = self.l, self.r
-        d = seg_dist(P[:, la, None], P[:, lb, None], P[:, None, ra], P[:, None, rb])  # (T, nL, nR)
-        pair = (lr[:, None] + rr[None, :] - d)
-        # forearm-forearm overlap only counts when deep (the capsules are thick; crossed arms rest on each other)
-        pair[:, -1, -1] -= 2.0
-        ta, tb = self.torso
-        torso = []
-        for (a, b, r), s in ((self.l, "l"), (self.r, "r")):
-            m = self.hand_only[s]
-            dt = seg_dist(P[:, a[m], None], P[:, b[m], None], P[:, None, ta], P[:, None, tb])
-            torso.append((r[m][:, None] + TORSO_R - dt).max((1, 2)))
-        return pair.max((1, 2)), np.maximum(*torso)
+        """mp (T, P) -> (arm-arm overlap (T,), arm-body overlap minus BODY_TOL_CM (T,)) in cm; > 0 is a
+        collision in both (the body value is shifted so both use the same threshold)."""
+        mp = np.asarray(mp, np.float64)
+        states = skeleton_state(self.ch, mp)
+        a, b, r = self.caps.world(states)
+        body = [np.where(self.mask_body[s], overlaps(None, None, self.hand_fore[s], self.body, a, b, r), -99.0)
+                for s in "lr"]
+        return self.arms(states[..., :3]), np.maximum(*[x.max((1, 2)) for x in body]) - BODY_TOL_CM
+
+    def body_capsules(self, m):
+        """The body capsules (start, end, radii) at one pose m (P,), for the elbow search."""
+        a, b, r = self.caps.world(skeleton_state(self.ch, np.asarray(m, np.float64)[None]))
+        return a[0, self.body], b[0, self.body], r[0, self.body]

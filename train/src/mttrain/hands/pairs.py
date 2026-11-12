@@ -98,7 +98,7 @@ def wrist_angles(elbow, P, side):
     return forearm_angles(_unit(P[0] - elbow), d, t, n)
 
 
-def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96):
+def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96, body=None):
     """Elbow position for a hand at wrist W (hand axes d, t, n) and shoulder S, upper arm U, forearm L (cm):
     on the circle of reachable elbows, the point giving the most natural wrist (least sideways bend, flexion
     in range, elbow not above the shoulder or behind the body). -> (elbow, flex, dev) or None if the wrist is
@@ -117,6 +117,8 @@ def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96):
     f = (W - E) / np.linalg.norm(W - E, axis=1, keepdims=True)
     flex, dev = forearm_angles(f, d, t, n)
     ok = (flex >= WRIST_FLEX[0]) & (flex <= WRIST_FLEX[1]) & (dev >= WRIST_DEV[0]) & (dev <= WRIST_DEV[1])
+    if body is not None:  # no forearm inside the body
+        ok &= forearm_body_overlap(E, W, body) <= 0.0
     if not ok.any():
         return None
     above = np.maximum((E - S) @ up, 0.0)  # elbow above the shoulder
@@ -124,6 +126,24 @@ def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96):
     cost = (dev / 10.0) ** 2 + (above / 5.0) ** 2 + (behind / 5.0) ** 2 + np.where(ok, 0.0, 1e6)
     k = int(np.argmin(cost))
     return E[k], float(flex[k]), float(dev[k]), float(cost[k])
+
+
+def body_clearance(p, caps):
+    """Distance (cm) from point p to the body surface as MHR's capsules model it (negative: inside)."""
+    from .collide import seg_closest
+    a, b, r = caps
+    d, s, _ = seg_closest(a, b, p[None], p[None])
+    return float((d - (r[:, 0] + (r[:, 1] - r[:, 0]) * s)).min())
+
+
+def forearm_body_overlap(E, W, caps, r_fore=(4.0, 2.4)):
+    """Overlap (cm) of forearms E -> W (n, 3) with the body capsules, minus the capsules' slack (collide.BODY_TOL_CM)."""
+    from .collide import BODY_TOL_CM, seg_closest
+    a, b, r = caps
+    d, s, t = seg_closest(E[:, None], np.broadcast_to(W, E.shape)[:, None], a[None], b[None])
+    rf = r_fore[0] + (r_fore[1] - r_fore[0]) * s
+    rb = r[None, :, 0] + (r[None, :, 1] - r[None, :, 0]) * t
+    return (rf + rb - d).max(1) - BODY_TOL_CM
 
 
 def still_head(mp, pn):
@@ -156,6 +176,8 @@ class PairChoreo:
         self.forearm, self.upper_arm = 25.0, 30.0  # cm, set from the body in set_body
         self._body = None  # (shoulders, left, up, forward) of the current key's body frame
         self.collider = Collider(ch)
+        self.caps_now = None  # body capsules at the current key's pose (set_pose)
+        self.prev = {}  # side -> (hand points, elbow) of the last solved key: later keys can build on it
         from .relax import Relaxer
         self.relaxer = Relaxer(ch)
         self.last_overlap = 0.0  # deepest overlap left in the last generated sequence (cm)
@@ -209,27 +231,63 @@ class PairChoreo:
         sh, lat, up, fwd = self._frame(X)
         self._body = (sh, lat, up, fwd)
         C = sh + fwd * rng.uniform(25, 40) - up * rng.uniform(8, 25) + lat * rng.uniform(-5, 5)
+        C = self.forward_clear(C, fwd, 10.0)
         keys = []
         tilt = lambda: fwd * rng.uniform(-0.2, 0.4)
         if kind in ("palms", "rub", "clap"):
             q = self.flat_palm.copy()
-            d = _unit(up + fwd * 0.5)
+            # rubbing starts with the fingers further forward than prayer hands: room in the wrists for the strokes
+            d = _unit(up * 0.7 + fwd) if kind == "rub" else _unit(up + fwd * 0.5)
             C = sh + fwd * rng.uniform(22, 32) - up * rng.uniform(15, 25) + lat * rng.uniform(-3, 3)
+            C = self.forward_clear(C, fwd, 14.0 if kind == "rub" else 10.0)  # room for the forearms in front of the belly
             touch = 2.6 + slack
 
-            def palms(gap, shift=0.0):
+            def contact(gap):
                 def follow(act):  # right hand: the left one's actual pose reflected across its palm plane
                     dl, _, nl = hand_axes(act["l"], "l")
-                    return (q, dl, -nl, 9, act["l"][9] + nl * gap - up * 2 * shift)
-                return {"l": (q, d, -lat, 9, C + lat * gap / 2 + up * shift, 50.0), "r": follow}
-            keys.append((rng.uniform(0.5, 1.0), rng.uniform(0.6, 2.0), palms(touch)))
+                    return (q, dl, -nl, 9, act["l"][9] + nl * gap)
+                return {"l": (q, d, -lat, 9, C + lat * gap / 2, 30.0 if kind == "rub" else 50.0), "r": follow}
+            keys.append((rng.uniform(0.5, 1.0), rng.uniform(0.6, 2.0), contact(touch)))
             if kind == "rub":
-                for k in range(int(rng.integers(4, 9))):
-                    keys.append((0.25, 0.0, palms(touch, 3.0 * (1 if k % 2 else -1))))
+                # strokes relative to the contact pose: the hands slide in opposite directions along the fingers
+                # and counter-rotate a little about the contact, so the fingers trail (owner, 2026-11-12: a slide
+                # of both hands together looked stiff)
+                ang = np.radians(rng.uniform(5, 12))
+                base = {}
+
+                def stroke(act, k):
+                    if not base:  # the contact key's left hand, once
+                        P0, _ = act["prev"]["l"]
+                        base["d"], _, base["n"] = hand_axes(P0, "l")
+                        base["mid"] = P0[9]
+                    sgn = 1.0 if k % 2 else -1.0
+                    shift = slide[k] * sgn
+                    return (q, _rotate(base["d"], base["n"], sgn * ang), base["n"], 9, base["mid"] + base["d"] * shift / 2)
+
+                def stroke_r(act, k):
+                    sgn = 1.0 if k % 2 else -1.0
+                    dl, _, nl = hand_axes(act["l"], "l")
+                    return (q, _rotate(dl, nl, -2 * sgn * ang), -nl, 9, act["l"][9] + nl * touch - dl * slide[k] * sgn, 10.0)
+                n_strokes = int(rng.integers(4, 9))
+                slide = rng.uniform(1.5, 2.5, n_strokes)
+                for k in range(n_strokes):
+                    keys.append((0.28, 0.0, {"l": (lambda act, k=k: stroke(act, k)), "r": (lambda act, k=k: stroke_r(act, k))}))
             if kind == "clap":
+                # the hands open by swinging the forearms about the elbows, not by moving the whole arm
                 for _ in range(int(rng.integers(3, 6))):
-                    keys.append((0.18, 0.05, palms(rng.uniform(14, 22))))
-                    keys.append((0.15, 0.08, palms(touch)))
+                    swing = np.radians(rng.uniform(20, 35))
+
+                    def open_(side, swing=swing):
+                        def f(act):
+                            P, E = act["prev"][side]
+                            d_, _, n_ = hand_axes(P, side)
+                            sgn = 1.0 if side == "l" else -1.0
+                            axis = _unit(up - (up @ _unit(P[0] - E)) * _unit(P[0] - E))
+                            Wn = E + _rotate(P[0] - E, axis, sgn * swing)
+                            return (q, _rotate(d_, axis, sgn * swing), _rotate(n_, axis, sgn * swing), 0, Wn)
+                        return f
+                    keys.append((0.16, 0.04, {"l": open_("l"), "r": open_("r")}))
+                    keys.append((0.14, 0.08, contact(touch)))
         elif kind == "steeple":
             q = self._g("relaxed")
             d_l = _unit(up + fwd * 0.3 - lat * 0.35)
@@ -290,8 +348,8 @@ class PairChoreo:
                 off = rng.uniform(4, 12)
                 face = fwd if rng.random() < 0.6 else -fwd  # palms to the camera or to the body
                 keys.append((rng.uniform(0.6, 1.0), rng.uniform(0.5, 1.5),
-                             {"l": (ql, d, face, 0, C - lat * off - up * 6 + fwd * 4 * front, 70.0),
-                              "r": (qr, d, face, 0, C + lat * off - up * 6 - fwd * 4 * front, 70.0)}))
+                             {"l": (ql, d, face, 0, C - lat * off - up * 6 + fwd * rng.uniform(3.5, 4.5) * front, 70.0),
+                              "r": (qr, d, face, 0, C + lat * off - up * 6 - fwd * rng.uniform(3.5, 4.5) * front, 70.0)}))
                 keys.append((rng.uniform(0.5, 0.9), rng.uniform(0.2, 0.6),
                              {"l": (ql, d, face, 0, C + lat * off - up * 6, 70.0), "r": (qr, d, face, 0, C - lat * off - up * 6, 70.0)}))
                 front = -front
@@ -305,21 +363,30 @@ class PairChoreo:
             back = "r" if front_side == "l" else "l"
             Wb = C - up * 6
             spec_b = (q2, d, fwd, 0, Wb, 60.0)
-            keys.append((rng.uniform(0.6, 1.0), 0.3, {back: spec_b, front_side: (q1, d, fwd, 0, Wb + fwd * 9 + lat * x0, 60.0)}))
-            keys.append((rng.uniform(1.2, 2.5), 0.3, {back: spec_b, front_side: (q1, d, fwd, 0, Wb + fwd * 9 + lat * x1, 60.0)}))
+            keys.append((rng.uniform(0.6, 1.0), 0.3, {back: spec_b, front_side: (q1, d, fwd, 0, Wb + fwd * 12 + lat * x0, 60.0)}))
+            keys.append((rng.uniform(1.2, 2.5), 0.3, {back: spec_b, front_side: (q1, d, fwd, 0, Wb + fwd * 12 + lat * x1, 60.0)}))
         elif kind == "turn":
+            # palm turns are forearm rotation: after the first key the hand turns about the forearm axis with a
+            # straight wrist (owner, 2026-11-12: flipping the palm at a fixed hand direction bent the wrist)
             side = "l" if rng.random() < 0.5 else "r"
             sg = 1.0 if side == "l" else -1.0
             q = self._g(["open", "relaxed", "point", "flat_together"][rng.integers(4)])
             W = sh + fwd * rng.uniform(25, 40) - up * rng.uniform(5, 25) + lat * sg * rng.uniform(5, 22)
+            W = self.forward_clear(W, fwd, 8.0)
             d = _unit(up * rng.uniform(0.4, 1.0) + fwd * rng.uniform(0.0, 0.6) - lat * sg * 0.2)
-            a = _unit(np.cross(d, up if abs(d @ up) < 0.9 else fwd))
             n0 = _unit(fwd - (fwd @ d) * d)
+            keys.append((rng.uniform(0.6, 1.0), rng.uniform(0.2, 0.6), {side: (q, d, n0, 0, W, 40.0)}))
             fast = rng.random() < 0.5
             for k in range(int(rng.integers(2, 5))):
-                n = n0 if k % 2 == 0 else -n0
+                amount = np.radians(rng.uniform(70, 160)) * (1 if k % 2 == 0 else -1)
+
+                def turned(act, amount=amount):
+                    P, E = act["prev"][side]
+                    f = _unit(P[0] - E)
+                    d_, _, n_ = hand_axes(P, side)
+                    return (q, _rotate(d_, f, amount), _rotate(n_, f, amount), 0, P[0])
                 keys.append((rng.uniform(0.25, 0.45) if fast else rng.uniform(0.7, 1.2), rng.uniform(0.2, 0.8),
-                             {side: (q, d, n, 0, W)}))
+                             {side: turned}))
         elif kind == "wrist":
             side = "l" if rng.random() < 0.5 else "r"
             sg = 1.0 if side == "l" else -1.0
@@ -341,6 +408,7 @@ class PairChoreo:
         self._body = (sh, lat, up, fwd)
         sg = 1.0 if side == "l" else -1.0
         W = sh + fwd * rng.uniform(20, 38) - up * rng.uniform(12, 30) + lat * sg * rng.uniform(4, 20)
+        W = self.forward_clear(W, fwd, 8.0)
         d = _unit(up * rng.uniform(0.2, 1.0) + fwd * rng.uniform(0.0, 0.8) - lat * sg * rng.uniform(0.0, 0.5))
         a = _unit(np.cross(d, fwd))
         phi = rng.uniform(0, 2 * np.pi)
@@ -348,6 +416,20 @@ class PairChoreo:
         return (self.hm.key_pose(rng)[0], d, n, 0, W)
 
     # --- sequences ---------------------------------------------------------------------------------
+    def set_pose(self, m):
+        """The body pose keys are being solved at (body capsules for clearance and the elbow search)."""
+        self.caps_now = self.collider.body_capsules(m)
+
+    def forward_clear(self, C, fwd, need=9.0):
+        """Move point C forward until it is `need` cm clear of the body (bellies differ between bodies)."""
+        if self.caps_now is None:
+            return C
+        for _ in range(25):
+            if body_clearance(C, self.caps_now) >= need:
+                break
+            C = C + fwd
+        return C
+
     def set_body(self, body):
         """Body proportions (scale parameters) for hand geometry and the forearm length."""
         from mtcore.mhr import positions
@@ -372,7 +454,11 @@ class PairChoreo:
         for side in order:
             spec = specs[side]
             if callable(spec):
-                spec = spec(actual)
+                try:
+                    spec = spec({**actual, "prev": self.prev})
+                except KeyError:  # builds on a hand that was not solved (an earlier key failed)
+                    self.rejects["missing"] += 1
+                    return None
             q, d, n, anchor, at = spec[:5]
             roll = spec[5] if len(spec) > 5 else 0.0
             m0[self.fing[side]] = q
@@ -386,7 +472,8 @@ class PairChoreo:
                 dd = _rotate(_unit(d), n_u, np.radians(r_deg))
                 pp = self.place(q, side, dd, n_u, anchor, at)
                 hd, ht, hn = hand_axes(pp, side)
-                el = best_elbow(J[self.jn.index(f"{side}_uparm")], pp[0], hd, ht, hn, self.upper_arm, self.forearm, up_b, fwd_b)
+                el = best_elbow(J[self.jn.index(f"{side}_uparm")], pp[0], hd, ht, hn, self.upper_arm, self.forearm, up_b, fwd_b,
+                                body=self.caps_now)
                 if el is not None and (best is None or el[3] < best[1][3]):
                     best = (dd, el, pp)
             if best is None:
@@ -419,6 +506,7 @@ class PairChoreo:
                     return None
             result[side] = (sol[self.arm[side]], q)
             actual[side] = P
+        self.prev = {**self.prev, **{s_: (actual[s_], self._points(m0, s_)[1]) for s_ in actual}}
         return result
 
     def _blend(self, keys, T):
@@ -446,7 +534,8 @@ class PairChoreo:
         for s in "lr":
             win[:, self.arm[s]] = b[s][0][f0:f1 + 1:2]
             win[:, self.fing[s]] = b[s][1][f0:f1 + 1:2]
-        return self.collider.penetration(win)[0].max() <= tol
+        arm, body = self.collider.penetration(win)
+        return arm.max() <= tol and body.max() <= 0.0
 
     def generate(self, rng, base, T, fps):
         """-> model parameters (T, P) with arms and fingers, segments [{label, variant, t0, t1} ms]. Every
@@ -467,6 +556,7 @@ class PairChoreo:
             for s in "lr":
                 m[self.arm[s]] = cur[s][0]
             X = self.lm(skeleton_state(self.ch, m)[None])[0]
+            self.set_pose(m)
             # between events: both hands to loose neutral poses (a few tries to find a clear move)
             for _ in range(3):
                 sol = self._solve(m, {s: self.neutral(rng, X, s) for s in "lr"})
