@@ -1,6 +1,6 @@
 # Plan: live runtime for vspark (camera → MediaPipe → m1-v10 → VMC), loaded lazily by a vspark behavior
 
-> Branch: `feature/m2-vspark-runtime` (this repo); a separate feature branch in vspark for step 4 · Status: draft
+> Branch: `feature/m2-vspark-runtime` (this repo); vspark `feature/learned-tracker` (pushed) · Status: steps 0-4 done (2026-11-12); step 5 (owner live test) open
 > This plan is the seed context for a worker. It is a starting point, not an
 > airtight spec — the worker is interactive and may ask to refine it.
 
@@ -109,3 +109,13 @@ this repo (not bundled) and feeds its output into vspark's graph. This is the fi
 ## Output
 
 Commits on `feature/m2-vspark-runtime` (and the vspark branch); report to the owner before merging into `dev`.
+
+## Progress (2026-11-12)
+
+- Steps 0-3 done in this repo (parity spike: go; mtcore features + lifter_pose; mttrain.export; service/).
+- Step 4 done in vspark `feature/learned-tracker` (pushed, not merged): `learned_tracker` as a third
+  VmcManager kind, LearnedRuntime process manager, cameras route, properties panel, i18n, help, tests;
+  `/MT/Present` drives tracking on/off (plain VMC Bone/Pos never turned vspark's tracking on).
+  End-to-end with the real runtime on a video: poses arrive through vspark's mapping unchanged.
+- Runtime additions: `avatar` command takes the avatar's `vrm_path` (read with mtcore.vrm), `--avatar-vrm`.
+- Open: step 5 (owner live test); vspark's One Euro render filter stays on for now (owner).
