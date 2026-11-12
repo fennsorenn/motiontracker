@@ -42,11 +42,12 @@ export const PROTOCOLS = {
   'hands-v1': {
     // Framing: head and shoulders must be in view. Holistic finds the hands from the body (face and pose
     // first, hands next to the pose's wrists); a first take framed on torso and hands only got the face
-    // in 0% and the hands in 0-19% of frames (2026-11-12).
+    // in 0% and the hands in 0-19% of frames (2026-11-12). With the face in view the desk is out of frame
+    // for the owner's setup, so the rest steps hold the hands low in front of the body instead.
     description: 'Fingers, wrists and two-hand interactions. Keep your head and shoulders in view. About 2 min.',
     leadIn: 3,
     steps: [
-      { label: 'still', variant: 'hands-on-desk', duration: 6, prompt: 'Head, shoulders and hands in view. Rest your hands on the desk where the camera can see them. Hold still.' },
+      { label: 'still', variant: 'hands-low', duration: 6, prompt: 'Head, shoulders and hands in view. Rest your hands low in front of you where the camera can still see them. Hold still.' },
       { label: 'count', variant: 'left-index-first', duration: 8, prompt: 'Left hand up, palm to the camera. Count 1 to 5: index, middle, ring, little finger, thumb. About one per second.' },
       { label: 'count', variant: 'right-index-first', duration: 8, prompt: 'Now the right hand: count 1 to 5 starting with the index finger.' },
       { label: 'count', variant: 'both-thumb-first', duration: 8, prompt: 'Both hands: count 1 to 5 starting with the thumb, then back down to a fist.' },
@@ -61,7 +62,7 @@ export const PROTOCOLS = {
       { label: 'pair', variant: 'occlude', duration: 8, prompt: 'Hold one hand in front of the other, palms to the camera, and slide it slowly across.' },
       { label: 'pair', variant: 'approach', duration: 8, prompt: 'Point both index fingers at each other and bring them slowly together until they almost touch, then apart.' },
       { label: 'dropout', duration: 8, prompt: 'Drop your hands out of view and bring them back, a few times.' },
-      { label: 'still', variant: 'hands-on-desk', duration: 6, prompt: 'Rest your hands on the desk again. Hold still.' },
+      { label: 'still', variant: 'hands-low', duration: 6, prompt: 'Rest your hands low in front of you again, in view. Hold still.' },
     ],
   },
   free: {
