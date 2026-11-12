@@ -54,3 +54,14 @@ def test_bone_packet_roundtrips_through_vsparks_mapping():
 def test_rest_offsets_skip_missing_parents():
     off = rest_offsets({"hips": np.array([0, 1.0, 0]), "chest": np.array([0, 1.3, 0])})  # no spine
     np.testing.assert_allclose(off["chest"], [0, 0.3, 0])
+
+
+def test_blendshapes_go_out_as_blend_val_then_apply():
+    s = VmcSender()
+    msgs = parse(s.packet(0.1, {}, blendshapes={"eyeBlinkLeft": 0.25, "jawOpen": 0.5}))
+    s.close()
+    vals = [a for addr, a in msgs if addr == "/VMC/Ext/Blend/Val"]
+    assert vals == [["eyeBlinkLeft", 0.25], ["jawOpen", 0.5]]
+    addrs = [addr for addr, _ in msgs]
+    assert addrs.index("/VMC/Ext/Blend/Apply") > max(i for i, a in enumerate(addrs) if a == "/VMC/Ext/Blend/Val")
+    assert "/VMC/Ext/Blend/Apply" not in [addr for addr, _ in parse(VmcSender().packet(0.1, {}))]

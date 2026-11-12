@@ -4,6 +4,8 @@ Bone rotations go out as /VMC/Ext/Bone/Pos with Unity HumanBodyBones names. Coor
 a VMC rotation (x, y, z, w) to its pose space as (x, -y, -z, w) (rhylive_bone_mapper), the space the
 lifter's VRM output is already in, so the sender applies the same (self-inverse) map. Positions are
 the avatar's rest offsets from the parent bone, mapped the same way (x, y, z) -> (-x, y, z).
+Face blendshapes go out as /VMC/Ext/Blend/Val <ARKit name> <0..1> per shape, then one /VMC/Ext/Blend/Apply
+(the VMC "perfect sync" naming; the person's own left/right).
 Extensions (receivers ignore unknown addresses): /MT/Present, /MT/Conf <joint> <0..1>. The namespace
 name is provisional (PLAN.md §7.2, [OPEN]).
 """
@@ -70,7 +72,7 @@ class VmcSender:
     def set_rest(self, rest_positions):
         self.offsets = rest_offsets(rest_positions)
 
-    def packet(self, t, bones, conf=None, present=True):
+    def packet(self, t, bones, conf=None, present=True, blendshapes=None):
         msgs = [message("/VMC/Ext/OK", 1), message("/VMC/Ext/T", float(t)),
                 message("/VMC/Ext/Root/Pos", "root", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)]
         for b, q in bones.items():
@@ -79,13 +81,16 @@ class VmcSender:
                 continue
             px, py, pz = self.offsets.get(b, (0.0, 0.0, 0.0))
             msgs.append(message("/VMC/Ext/Bone/Pos", name, -px, py, pz, q[0], -q[1], -q[2], q[3]))
+        if blendshapes:
+            msgs += [message("/VMC/Ext/Blend/Val", name, v) for name, v in blendshapes.items()]
+            msgs.append(message("/VMC/Ext/Blend/Apply"))
         msgs.append(message("/MT/Present", 1 if present else 0))
         for j, c in (conf or {}).items():
             msgs.append(message("/MT/Conf", j, c))
         return bundle(msgs)
 
-    def send(self, t, bones, conf=None, present=True):
-        self.sock.sendto(self.packet(t, bones, conf, present), self.addr)
+    def send(self, t, bones, conf=None, present=True, blendshapes=None):
+        self.sock.sendto(self.packet(t, bones, conf, present, blendshapes), self.addr)
 
     def close(self):
         self.sock.close()

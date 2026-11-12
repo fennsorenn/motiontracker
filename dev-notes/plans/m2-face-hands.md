@@ -14,9 +14,14 @@ Decisions: `PLAN.md` §7.5.
 
 ## Decisions
 
-- Face: MediaPipe's blendshape model (the `face_blendshapes` model inside the Face Landmarker bundle)
-  run on Holistic's face landmarks; no second face detector. `[USER]` (2026-11-12) Revisit when the
-  merger is built: it may want blendshapes as input. `[USER]`
+- Face: MediaPipe's blendshape model run on Holistic's face landmarks; no second face detector.
+  `[USER]` (2026-11-12) Revisit when the merger is built: it may want blendshapes as input. `[USER]`
+  The Holistic bundle ships the same model and Holistic's Python API runs it (`output_face_blendshapes`),
+  so no extra interpreter is needed.
+- Face mesh: Face Landmarker's full mesh swapped into the Holistic bundle by default, `--face-mesh lite`
+  for stock Holistic; flag only, no vspark setting. `[USER]` (2026-11-12) See `PLAN.md` §7.5.
+- Blendshapes follow ARKit's left/right (the person's own); the runtime swaps MediaPipe's image-side
+  names because its frames are mirrored. `[CLAUDE]`
 - Hands: port vspark's `hand_landmarks_to_bones` first (identical to the frozen copy in
   `baseline/vendor/backend/signal/nodes/hand_landmarks_to_bones.ts`), learned hand model after. `[USER]` (2026-11-12)
 - Body stays m1-v10. `[USER]`
@@ -28,10 +33,7 @@ Decisions: `PLAN.md` §7.5.
 ## Constraints
 
 - No new dependency without asking the owner, and every model/dependency in `docs/LICENSES-REGISTER.md`
-  first. The blendshape model's license is an open item (`PLAN.md` §9 #8): verify before use.
-- Running the blendshape `.tflite` from Python needs an interpreter: mediapipe's Python package may not
-  expose one. Options (owner decides): `ai-edge-litert`, a one-off ONNX conversion, or a
-  numpy reimplementation of the tiny MLP-Mixer from the weights. Measure, then ask.
+  first. Blendshape model: Apache 2.0, verified from its model card (2026-11-12).
 - Latency: blendshapes and fingers together well under 2 ms/frame.
 - vspark conventions (its CLAUDE.md): i18n en/de and help for any UI change, `vs-` handles, lint and
   tests before e2e, controls manifest.
@@ -81,3 +83,10 @@ Decisions: `PLAN.md` §7.5.
 
 Commits on `feature/m2-face-hands` and vspark `feature/learned-tracker`; report to the owner before
 merging.
+
+## Progress (2026-11-12)
+
+- Step 1 done: blendshapes in the runtime (`detector.py`: `--face-mesh full|lite`, `--no-face`, left/right
+  swap; `vmc.py`: `Blend/Val` + `Blend/Apply`). On the session video, against Face Landmarker on the same
+  frames (662 frames): full mesh mean abs 0.018, median correlation 0.87 over 33 active shapes; lite
+  0.028 / 0.72. Body output bit-identical with full, lite and no face.
