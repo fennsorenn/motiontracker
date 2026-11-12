@@ -88,3 +88,21 @@ runtime. Part of M4 (`PLAN.md` §11); the first part head after the body lifter.
 ## Output
 
 Commits on `feature/m4-hand-model`; report to the owner after each step's numbers.
+
+## Progress (2026-11-12)
+
+- Step 1 (hand skeleton spike) done:
+  - MediaPipe's 21 points ↔ MHR joints: 0 `wrist`; thumb 1-4 = `thumb1`, `thumb2`, `thumb3`, `thumb_null`
+    (MHR's `thumb0` is an extra base joint, 1.8 cm from the wrist); fingers 5-20 = `<f>1`, `<f>2`, `<f>3`,
+    `<f>_null` for index, middle, ring, pinky (MHR's `pinky0` is an extra metacarpal joint). Distances
+    from the wrist agree (thumb CMC 4.1 vs 3.8 cm on the session, index MCP 8.6 vs 9.6, pinky 7.5 vs 8.1).
+  - MediaPipe bias to model in step 4: its proximal phalanx is about 1 cm shorter than MHR's on every
+    finger (index 2.6 vs 3.8 cm) and the metacarpal about 1 cm longer, i.e. its knuckle point sits past
+    the joint centre.
+  - Parameters: `<f>{1,2,3}_rz` curl toward the palm (positive = flex); `<f>1_ry` spreads; `<f>1_rx`
+    (axial roll, limits ±0.3-0.5) does not move the fingertip at all: unobservable from landmarks, keep
+    at 0 and don't predict it. Thumb: `thumb0_ry/rz` (large base motion), `thumb1_ry/rz` (`thumb1_rx`
+    moves the tip 0.4 cm), `thumb2_rz`, `thumb3_rz`. About 22 observable parameters per hand.
+  - Right hand = left hand mirrored across x for the same parameter values (max 0.001 cm): one model for
+    both hands, the left mirrored.
+  - `mtcore.convert` already maps MHR fingers to VRM finger bones; nothing new needed there.
