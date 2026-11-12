@@ -40,10 +40,13 @@ export const PROTOCOLS = {
   // other (MediaPipe's hand swaps and losses). Segments with a known finger state or a true contact are
   // usable as weak labels. "Left" and "right" are your own hands.
   'hands-v1': {
-    description: 'Fingers, wrists and two-hand interactions, hands in front of the chest. About 2 min.',
+    // Framing: head and shoulders must be in view. Holistic finds the hands from the body (face and pose
+    // first, hands next to the pose's wrists); a first take framed on torso and hands only got the face
+    // in 0% and the hands in 0-19% of frames (2026-11-12).
+    description: 'Fingers, wrists and two-hand interactions. Keep your head and shoulders in view. About 2 min.',
     leadIn: 3,
     steps: [
-      { label: 'still', variant: 'hands-on-desk', duration: 6, prompt: 'Rest your hands on the desk where the camera can see them. Hold still.' },
+      { label: 'still', variant: 'hands-on-desk', duration: 6, prompt: 'Head, shoulders and hands in view. Rest your hands on the desk where the camera can see them. Hold still.' },
       { label: 'count', variant: 'left-index-first', duration: 8, prompt: 'Left hand up, palm to the camera. Count 1 to 5: index, middle, ring, little finger, thumb. About one per second.' },
       { label: 'count', variant: 'right-index-first', duration: 8, prompt: 'Now the right hand: count 1 to 5 starting with the index finger.' },
       { label: 'count', variant: 'both-thumb-first', duration: 8, prompt: 'Both hands: count 1 to 5 starting with the thumb, then back down to a fist.' },

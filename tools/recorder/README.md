@@ -22,7 +22,9 @@ camera, video size and protocol, then press **Start recording**.
 - **hands-v1** (about 2 min) is for the hand model: counting and single fingers, wrist bends, palm
   turns, and two-hand interactions (palms together, fingertips, touching the fingers of one hand with
   the other, rubbing and clapping, crossing, one hand in front of the other, index fingers
-  approaching), then hands out of view and back. Hands in front of your chest, both in view.
+  approaching), then hands out of view and back. Frame it like a streaming setup: **head and
+  shoulders in view** as well as both hands in front of your chest. MediaPipe Holistic finds the hands
+  from the body, so a camera aimed at the hands only (no face) detects almost no hands.
 - **free** has no prompts. Press <kbd>S</kbd> to start and end a "still" segment. Press
   **Stop and save** when done.
 
