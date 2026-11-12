@@ -65,3 +65,14 @@ def test_blendshapes_go_out_as_blend_val_then_apply():
     addrs = [addr for addr, _ in msgs]
     assert addrs.index("/VMC/Ext/Blend/Apply") > max(i for i, a in enumerate(addrs) if a == "/VMC/Ext/Blend/Val")
     assert "/VMC/Ext/Blend/Apply" not in [addr for addr, _ in parse(VmcSender().packet(0.1, {}))]
+
+
+def test_finger_bones_use_unity_names_and_rest_offsets():
+    from mtservice.vmc import UNITY_NAMES
+    assert UNITY_NAMES["leftThumbMetacarpal"] == "LeftThumbProximal"
+    assert UNITY_NAMES["rightThumbProximal"] == "RightThumbIntermediate"
+    assert UNITY_NAMES["rightLittleDistal"] == "RightLittleDistal"
+    assert sum(n.startswith(("left", "right")) and ("Thumb" in n or "Index" in n or "Middle" in n or "Ring" in n
+                                                     or "Little" in n) for n in UNITY_NAMES) == 30
+    off = rest_offsets({"leftHand": np.array([0.5, 1.4, 0]), "leftIndexProximal": np.array([0.6, 1.4, 0.02])})
+    np.testing.assert_allclose(off["leftIndexProximal"], [0.1, 0, 0.02])

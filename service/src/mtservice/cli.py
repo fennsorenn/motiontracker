@@ -1,12 +1,12 @@
 """mtservice: camera or video -> MediaPipe Holistic -> M1 lifter -> VMC.
 
     mtservice [--camera N | --video FILE [--realtime]] [--vmc HOST:PORT] [--bundle DIR] [--task FILE]
-              [--avatar-vrm FILE] [--face-mesh full|lite] [--no-face] [--stdio] [--dump-poses FILE]
+              [--avatar-vrm FILE] [--face-mesh full|lite] [--no-face] [--no-fingers] [--stdio] [--dump-poses FILE]
               [--dump-landmarks FILE] [--no-head3d] [--list-cameras]
 
 --face-mesh: MediaPipe face mesh for the blendshapes: "full" (default, Face Landmarker's mesh in the
 Holistic bundle) or "lite" (stock Holistic, slightly cheaper, less accurate blendshapes; detector.py).
---no-face: no blendshapes.
+--no-face: no blendshapes. --no-fingers: no finger bones (hands.py, a port of vspark's finger solve).
 
 Standalone: runs until Ctrl+C or the end of the video; log lines go to stderr.
 
@@ -16,7 +16,8 @@ Standalone: runs until Ctrl+C or the end of the video; log lines go to stderr.
                      {"cmd": "camera", "index": n}      switch camera
                      {"cmd": "cameras"}                 list cameras
                      {"cmd": "stop"}                    exit (closing stdin does the same)
-  stdout (events):   {"event": "ready", "model": ..., "bones": [...], "face": "full" | "lite" | null}
+  stdout (events):   {"event": "ready", "model": ..., "bones": [...], "face": "full" | "lite" | null,
+                                      "fingers": bool}
                      {"event": "status", "fps", "detect_ms", "model_ms", "latency_ms", "present"}  (about 1/s)
                      {"event": "cameras", "cameras": [{"index", "name"}]}
                      {"event": "error", "message": ...}
@@ -35,6 +36,7 @@ from pathlib import Path
 from mtcore.paths import DATA
 
 from .detector import Detector, model_path, prepare
+from .hands import solve_hands
 from .lifter import LiveLifter
 from .sources import CameraSource, VideoSource, list_cameras
 from .vmc import VmcSender
@@ -86,6 +88,7 @@ def main(argv=None):
     ap.add_argument("--face-mesh", choices=["full", "lite"], default="full",
                     help="face mesh for the blendshapes (default full; ignored with --task)")
     ap.add_argument("--no-face", action="store_true", help="don't compute or send face blendshapes")
+    ap.add_argument("--no-fingers", action="store_true", help="don't compute or send finger bones")
     ap.add_argument("--no-head3d", action="store_true")
     ap.add_argument("--list-cameras", action="store_true")
     a = ap.parse_args(argv)
@@ -130,6 +133,7 @@ def run(a, emit):
     dump_p = open(a.dump_poses, "w") if a.dump_poses else None
     dump_l = open(a.dump_landmarks, "w") if a.dump_landmarks else None
     emit("ready", model=lifter.meta["source"], bones=lifter.bones, face=None if a.no_face else a.face_mesh,
+         fingers=not a.no_fingers,
          source={"video": str(a.video)} if a.video else {"camera": camera})
     log(f"running: model {lifter.meta['source']['run']}, " + (f"video {a.video}" if a.video else f"camera {camera}")
         + (f", VMC -> {a.vmc}" if vmc else ""))
@@ -176,6 +180,8 @@ def run(a, emit):
             obs = detector.detect(prepare(frame), t * 1000 + 1)
             wall1 = time.monotonic()
             bones, conf, present = lifter.step(t, obs)
+            if not a.no_fingers:
+                bones.update(solve_hands(obs))  # only hands seen this frame; receivers keep the last value
             wall2 = time.monotonic()
             if vmc:
                 vmc.send(t, bones, conf, present, obs.get("blendshapes"))

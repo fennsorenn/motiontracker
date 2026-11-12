@@ -1,6 +1,7 @@
 """VMC (OSC over UDP) output.
 
-Bone rotations go out as /VMC/Ext/Bone/Pos with Unity HumanBodyBones names. Coordinates: vspark maps
+Bone rotations (body from the lifter, fingers from hands.py) go out as /VMC/Ext/Bone/Pos with Unity
+HumanBodyBones names. Coordinates: vspark maps
 a VMC rotation (x, y, z, w) to its pose space as (x, -y, -z, w) (rhylive_bone_mapper), the space the
 lifter's VRM output is already in, so the sender applies the same (self-inverse) map. Positions are
 the avatar's rest offsets from the parent bone, mapped the same way (x, y, z) -> (-x, y, z).
@@ -18,10 +19,25 @@ UNITY_NAMES = {
     "leftShoulder": "LeftShoulder", "leftUpperArm": "LeftUpperArm", "leftLowerArm": "LeftLowerArm", "leftHand": "LeftHand",
     "rightShoulder": "RightShoulder", "rightUpperArm": "RightUpperArm", "rightLowerArm": "RightLowerArm", "rightHand": "RightHand",
 }
+# Fingers. Unity's three thumb bones are Proximal/Intermediate/Distal where VRM 1.0 has
+# Metacarpal/Proximal/Distal (vspark's rhylive_bone_mapper maps them back the same way).
+for _s, _S in (("left", "Left"), ("right", "Right")):
+    for _f in ("Index", "Middle", "Ring", "Little"):
+        for _j in ("Proximal", "Intermediate", "Distal"):
+            UNITY_NAMES[f"{_s}{_f}{_j}"] = f"{_S}{_f}{_j}"
+    UNITY_NAMES.update({f"{_s}ThumbMetacarpal": f"{_S}ThumbProximal", f"{_s}ThumbProximal": f"{_S}ThumbIntermediate",
+                        f"{_s}ThumbDistal": f"{_S}ThumbDistal"})
 VRM_PARENT = {"spine": "hips", "chest": "spine", "upperChest": "chest", "neck": "upperChest", "head": "neck",
               "leftShoulder": "upperChest", "rightShoulder": "upperChest", "leftUpperArm": "leftShoulder",
               "rightUpperArm": "rightShoulder", "leftLowerArm": "leftUpperArm", "rightLowerArm": "rightUpperArm",
               "leftHand": "leftLowerArm", "rightHand": "rightLowerArm"}
+for _s in ("left", "right"):
+    for _f, _chain in (("Thumb", ("Metacarpal", "Proximal", "Distal")),) + tuple(
+            (f, ("Proximal", "Intermediate", "Distal")) for f in ("Index", "Middle", "Ring", "Little")):
+        _parent = f"{_s}Hand"
+        for _j in _chain:
+            VRM_PARENT[f"{_s}{_f}{_j}"] = _parent
+            _parent = f"{_s}{_f}{_j}"
 
 
 def _pad(b):

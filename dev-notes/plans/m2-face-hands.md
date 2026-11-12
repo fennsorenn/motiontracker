@@ -90,3 +90,12 @@ merging.
   swap; `vmc.py`: `Blend/Val` + `Blend/Apply`). On the session video, against Face Landmarker on the same
   frames (662 frames): full mesh mean abs 0.018, median correlation 0.87 over 33 active shapes; lite
   0.028 / 0.72. Body output bit-identical with full, lite and no face.
+- Step 2 done: `hands.py`, a line-for-line port of the finger solve; `baseline/src/hands-cli.ts` runs the
+  TypeScript node for reference. Port vs TypeScript on the same landmarks: worst 3e-6 deg (session, 10,365
+  bones; committed test on synthetic hands). The solve itself moves up to 0.58 deg (p99 0.12) when the
+  landmarks are rounded to 5 decimals (10 µm): a measure of its sensitivity, relevant to its jitter.
+  No smoothing: vspark's graph has none on the hands either.
+- Step 3 done: fingers and blendshapes in the runtime (`--no-fingers`, `--no-face`); the `ready` event
+  reports `face` and `fingers`. Finger bones go out only for hands seen this frame. Cost on the session
+  (guarded, cores 8-15): detect 21.1 vs 20.5 ms, model + fingers 1.92 vs 1.77 ms per frame, so about
+  0.7 ms for both.
