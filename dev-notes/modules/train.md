@@ -1,6 +1,6 @@
 # train (implemented; M1 itself WIP)
 
-Location: `train/` (uv project, package `mttrain`, CUDA PyTorch). Builds M1 training data from CMU, trains the body lifter and runs it on recorded sessions. Depends on `mtcore` (`modules/mtcore.md`); its output is evaluated with the harness (`modules/eval-harness.md`). Plan, decisions and run results: `plans/m1-body-lifter.md`.
+Location: `train/` (uv project, package `mttrain`, CUDA PyTorch). Builds M1 training data from CMU, trains the body lifter and runs it on recorded sessions. Depends on `mtcore` with the `mhr` extra (`modules/mtcore.md`); its output is evaluated with the harness (`modules/eval-harness.md`). Plan, decisions and run results: `plans/m1-body-lifter.md`.
 
 All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) and are never committed.
 
@@ -13,13 +13,13 @@ All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) 
 | `mpstyle` | MediaPipe-style landmark placement: biases applied in both spaces vs world-only distortions, calibrated against the fitted CMU population, randomized per sequence. `IMAGE_Z = 3.0` scales image-landmark depth, with a log-normal spread. Depth flattening: see below. |
 | `noise` | Observation model: AR(1) jitter, visibility by distance outside the frame (with lag), drifting guesses, glitches, dropouts, lower visibility for seated hips. Per-group recalibration `_RECAL` (`Z_GAIN`, `IMAGE_GAIN`); `NoiseConfig.image_z_noise`. Coherent arm noise (2026-11-09): `MIX`, a 33x33 mixing matrix built from `ARM_CORR` (shoulder-elbow 0.32, elbow-wrist 0.52, wrist-hand 0.99), correlates the jitter and the out-of-frame guesses along each arm; mirrored in `gpugen/observe.py`. |
 | `synth` | Ties the above together: fitted MHR sequence → synthetic landmark frames (world + image + visibility) at the target frame times. Passes the shoulder distance to `Style.flatten`. |
-| `features` | Shared by training and inference: causal shoulder-width scale, history at time offsets 0–1.6 s. |
-| `skeleton` | Target extraction from MHR poses and torch FK for the position loss. `CONTACT_POINTS` and `contact_points(G, P, cof)` (see Contacts). |
+| `skeleton` | Target extraction from MHR poses and torch FK for the position loss; re-exports `quat_to_mat` from `mtcore.lifter_pose`. `CONTACT_POINTS` and `contact_points(G, P, cof)` (see Contacts). |
 | `dataset` | Numpy `Generator`: on-the-fly samples; 75% seated. Validation = held-out CMU subjects (fixed numpy set, also with `--gen gpu`). `MT_FITS` selects the fits directory under `data/m1` (default `fits`; current `fits-v3`), recorded in the run config. `source_table(split, p_choreo)` mixes in the choreography pool (see Contacts). |
 | `model` | `Lifter`: 17 rotations (6D) + per-joint confidence, ~1.1M params, ~0.3 ms/frame CPU. |
 | `losses` | Laplace NLL on rotation (uses the confidence), FK position, velocity, joint-limit box measured from the data (proxy for MHR's Euler limits), contact loss `con` (see Contacts). |
 | `train` | Training loop; runs in `data/m1/runs/<name>`. `--gen gpu` (default) uses `gpugen` on `--device` (default `cuda:1`), `--gen-chunk 4` batches per generator call; `--gen cpu` keeps the DataLoader path. |
-| `infer` | Session → harness pose track; writes only the VRM bones the model drives. |
+| `infer` | Session → harness pose track; writes only the VRM bones the model drives. `Runner` converts the output with `mtcore.lifter_pose.LifterPose`. |
+| `export` | Live bundle for `service/` (see below). |
 | `calibrate` | Real vs synthetic landmark statistics. Rerun after new sessions are recorded. |
 | `render` | Rendered synthetic sessions with exact ground truth (see below). |
 | `choreo` | Designed contact choreography (see Contacts). |
@@ -34,7 +34,7 @@ Package `mttrain/gpugen/`: batched torch port of the synthesis pipeline; the tra
 | `geom.py` | `Landmarks`, `Style` (batched MediaPipe biases; `depth_at`, `flatten(W, dist)`), `sample_desk_camera`, `shoulder_distance`, `project`, `world_landmarks`, `Targets`. |
 | `motion.py` | `Seater` (seated motion + limit clamp), `rest_weights`, `slow_signals`. |
 | `observe.py` | `sample_config`, `observe` (noise, visibility). |
-| `features.py` | `causal_scale`, `frame_features`, `history_indices`, `model_input`; exact port of `mttrain.features`. |
+| `features.py` | `causal_scale`, `frame_features`, `history_indices`, `model_input`; exact port of `mtcore.features`. |
 | `generator.py` | `GpuGenerator(split, device, K, p_seated, seed).sample(B)`: same dict as `dataset.Generator.sample`, batched. Flattening uses the shoulder distance over valid frames. |
 
 Differences from the numpy generator: fixed 97-frame source crop (clips shorter than 97 frames are unused) and different random streams. Tests (`tests/test_gpugen.py`): FK vs pymomentum; geometry and features exact vs numpy; the whole generator statistically vs numpy.
@@ -139,11 +139,21 @@ Context: training data never passes through MediaPipe (synthetic landmarks + han
 
 Still unclear: how to model the 3D torso co-rotation (next run not yet planned), how the 3D head masking is signalled to the model at inference.
 
+## Model input features
+Moved to `mtcore.features` (2026-11-12) so the live runtime shares one implementation without torch; train imports it from there. Causal shoulder-width scale, history at time offsets 0-1.6 s, plus a streaming variant. Details: `modules/mtcore.md`.
+
+## Live export (`export`, implemented 2026-11-12)
+`uv run python -m mttrain.export data/m1/runs/<run>/best.pt [--out DIR] [--check-session sessions/<s>]` writes `data/m1/runs/<run>/live/` for `service/` (`modules/service.md`):
+- `model.onnx` (opset 17, input `x` (N, offsets, FRAME_DIM + 2) → `rot`, `log_scale`).
+- `lifter.json` (`format` `motiontracker-lifter`, `version` 1): source run/step, input layout (offsets, frame dim, scale settings), output bones, the MHR table (`LifterPose.table()`), default avatar rest positions (AvatarSample_D).
+- `--check-session`: onnxruntime vs torch on a session (3e-6 on `m1-v10`). Depends on `onnx` + `onnxruntime`.
+- CMU-derived weights: the bundle stays in gitignored `data/`. Bump `version` when the bundle layout changes (`modules/service.md`, Extending).
+
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
 
 ## Extending
-- Anything inference needs (feature construction, scaling) must stay in `features` so training and inference cannot diverge.
+- Anything inference needs (feature construction, scaling) must stay in `mtcore.features` so training, offline inference and the live runtime cannot diverge.
 - New observation effects belong in `noise` (sensor-like) or `mpstyle` (systematic MediaPipe placement); check them with `calibrate` against real sessions.
 
 ## Open
