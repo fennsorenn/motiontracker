@@ -133,3 +133,5 @@ Commits on `feature/m4-hand-model`; report to the owner after each step's number
   constant average hand 31.0 / 86; ported solve 28.4 / 68, x5.0; **h1 13.2 / 47, x2.5**. On `hands1`
   (calibration set): ported 26.0, h1 11.0. Caveat: rendered finger motion comes from the training
   generator. `h2` adds a velocity loss against the jitter.
+- `h2` (velocity loss, `--w-vel 2`) on `hands2`: 13.2 / 47 deg, motion x2.2 (h1 x2.5): same accuracy, a
+  little less jitter.
