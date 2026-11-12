@@ -127,9 +127,22 @@ def ported(rest):
 def evaluate(set_dir, system, avatar="AvatarSample_D"):
     fk = HandFK()
     rest = load_vrm(AVATARS / f"{avatar}.vrm")[2]
-    run = {"ported": ported(rest)}[system] if isinstance(system, str) else system
+    if system == "ported":
+        run = ported(rest)
+    elif system in ("mean", "rest"):  # references: the training pool's average hand, or MHR's rest hand
+        from .pool import POOL
+        q = np.load(POOL / "train.npz")["q"].reshape(-1, 27).mean(0) if system == "mean" else np.zeros(27)
+        pts = {s: fk.points(q, s) for s in "lr"}
+        run = lambda f: {s: pts[s] for s, S in (("l", "left"), ("r", "right")) if f.get(f"{S}Hand")}
+    elif isinstance(system, (str, Path)):  # a hand model checkpoint
+        from .infer import LearnedHands
+        run = LearnedHands(system, fk)
+    else:
+        run = system
     errs, seen, total = [], 0, 0
     for d in sorted(Path(set_dir).glob("seq*")):
+        if hasattr(run, "reset"):
+            run.reset()
         truth = Truth(d, fk)
         for line in open(d / "landmarks.jsonl"):
             f = json.loads(line)
@@ -154,7 +167,7 @@ def report(E, rate, name):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("set", type=Path)
-    ap.add_argument("--system", default="ported")
+    ap.add_argument("--system", default="ported", help="'ported', 'mean' / 'rest' (constant hand), or a hand model checkpoint (.pt)")
     a = ap.parse_args()
     E, rate = evaluate(a.set, a.system)
     report(E, rate, a.system)

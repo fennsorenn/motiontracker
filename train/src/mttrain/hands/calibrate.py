@@ -57,7 +57,17 @@ def analyse(rows):
     flipped = e_mirror < 0.6 * e_plain
     ok = ~flipped
     E = M[ok] - T[ok]
+    # linear fit per coordinate, MediaPipe = a + b * truth (b < 1: pulled toward an average hand), and the
+    # residuals' covariance across all 63 coordinates: the synthetic observation model (mttrain.hands.observe)
+    Tf, Mf = T[ok].reshape(len(E), -1), M[ok].reshape(len(E), -1)
+    tm, mm = Tf.mean(0), Mf.mean(0)
+    var = ((Tf - tm) ** 2).mean(0)
+    b = np.where(var > 1e-8, ((Tf - tm) * (Mf - mm)).mean(0) / np.maximum(var, 1e-8), 1.0)
+    a = mm - b * tm
+    resid = Mf - (a + b * Tf)
+    fit = {"a": a.tolist(), "b": b.tolist(), "cov": np.cov(resid.T).tolist(), "n": int(len(E))}
     out = {
+        "fit": fit,
         "frames": len(rows), "in_view": int(sum(r["in_view"] for r in rows)),
         "detected": len(det), "detected_in_view": int(sum(r["in_view"] for r in det)),
         "flipped": float(flipped.mean()),
@@ -76,6 +86,9 @@ def analyse(rows):
                 a.append((e0 - E.mean(0)).ravel()); b.append((e1 - E.mean(0)).ravel())
     a, b = np.array(a), np.array(b)
     out["lag1_corr"] = float((a * b).sum() / np.sqrt((a * a).sum() * (b * b).sum()))
+    out["fit"]["lag1"] = out["lag1_corr"]
+    out["fit"]["flipped"] = out["flipped"]
+    out["fit"]["resid_median"] = float(np.median(np.linalg.norm(resid.reshape(-1, 21, 3), axis=-1)))
     # error and flips against how the palm faces the camera
     facing = np.array([r["facing"] for r in det])
     out["by_facing"] = [{"deg": f"{lo}-{hi}", "n": int(m.sum()), "flipped": float(flipped[m].mean()),
@@ -105,6 +118,9 @@ def main():
     print("per point (palm lengths): bias fwd/thumbward/palm, std fwd/thumbward/palm")
     for n, b, s in zip(names, out["bias"], out["std"]):
         print(f"  {n:11s} {b[0]:+.3f} {b[1]:+.3f} {b[2]:+.3f}   {s[0]:.3f} {s[1]:.3f} {s[2]:.3f}")
+    f = out["fit"]
+    print(f"linear fit: slope b median {np.median(f['b']):.2f} (fwd {np.median(f['b'][0::3]):.2f}, thumbward "
+          f"{np.median(f['b'][1::3]):.2f}, palm {np.median(f['b'][2::3]):.2f}); residual median {f['resid_median']:.3f} palm lengths")
     print("by palm facing:", out["by_facing"])
     print("detection by hand size (wrist-middle knuckle / frame width):", out["by_size"])
     if a.json:
