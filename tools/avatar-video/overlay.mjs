@@ -19,6 +19,11 @@ const src = path.join(dir, 'compare.mp4');
 const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-count_packets', '-show_entries',
   'stream=nb_read_packets', '-of', 'csv=p=0', src], { encoding: 'utf8' });
 const n = Number(probe.stdout.trim());
+// the frame rate compare.mp4 was rendered at (render.mjs --fps)
+const fpsProbe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate',
+  '-of', 'csv=p=0', src], { encoding: 'utf8' });
+const [fn, fd] = fpsProbe.stdout.trim().split('/').map(Number);
+const fps = fn / (fd || 1);
 if (!n) { console.error('cannot read', src); process.exit(1); }
 // webcam panel: the session video scaled to the panel height (render.mjs: scale=-2:size)
 const meta = JSON.parse(fs.readFileSync(path.join(sessionDir, 'session.json'), 'utf8'));
@@ -66,14 +71,14 @@ const t0 = from * 1000, start = Date.now();
 for (let k = 0; k < n; k++) {
   const file = path.join(frames, `${String(k).padStart(5, '0')}.png`);
   if (fs.existsSync(file)) continue;  // drawn before an interruption
-  const b64 = await ev(`window.drawAt(${t0 + (k * 1000) / 60})`);
+  const b64 = await ev(`window.drawAt(${t0 + (k * 1000) / fps})`);
   fs.writeFileSync(file + '.tmp', Buffer.from(b64, 'base64'));
   fs.renameSync(file + '.tmp', file);
   if (k % 600 === 0) console.log(`frame ${k}/${n}, ${((Date.now() - start) / 1000).toFixed(0)} s`);
 }
 ws.close(); cleanup();
 
-const r = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-framerate', '60', '-i', path.join(frames, '%05d.png'),
+const r = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-framerate', String(fps), '-i', path.join(frames, '%05d.png'),
   '-filter_complex', '[0:v][1:v]overlay=0:0:format=auto,format=yuv420p[v]', '-map', '[v]', '-frames:v', String(n),
   '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-threads', '4', path.join(dir, 'compare-landmarks.mp4')],
   { stdio: 'inherit' });
