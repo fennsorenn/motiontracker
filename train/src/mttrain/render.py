@@ -214,16 +214,19 @@ def _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, tries=40, pairs=False):
                 fingers[side] = mp[:, hm.fk.idx[side]].astype(np.float32)
             fingers["segments"] = segs
         else:
-            mp = stage.generate(rng, ch, lm, pn, mps[key][s0].astype(np.float64), T, FPS, lim)
+            from .hands.pool2 import stage_sequence
+            mp, labels = stage_sequence(rng, ch, lm, pn, mps[key][s0].astype(np.float64), T, FPS, lim, hm, pc)
             for side in "lr":
-                q, labels = hm.sequence(rng, T / FPS, FPS)
-                mp[:, hm.fk.idx[side]] = q
-                fingers[f"{side}_labels"] = np.array(json.dumps(labels))
+                fingers[f"{side}_labels"] = np.array(json.dumps(labels[side]))
             mp, _, after = pc.relaxer(mp)  # fingers pushed out of each other (hands.relax)
             left = float(after.max())
             for side in "lr":
                 fingers[side] = mp[:, hm.fk.idx[side]].astype(np.float32)
         if left > FINAL_OVERLAP_CM:  # hands still pass through each other: draw again
+            continue
+        from .hands.pool2 import MAX_CLIP_FRAMES
+        pc.mesh.set_pose(mp[0])
+        if pc.mesh_clip_frames(mp[::3]).mean() > MAX_CLIP_FRAMES:  # hands or forearms inside the body: again
             continue
         X = lm(skeleton_state(ch, mp)) / 100.0
         cam_state = rng.bit_generator.state
