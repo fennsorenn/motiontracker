@@ -581,9 +581,9 @@ class PairChoreo:
         varied. Thumb tip target in the hand frame (cm: along the fingers, toward the thumb, toward the palm)."""
         q = np.zeros(len(PARAMS))
         self.hm._fan(q, rng.uniform(0.03, 0.15), [0.0] * 4)
-        # spread 46-54 deg from the fingers, nearly in the palm plane, reached with the thumb slightly flexed (targets
-        # closer to the index were out of reach and the solve bent the thumb's outer joints backwards)
-        target = self.hm._to_hand((rng.uniform(6.3, 7.7), rng.uniform(9.8, 10.8), rng.uniform(0.3, 1.3)))
+        # spread 30-40 deg from the fingers, a little in front of the palm, reached with the thumb slightly flexed
+        # (owner, 2026-11-13: 50 deg stuck out; targets near the index were out of reach and bent the thumb back)
+        target = self.hm._to_hand((rng.uniform(8.0, 9.0), rng.uniform(7.8, 9.2), rng.uniform(1.0, 2.5)))
         q = self.hm.solve_thumb(q, target)
         q[PARAMS.index("thumb1_rx")] = 0.0
         return np.clip(q, self.hm.lo, self.hm.hi)
@@ -681,6 +681,28 @@ class PairChoreo:
             q = hm.solve_thumb(q, hm._to_hand(tip))
             q[PARAMS.index("thumb1_rx")] = 0.0
             m[fing] = np.clip(q, hm.lo, hm.hi)
+        return m
+
+    def curl_thumb_tip(self, m, side, gap=DRAPE_GAP_CM, n_ang=12):
+        """After `drape_thumb` (its closest point on the skin) the tip may still hover: the thumb's outer joints
+        (IP, then MCP) flex toward the surface, each to the angle bringing the tip nearest the skin without any
+        thumb point going in. Changes m in place."""
+        from mtcore.mhr import positions
+        fk, idx, mp21 = self.hm.fk, self.fing[side], self.hm.fk.mp21[side]
+        r = FINGER_R["thumb"] + gap
+        for name, first in (("thumb3_rz", 4), ("thumb2_rz", 3)):
+            pi = PARAMS.index(name)
+            a0 = m[idx[pi]]
+            angs = np.linspace(a0, min(fk.hi[pi], a0 + 0.7), n_ang)
+            M = np.repeat(m[None], n_ang, 0)
+            M[:, idx[pi]] = angs
+            P = positions(self.ch, M.astype(np.float32))[:, mp21]
+            pts = P[:, first - 1:5]
+            dist = self.mesh.distance(pts)
+            ok = (dist >= r - 0.05).all(1)
+            tip = dist[:, -1]
+            if ok.any():
+                m[idx[pi]] = angs[ok][int(np.argmin(tip[ok]))]
         return m
 
     def thigh_spec(self, rng, X, side, q=None):
@@ -800,7 +822,8 @@ class PairChoreo:
             if self.body_slack > 0:  # hands resting on the body: palm settled onto the skin, fingers draped
                 self.settle(m0, side, elbow=el[0])
                 self.drape(m0, side)
-                self.drape_thumb(m0, side)  # (what still clips is the mesh check's to reject; a lift here floats the palm)
+                self.drape_thumb(m0, side)
+                self.curl_thumb_tip(m0, side)  # (what still clips is the mesh check's to reject; a lift here floats the palm)
                 q = m0[self.fing[side]].copy()
                 sol = m0.copy()
             P, elbow = self._points(m0, side)
