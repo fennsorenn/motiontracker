@@ -8,7 +8,7 @@ both encodings, so the model can tell swaps, doubled hands and contact (owner, 2
 
 Per hand and frame (`frame_features`): canonical 3D shape (63), the palm frame of the image landmarks in the
 scene (its first two rows, 6), wrist position in the image (2, frame widths), log palm length in the image,
-lost flag; zeros when lost. Outputs: finger parameters (`model.OUT_PARAMS`) with Laplace log-scales, the
+lost flag; zeros when lost; the detector's confidence for the slot (v3, kept when lost). Outputs: finger parameters (`model.OUT_PARAMS`) with Laplace log-scales, the
 hand's orientation in the camera frame as the palm frame of its image points (6D, rows), a log-scale for it,
 wrist position (2) and log palm length (1).
 """
@@ -20,7 +20,7 @@ from .model import OUT_PARAMS
 from .observe2 import palm_frame_t
 
 HISTORY = 8
-FRAME_DIM = 63 + 6 + 2 + 1 + 1
+FRAME_DIM = 63 + 6 + 2 + 1 + 1 + 1
 N_FING = len(OUT_PARAMS)
 MIRROR_X = torch.tensor([-1.0, 1.0, 1.0])
 
@@ -33,9 +33,10 @@ def rows6d_to_mat(x):
     return torch.stack([r1, r2, torch.cross(r1, r2, dim=-1)], -2)
 
 
-def frame_features(img, canon, lost, mirror):
+def frame_features(img, canon, lost, mirror, score=None):
     """One hand's frames: img (..., 21, 3) image points, canon (..., 21, 3), lost (...) bool, mirror (bool or
-    (...) tensor) -> (..., FRAME_DIM)."""
+    (...) tensor), score (...) the detector's confidence for the slot (`scorecal.hand_score`; kept when lost:
+    Holistic's pose visibility still tells in view from out of view) -> (..., FRAME_DIM)."""
     m = MIRROR_X.to(img) if isinstance(mirror, bool) else torch.where(mirror[..., None], MIRROR_X.to(img), torch.ones(3).to(img))
     if isinstance(mirror, bool):
         img = img * m if mirror else img
@@ -45,23 +46,26 @@ def frame_features(img, canon, lost, mirror):
     feats = torch.cat([canon.flatten(-2), R[..., :2, :].flatten(-2), img[..., 0, :2],
                        torch.log(size.clamp_min(1e-4))[..., None]], -1)
     feats = feats * (~lost)[..., None]
-    return torch.cat([feats, lost[..., None].to(feats.dtype)], -1)
+    sc = torch.zeros_like(lost, dtype=feats.dtype) if score is None else score.to(feats.dtype)
+    return torch.cat([feats, lost[..., None].to(feats.dtype), sc[..., None]], -1)
 
 
-def scenes(img, canon, lost):
+def scenes(img, canon, lost, score=None):
     """Slot-major observations (B, F, 2, ...) newest first -> own/other features for both scenes:
     (2B, F, FRAME_DIM) own, (2B, F, FRAME_DIM) other; rows 0..B-1 own = left slot, B..2B-1 own = right slot."""
-    own = torch.cat([frame_features(img[:, :, 0], canon[:, :, 0], lost[:, :, 0], False),
-                     frame_features(img[:, :, 1], canon[:, :, 1], lost[:, :, 1], True)], 0)
-    other = torch.cat([frame_features(img[:, :, 1], canon[:, :, 1], lost[:, :, 1], False),
-                       frame_features(img[:, :, 0], canon[:, :, 0], lost[:, :, 0], True)], 0)
+    sc = (lambda k: None) if score is None else (lambda k: score[:, :, k])
+    own = torch.cat([frame_features(img[:, :, 0], canon[:, :, 0], lost[:, :, 0], False, sc(0)),
+                     frame_features(img[:, :, 1], canon[:, :, 1], lost[:, :, 1], True, sc(1))], 0)
+    other = torch.cat([frame_features(img[:, :, 1], canon[:, :, 1], lost[:, :, 1], False, sc(1)),
+                       frame_features(img[:, :, 0], canon[:, :, 0], lost[:, :, 0], True, sc(0))], 0)
     return own, other
 
 
 class PairNet(nn.Module):
-    def __init__(self, enc=96, hand=256, hidden=512, history=HISTORY):
+    def __init__(self, enc=96, hand=256, hidden=512, history=HISTORY, frame_dim=FRAME_DIM):
         super().__init__()
-        self.frame = nn.Sequential(nn.Linear(FRAME_DIM, 192), nn.GELU(), nn.Linear(192, enc))
+        self.frame_dim = frame_dim  # FRAME_DIM - 1: a v2 model without the detector score input
+        self.frame = nn.Sequential(nn.Linear(frame_dim, 192), nn.GELU(), nn.Linear(192, enc))
         self.pos_emb = nn.Parameter(torch.zeros(history, enc))
         self.role = nn.Parameter(torch.zeros(2, enc))
         width = (2 * history - 1) * enc
@@ -78,6 +82,7 @@ class PairNet(nn.Module):
 
     def forward(self, own, other):
         """own, other (..., HISTORY, FRAME_DIM) newest first -> dict of outputs for the own hand."""
+        own, other = own[..., :self.frame_dim], other[..., :self.frame_dim]
         out = self.mlp(torch.cat([self.encode(own, 0), self.encode(other, 1)], -1))
         k = 2 * N_FING
         # orientation: rest of the 6D output is a palm facing the camera-ish default (identity rows)

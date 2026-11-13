@@ -9,7 +9,8 @@ index knuckle, their cross product; from image points, right hands mirrored). Ch
 4. relative to the body model's lower arm (VRM globals from its locals): the whole rotation goes onto the hand
    (the rendered ground truth also carries most of the forearm twist on the hand: median 120 deg about the
    forearm axis; moving it onto the lower arm, `twist_to_forearm`, put the lower arm 129 deg off the truth);
-   bends (the part off the forearm twist) beyond MAX_BEND_DEG (a likely palm/back flip) keep the body model's hand.
+   bends (the part off the forearm twist) beyond MAX_BEND_DEG (a likely palm/back flip) keep the body model's hand;
+   otherwise the result is blended with the body model's hand by the hand model's confidence (CONF_DEG).
 """
 
 import numpy as np
@@ -20,6 +21,25 @@ from mtcore.lifter_pose import R0, mat_to_quat, quat_to_mat
 from mtcore.mhr import positions, skeleton_state
 
 MAX_BEND_DEG = 100.0
+# confidence blend (v3, owner 2026-11-13: the merger prefers the body's hand when the hand model is unsure): the
+# model's rotation scale (Laplace, deg) -> weight of its orientation, 1 below CONF_DEG[0], 0 above CONF_DEG[1]
+CONF_DEG = (15.0, 50.0)
+
+
+def conf_weight(rot_scale_deg):
+    return float(np.clip((CONF_DEG[1] - rot_scale_deg) / (CONF_DEG[1] - CONF_DEG[0]), 0.0, 1.0))
+
+
+def slerp(a, b, t):
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    if a @ b < 0:
+        b = -b
+    d = float(np.clip(a @ b, -1.0, 1.0))
+    if d > 0.9995:
+        q = a + t * (b - a)
+        return q / np.linalg.norm(q)
+    th = np.arccos(d)
+    return (np.sin((1 - t) * th) * a + np.sin(t * th) * b) / np.sin(th)
 MIRROR = np.diag([-1.0, 1.0, 1.0])
 CHAIN = {s: ["hips", "spine", "chest", "upperChest", f"{s}Shoulder", f"{s}UpperArm", f"{s}LowerArm"] for s in ("left", "right")}
 
@@ -55,8 +75,9 @@ class HandOrient:
         b = f"{S}Hand"
         return qmul(qmul(G_w, self.conv.q_rest_inv[b]), self.conv.D[b])
 
-    def combine(self, bones, hand_globals):
-        """Body model's VRM locals + {side: VRM hand global} -> bones with lowerArm and hand replaced."""
+    def combine(self, bones, hand_globals, weights=None):
+        """Body model's VRM locals + {side: VRM hand global} -> bones with the hand replaced; `weights` {side: 0..1}
+        blends from the body model's hand (0) to the hand model's (1)."""
         out = dict(bones)
         for side, Gh in hand_globals.items():
             S = "left" if side == "l" else "right"
@@ -65,6 +86,8 @@ class HandOrient:
                 G = qmul(G, np.asarray(bones.get(b, [0, 0, 0, 1.0]), float))
             G_lower = G
             local = qmul(qinv(G_lower), Gh)
+            if weights is not None:
+                local = slerp(np.asarray(bones.get(f"{S}Hand", [0, 0, 0, 1.0]), float), local, weights.get(side, 1.0))
             axis = np.array([1.0, 0, 0]) if S == "left" else np.array([-1.0, 0, 0])  # VRM lower arm along +-X
             tw = twist(local, axis)
             swing = qmul(qinv(tw), local)
@@ -80,7 +103,8 @@ class HandOrient:
 
 def pair_track(ckpt, landmarks, body, out, avatar="AvatarSample_D", wrist=True):
     """Runtime landmark dump + body pose track (same frames) -> pose track with the pair model's fingers and, with
-    `wrist`, its hand orientation combined onto the body model's forearm. A lost hand keeps its last pose."""
+    `wrist`, its hand orientation combined onto the body model's forearm, blended by the model's confidence
+    (`conf_weight`). The model answers every frame, seen or not (v3: unseen hands relax to a probable pose)."""
     import json
 
     from mtcore.mhr import load
@@ -97,34 +121,29 @@ def pair_track(ckpt, landmarks, body, out, avatar="AvatarSample_D", wrist=True):
     rest = load_vrm(AVATARS / f"{avatar}.vrm")[2]
     ho = HandOrient(ch, rest)
     conv = ho.conv
-    last_q, last_G = {}, {}
-    stats = {"frames": 0, "wrist_used": 0, "wrist_kept": 0}
+    stats = {"frames": 0, "wrist_used": 0, "wrist_kept": 0, "weight_sum": 0.0}
     with open(landmarks) as fl, open(body) as fb, open(out, "w") as fo:
         for line_l, line_b in zip(fl, fb):
             f, b = json.loads(line_l), json.loads(line_b)
             res = run.step(f)
             stats["frames"] += 1
-            for side, S in (("l", "left"), ("r", "right")):
-                if f.get(f"{S}Hand2d"):  # update only while the hand is seen; otherwise hold
-                    q, F = res[side]
-                    last_q[side] = q
-                    F = F if side == "l" else unmirror_frame(F)
-                    last_G[side] = ho.vrm_hand_global(F, side)
-            bones = {n: v for n, v in b["bones"].items() if not any(w in n for w in FINGER_WORDS)}
-            if last_q:
-                mp = fk.full(last_q.get("l", np.zeros(27)), "l", base=fk.full(last_q.get("r", np.zeros(27)), "r"))
-                loc = conv.locals(skeleton_state(ch, mp)[None])
-                for n, v in loc.items():
-                    side = "l" if n.startswith("left") else "r"
-                    if any(w in n for w in FINGER_WORDS) and side in last_q:
-                        bones[n] = [round(float(x), 6) for x in v[0]]
-            if wrist and last_G and all(k in bones for k in ("leftLowerArm", "rightLowerArm")):
-                new = ho.combine(bones, last_G)
+            q = {s: res[s][0] for s in "lr"}
+            G = {s: ho.vrm_hand_global(res[s][1] if s == "l" else unmirror_frame(res[s][1]), s) for s in "lr"}
+            w = {s: conf_weight(run.conf[s][0]) for s in "lr"}
+            bones = {n: v for n, v in b["bones"].items() if not any(k in n for k in FINGER_WORDS)}
+            mp = fk.full(q["l"], "l", base=fk.full(q["r"], "r"))
+            loc = conv.locals(skeleton_state(ch, mp)[None])
+            for n, v in loc.items():
+                if any(k in n for k in FINGER_WORDS):
+                    bones[n] = [round(float(x), 6) for x in v[0]]
+            if wrist and all(k in bones for k in ("leftLowerArm", "rightLowerArm")):
+                new = ho.combine(bones, G, w)
                 for s, S in (("l", "left"), ("r", "right")):
-                    if s in last_G:
-                        stats["wrist_used" if new[f"{S}Hand"] != bones.get(f"{S}Hand") else "wrist_kept"] += 1
+                    stats["wrist_used" if new[f"{S}Hand"] != bones.get(f"{S}Hand") else "wrist_kept"] += 1
+                    stats["weight_sum"] += w[s]
                 bones = {k: [round(float(x), 6) for x in v] for k, v in new.items()}
             fo.write(json.dumps({"t": b["t"], "bones": bones}) + "\n")
+    stats["mean_weight"] = round(stats.pop("weight_sum") / max(1, 2 * stats["frames"]), 3)
     return stats
 
 

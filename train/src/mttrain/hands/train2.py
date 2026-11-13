@@ -7,7 +7,9 @@ both hands with flips, swaps, doubled and lost hands; the model runs for both ha
 the mirrored scene with own = right slot) at the newest frame and one frame earlier (velocity loss).
 Targets follow hand identity, not slots: a swapped detection must still give the true hand.
 Losses: fingers (Laplace NLL + canonical point L1 via GPU FK + velocity), orientation (geodesic angle with a
-Laplace scale + velocity), position (wrist in the image and log palm length, in palm lengths).
+Laplace scale + velocity), position (wrist in the image and log palm length, in palm lengths). Hands out of view
+count too (v3: the NLLs fully, the rest by OUT_W), so the model learns their probable pose and its scales grow
+there; `--scores` adds the detector's per-slot confidence as input (observe2, scorecal).
 """
 
 import argparse
@@ -31,7 +33,7 @@ RUNS = DATA / "m4" / "runs"
 
 
 class Batches:
-    def __init__(self, split, calib, device, seed, pool=POOL2):
+    def __init__(self, split, calib, device, seed, pool=POOL2, scores=None):
         z = np.load(pool / f"{split}.npz")
         self.hands = torch.tensor(z["hands"].astype(np.float32), device=device)  # (N, T, 2, 21, 3)
         self.body = torch.tensor(z["body"].astype(np.float32), device=device)  # (N, T, 33, 3)
@@ -41,7 +43,7 @@ class Batches:
         self.n_param = len(hfk.pn)
         self.mp21 = torch.tensor(hfk.mp21["l"], device=device)
         self.fk = MhrFK(hfk.ch, keep=hfk.mp21["l"].tolist()).to(device)
-        self.obs = PairObserver(calib, device)
+        self.obs = PairObserver(calib, device, scores)
         self.gen = torch.Generator(device=device).manual_seed(seed)
         self.device = device
 
@@ -85,28 +87,39 @@ def geodesic(Ra, Rb):
     return torch.acos(c.clamp(-1 + 1e-6, 1 - 1e-6))
 
 
+OUT_W = 0.3  # out-of-view hands: weight of the point, velocity and position losses (the NLLs take them fully)
+
+
 def losses(model, batches, obs, truth, q):
-    own, other = scenes(obs["img"], obs["canon"], obs["lost"])  # (2B, F, D) newest first
+    own, other = scenes(obs["img"], obs["canon"], obs["lost"], obs.get("score"))  # (2B, F, D) newest first
     tg = targets(truth, q)
     out0 = model(own[:, :HISTORY], other[:, :HISTORY])
     out1 = model(own[:, 1:], other[:, 1:])
-    w = tg["inside"][:, 0].float()  # score only hands in the frame
-    wn = w.sum().clamp_min(1.0)
+    inside = tg["inside"][:, 0].float()
+    # v3 (owner, 2026-11-13): hands out of view are scored too, so the model learns their probable pose (a hand
+    # that left at the bottom hangs or rests) and its Laplace scales grow there (the merger's confidence)
+    w_all = torch.ones_like(inside)
+    w_soft = inside + OUT_W * (1 - inside)
+    norm = lambda x, w: (x * w).sum() / w.sum().clamp_min(1.0)
     tq = tg["q"][:, 0, OUT_IDX]
     l_s = out0["fingers_log_s"]
-    nll = ((torch.abs(out0["fingers"] - tq) * torch.exp(-l_s) + l_s).mean(-1) * w).sum() / wn
+    nll = norm((torch.abs(out0["fingers"] - tq) * torch.exp(-l_s) + l_s).mean(-1), w_all)
     full = tg["q"][:, 0].clone()
     full[:, OUT_IDX] = out0["fingers"]
-    pts = ((batches.points(full) - batches.points(tg["q"][:, 0])).abs().sum(-1).mean(-1) * w).sum() / wn
-    vel = ((torch.abs((out0["fingers"] - out1["fingers"]) - (tq - tg["q"][:, 1, OUT_IDX]))).mean(-1) * w).sum() / wn
+    pts = norm((batches.points(full) - batches.points(tg["q"][:, 0])).abs().sum(-1).mean(-1), w_soft)
+    vel = norm(torch.abs((out0["fingers"] - out1["fingers"]) - (tq - tg["q"][:, 1, OUT_IDX])).mean(-1), w_soft)
     ang = geodesic(out0["rot"], tg["rot"][:, 0])
-    rot_nll = ((ang * torch.exp(-out0["rot_log_s"]) + out0["rot_log_s"]) * w).sum() / wn
+    rot_nll = norm(ang * torch.exp(-out0["rot_log_s"]) + out0["rot_log_s"], w_all)
     ang1 = geodesic(out0["rot"] @ out1["rot"].transpose(-1, -2), tg["rot"][:, 0] @ tg["rot"][:, 1].transpose(-1, -2))
-    rot_vel = (ang1 * w).sum() / wn
-    pos = (((out0["pos"] - tg["wrist"][:, 0]).abs().sum(-1) / tg["size"][:, 0].clamp_min(1e-3)
-            + (out0["log_size"] - tg["log_size"][:, 0]).abs()) * w).sum() / wn
+    rot_vel = norm(ang1, w_soft)
+    pos = norm((out0["pos"] - tg["wrist"][:, 0]).abs().sum(-1) / tg["size"][:, 0].clamp_min(1e-3)
+               + (out0["log_size"] - tg["log_size"][:, 0]).abs(), w_soft)
+    fe = torch.rad2deg(torch.abs(out0["fingers"] - tq).mean(-1))
     return {"nll": nll, "pts": pts, "vel": vel, "rot_nll": rot_nll, "rot_vel": rot_vel, "pos": pos,
-            "rot_deg": (torch.rad2deg(ang) * w).sum() / wn, "fing_deg": torch.rad2deg((torch.abs(out0["fingers"] - tq).mean(-1) * w).sum() / wn)}
+            "rot_deg": norm(torch.rad2deg(ang), inside), "fing_deg": norm(fe, inside),
+            "rot_deg_out": norm(torch.rad2deg(ang), 1 - inside), "fing_deg_out": norm(fe, 1 - inside),
+            "rot_s_deg": norm(torch.rad2deg(torch.exp(out0["rot_log_s"])), inside),
+            "rot_s_deg_out": norm(torch.rad2deg(torch.exp(out0["rot_log_s"])), 1 - inside)}
 
 
 def main():
@@ -124,6 +137,7 @@ def main():
     ap.add_argument("--device", default="cuda:1")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--pool", default=str(POOL2))
+    ap.add_argument("--scores", help="detector score calibration (scorecal) -> the model's score input (v3)")
     a = ap.parse_args()
     run = RUNS / a.name
     run.mkdir(parents=True, exist_ok=True)
@@ -131,8 +145,8 @@ def main():
     torch.manual_seed(a.seed)
     dev = torch.device(a.device)
     from pathlib import Path
-    train = Batches("train", a.calib, dev, a.seed, Path(a.pool))
-    val = Batches("val", a.calib, dev, 12345, Path(a.pool))
+    train = Batches("train", a.calib, dev, a.seed, Path(a.pool), a.scores)
+    val = Batches("val", a.calib, dev, 12345, Path(a.pool), a.scores)
     vb = [val.sample(a.batch) for _ in range(6)]
     model = PairNet().to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
