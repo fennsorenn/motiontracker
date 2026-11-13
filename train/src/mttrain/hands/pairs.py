@@ -484,8 +484,25 @@ class PairChoreo:
                         p = navel + lat * sg * rng.uniform(3, 6) + up * (rng.uniform(11.5, 13.5) if k_ == 0 else rng.uniform(-1.0, 1.0))
                     d = _unit(-lat * sg + up * rng.uniform(-0.15, 0.15))
                 else:
-                    p = sh - up * (rng.uniform(10, 18) + h0) + lat * sg * rng.uniform(-6, 6) - lat * sg * 6.0 * k_
+                    # one hand: on the chest, from its own side; two hands: hand over hand on the heart (the person's
+                    # left chest), the second hand's palm on the back of the first (owner, 2026-11-13: side by side
+                    # they overlapped)
+                    if len(sides) == 1:
+                        p = sh - up * (rng.uniform(10, 18) + h0) + lat * sg * rng.uniform(-6, 6)
+                    else:
+                        p = sh - up * (rng.uniform(12, 17) + h0) + lat * rng.uniform(5, 9)
                     d = _unit(-lat * sg * rng.uniform(0.4, 1.0) + up * rng.uniform(0.2, 0.8))
+                if kind == "chest" and k_ == 1:
+                    bottom, st = sides[0], sg
+                    gap = rng.uniform(3.0, 3.6) + slack
+
+                    def follow(act, bottom=bottom, st=st, gap=gap, q=self.resting_hand(rng)):
+                        db, tb, nb = hand_axes(act[bottom], bottom)
+                        d_t = _unit(-lat * st * rng.uniform(0.5, 1.0) + up * rng.uniform(0.1, 0.6))
+                        d_t = _unit(d_t - (d_t @ nb) * nb)
+                        return (q, d_t, nb, 9, act[bottom][9] - nb * gap + d_t * rng.uniform(-1, 1.5), 30.0)
+                    specs[side] = follow
+                    continue
                 specs[side] = self.contact_spec(rng, side, p + fwd * 40.0, fwd, d)
                 if specs[side] is None:
                     return []
@@ -841,7 +858,8 @@ class PairChoreo:
                 self.rejects["target"] += 1
                 return None
             m0[self.arm[side]] = sol[self.arm[side]]
-            if self.body_slack > 0:  # hands resting on the body: palm settled onto the skin, fingers draped
+            if self.body_slack > 0 and not callable(specs[side]):  # a hand on the skin (not on the other hand):
+                # palm settled onto the skin, fingers draped
                 front = 0.0
                 for _ in range(3):  # fingers that go in even straight (a bulge ahead): tilt the palm's front up
                     self.settle(m0, side, elbow=el[0], front=front)
