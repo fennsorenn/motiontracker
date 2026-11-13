@@ -219,3 +219,28 @@ instead of relaxing; hands near the body clip a little. Decisions in `PLAN.md` Â
 4. Body contact poses in the pair choreography (hands folded in the lap, on thighs/belly/chest, crossed
    arms); key sheets checked for clipping before any pool or render.
 5. Pool, train p3, evaluate (per finger, off-screen, contact), comparison video.
+
+### v3 progress (2026-11-13)
+
+- Fingers: independent per-finger sampler, thumb-first counting, single fingers, rock, counting routines
+  (`motion`). p2's per-finger error on hands2 is even (thumb 12, others 14-15 deg): no single weak finger.
+- Off-screen: stage rest episodes (lap, desk, hanging) with relaxed fingers; out-of-view hands trained
+  (NLLs fully, other losses at OUT_W); `wrist` blends to the body model's hand by the model's rotation scale.
+- Detector score input: `scorecal` (Holistic pose visibility of the wrist/hand points, Hand Landmarker
+  handedness score; `tools/render/handlandmarker.py` now stores it), synthesized in `observe2`. On pairs2/hands2
+  Holistic visibility separates out-of-view only weakly (0.75 vs 0.89 seen; real hands dropped below the frame
+  read ~0.1), so synthetic out-of-view scores fade with the distance past the frame edge.
+- Body contacts, reviewed pose by pose with the owner (key sheets: front, level side, wide):
+  - `collide.BodyMesh`: exact signed distance to the skinned body (capsules ignore body shape; the first
+    nearest-vertex version read points on the skin up to 1 cm off with a random sign).
+  - `pairs.contact_spec`: palm heel first, MHR's palm surface (13 deg off the hand axis, measured) laid on the
+    skin chord; `settle` after the arm IK; `drape` fingers, `drape_thumb`/`curl_thumb_tip`; relaxed resting
+    elbows (low, at the sides); a spread relaxed thumb. A hand on the other hand settles onto body + that hand.
+  - The collision relaxation keeps hands out of the body mesh.
+  - Accepted: thighs, belly (one hand, or two stacked), chest (one hand, or hand over hand on the heart).
+    Folded in the lap (knees together in a third of the pair sequences, bottom hand a loose fist with its
+    forearm along the thigh, top hand on its back): kept as is although the top hand sits a fist's height
+    above the leg (owner: keep the best version, refine later).
+  - Fixed on the way: `collide.seg_closest` measured points to capsule start points only; seated lap rests sank
+    2-5 cm into heavier thighs (`fix_rest`).
+- Pool `data/m4/pool3` generating (4 x 380 train draws, 120 val).
