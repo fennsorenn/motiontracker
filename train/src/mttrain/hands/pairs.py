@@ -124,7 +124,7 @@ def wrist_angles(elbow, P, side):
     return forearm_angles(_unit(P[0] - elbow), d, t, n)
 
 
-def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96, body=None, body_slack=0.0, mesh=None):
+def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96, body=None, body_slack=0.0, mesh=None, relaxed=False):
     """Elbow position for a hand at wrist W (hand axes d, t, n) and shoulder S, upper arm U, forearm L (cm):
     on the circle of reachable elbows, the point giving the most natural wrist (least sideways bend, flexion
     in range, elbow not above the shoulder or behind the body). -> (elbow, flex, dev) or None if the wrist is
@@ -154,8 +154,14 @@ def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96, body=None, body_slack
     above = np.maximum((E - S) @ up, 0.0)  # elbow above the shoulder
     behind = np.maximum(-((E - S) @ fwd) - 5.0, 0.0)  # elbow far behind the shoulder
     cost = (dev / 10.0) ** 2 + (above / 5.0) ** 2 + (behind / 5.0) ** 2 + np.where(ok, 0.0, 1e6)
+    if relaxed:  # a resting arm (hands on the body; owner 2026-11-13): elbow low, near the body's side, wrist easy
+        forward = np.maximum((E - S) @ fwd - RELAXED_ELBOW_FWD_CM, 0.0)
+        cost = cost + (flex / 25.0) ** 2 + (forward / 6.0) ** 2
     k = int(np.argmin(cost))
     return E[k], float(flex[k]), float(dev[k]), float(cost[k])
+
+
+RELAXED_ELBOW_FWD_CM = 8.0  # resting arms: elbows further forward of the shoulder than this cost
 
 
 def body_clearance(p, caps):
@@ -540,8 +546,8 @@ class PairChoreo:
         skin: that point c1 is where the root of the hand (palm heel) touches. The fingers point along `d_want` in
         the tangent plane there (turned by up to +-turn_deg), the knuckle pad lands on the skin c2 a palm length
         further, and the palm surface (heel pad -> knuckle pad, `HEEL_*`, `KNUCKLE_DEPTH_CM`) is laid on the chord
-        c1 -> c2 with its normal against the skin's (smoothed) normal. Fingers start straight with the thumb in the
-        palm plane and are draped onto the surface after the solve (`drape`). -> spec or None."""
+        c1 -> c2 with its normal against the skin's (smoothed) normal. Fingers start straight with a relaxed thumb
+        (`resting_hand`) and are draped onto the surface after the solve (`drape`). -> spec or None."""
         c1 = self.mesh.surface(start, march, 0.0)
         if c1 is None:
             return None
@@ -550,7 +556,8 @@ class PairChoreo:
         if np.linalg.norm(d0) < 1e-3:
             return None
         d0 = _rotate(_unit(d0), N1, np.radians(rng.uniform(-turn_deg, turn_deg)))
-        O = self.offsets(self.flat_palm if q is None else q, side)
+        q = self.resting_hand(rng) if q is None else q
+        O = self.offsets(q, side)
         k = np.linalg.norm(O[9] - O[0]) / HAND_REST_CM  # this body's hand size
         heel_along, heel_depth, knuckle_depth = HEEL_ALONG_CM * k, HEEL_DEPTH_CM * k, KNUCKLE_DEPTH_CM * k
         L9 = HAND_REST_CM * k
@@ -566,8 +573,18 @@ class PairChoreo:
         d = np.cos(a) * u + np.sin(a) * p
         n = -np.sin(a) * u + np.cos(a) * p
         wrist = c1 + Ns * PALM_GAP_CM - d * heel_along - n * heel_depth
-        q = self.flat_palm.copy() if q is None else q
         return (q, d, n, 0, wrist)
+
+    def resting_hand(self, rng):
+        """Finger pose of a hand resting on the body before draping: fingers straight, a little spread; the thumb
+        relaxed, out from the index finger (owner, 2026-11-13: tucked against the index it looked unnatural),
+        varied. Thumb tip target in the hand frame (cm: along the fingers, toward the thumb, toward the palm)."""
+        q = np.zeros(len(PARAMS))
+        self.hm._fan(q, rng.uniform(0.03, 0.15), [0.0] * 4)
+        target = self.hm._to_hand((rng.uniform(5.0, 7.0), rng.uniform(6.0, 8.5), rng.uniform(0.5, 2.0)))
+        q = self.hm.solve_thumb(q, target)
+        q[PARAMS.index("thumb1_rx")] = 0.0
+        return np.clip(q, self.hm.lo, self.hm.hi)
 
     def palm_pads(self, P, side):
         """Hand points P (21, 3) -> palm skin points: the heel pad and the index, middle and little finger knuckle
@@ -579,7 +596,7 @@ class PairChoreo:
             pads[j] = P[j] + n * depth * k
         return pads
 
-    def settle(self, m, side, tries=8, tol=0.2):
+    def settle(self, m, side, tries=8, tol=0.2, elbow=None):
         """Hand `side` of pose m (P,) settled onto the skin after the arm's IK (which may miss the wrist and knuckle
         targets by a few cm): the heel pad and the middle knuckle pad are moved onto the skin (PALM_GAP_CM), the
         index and little finger pads out of it if they sink in, and the arm solved again. Changes m in place."""
@@ -603,6 +620,8 @@ class PairChoreo:
             if worst <= tol:
                 return m
             tg = [(f"{side}_{MP21[j]}", P[j] + moves[j], w, j in (0, 9)) for j, w in ORIENT.items()]
+            if elbow is not None:  # keep the chosen elbow (the hand targets alone let it drift)
+                tg.append((f"{side}_lowarm", elbow, ELBOW_W, False))
             if _DEBUG:
                 self._dbg_prev = (pads, moves, P[0])
             sol = choreo._solve(self.ch, self.pn, self.jn, m, (side,), tg)
@@ -730,7 +749,7 @@ class PairChoreo:
                 hd, ht, hn = hand_axes(pp, side)
                 el = best_elbow(J[self.jn.index(f"{side}_uparm")], pp[0], hd, ht, hn, self.upper_arm, self.forearm, up_b, fwd_b,
                                 body=self.caps_now, body_slack=self.body_slack,
-                                mesh=self.mesh if self.mesh.tree is not None else None)
+                                mesh=self.mesh if self.mesh.tree is not None else None, relaxed=self.body_slack > 0)
                 if el is not None and (best is None or el[3] < best[1][3]):
                     best = (dd, el, pp)
             if best is None:
@@ -752,7 +771,7 @@ class PairChoreo:
                 return None
             m0[self.arm[side]] = sol[self.arm[side]]
             if self.body_slack > 0:  # hands resting on the body: palm settled onto the skin, fingers draped
-                self.settle(m0, side)
+                self.settle(m0, side, elbow=el[0])
                 self.drape(m0, side)  # (what still clips is the mesh check's to reject; a lift here floats the palm)
                 q = m0[self.fing[side]].copy()
                 sol = m0.copy()

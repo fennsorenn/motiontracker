@@ -42,6 +42,7 @@ def main():
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--body", type=int, default=0)
+    ap.add_argument("--wide", action="store_true", help="body contacts: also a wide view of the upper body (elbows)")
     ap.add_argument("--events", default=",".join(DEFAULT))
     ap.add_argument("--clips", default="")
     ap.add_argument("--exposure", type=float, default=-0.8)
@@ -113,12 +114,14 @@ def main():
         if kind in pairs.BODY_CONTACT:  # hands on the body: from the front-side and above, and level from the side
             out_side = 1.0 if (P[pc.hm.fk.mp21[next(iter(sol))]][9] / 100.0 - X.mean(0) / 100.0) @ lat > 0 else -1.0
             views = [c + 0.45 * fwd + 0.35 * lat * (1 if i % 2 else -1) + 0.2 * up, c + 0.5 * lat * out_side + 0.12 * fwd + 0.03 * up]
+            if a.wide:  # the whole upper body from front-side: elbows and shoulders
+                views.append(c + 1.1 * fwd + 0.45 * lat * out_side + 0.35 * up)
         for v, pos in enumerate(views):
             f_ = c - pos
             f_ /= np.linalg.norm(f_)
             dn = -(up - (up @ f_) * f_)
             dn /= np.linalg.norm(dn)
-            tag = f"k{i:02d}{'' if v == 0 else 'b'}"
+            tag = f"k{i:02d}{'abc'[v]}"
             npz = a.out / f"{tag}.npz"
             np.savez_compressed(npz, verts=verts.astype(np.float32), faces=np.asarray(ch.mesh.faces, np.int32),
                                 R=np.stack([np.cross(dn, f_), dn, f_]), t=pos, fx=0.5 / np.tan(np.radians(25)),
@@ -128,7 +131,8 @@ def main():
                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             tiles.append(a.out / tag / "00000.png")
             if v > 0:
-                labels.append(labels[-1].replace(f"{i}: {kind}", f"{i}: {kind} side", 1))
+                base = labels[-1] if v == 1 else labels[-2]
+                labels.append(base.replace(f"{i}: {kind}", f"{i}: {kind} {('side', 'wide')[v - 1]}", 1))
     for kind in [k for k in a.clips.split(",") if k]:
         clip(pc, ch, m, X, rng, kind, a.out)
     (a.out / "labels.json").write_text(json.dumps(labels, indent=1))
