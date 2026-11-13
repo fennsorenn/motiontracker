@@ -244,3 +244,29 @@ instead of relaxing; hands near the body clip a little. Decisions in `PLAN.md` Â
   - Fixed on the way: `collide.seg_closest` measured points to capsule start points only; seated lap rests sank
     2-5 cm into heavier thighs (`fix_rest`).
 - Pool `data/m4/pool3` generating (4 x 380 train draws, 120 val).
+
+## Pair model p3 (2026-11-13)
+
+`train2 --name p3 --pool data/m4/pool3 --scores data/m4/calib/scores.json` (pool3: 1222 train / 99 val
+sequences; resumable runs since 53ccd68). Synthetic validation: orientation 22.7 deg in view, fingers 5.3; out
+of view 60 deg with a predicted scale of 61 (calibrated). New render sets `pairs3`, `hands3` (4 x 20 s each:
+v3 choreography with rests, contacts, counting; Holistic + Hand Landmarker with scores).
+
+Median errors p3 / p2 (deg; H Holistic, HL Hand Landmarker):
+
+| set | orientation | fingers | out-of-view orientation |
+|---|---|---|---|
+| hands3 H | 22.1 / 25.4 | 18.9 / 24.7 | 97 / 138 |
+| hands3 HL | 18.8 / 16.7 | 17.0 / 21.0 | 93 / 133 |
+| pairs3 H | 20.3 / 19.9 | 12.5 / 9.3 | 35 / 35 |
+| pairs3 HL | 13.3 / 13.2 | 3.8 / 3.5 | 30 / 29 |
+| pairs2 H | 19.2 / 20.4 | 15.4 / 15.6 | 38.5 / 29.3 |
+| pairs2 HL | 15.4 / 17.1 | 13.3 / 13.8 | 36.7 / 44.9 |
+| hands2 H | 23.6 / 23.8 | 17.6 / 17.3 | 44.6 / 66.1 |
+| hands2 HL | 19.6 / 20.2 | 17.7 / 17.8 | 40.6 / 69.9 |
+
+Better on the new single-hand set (counting, independent fingers), equal on the old sets, Holistic fingers
+worse on pairs3. Avatar level (pairs2 H): hand global 23.0 (p2 21.1), hand-vs-forearm 39.4 (p2 49.8; the
+confidence blend). Out-of-view finger truth is inconsistent between generators (pair sequences start with flat
+fingers, stage rests are relaxed). Comparison video `data/videos/seated-v1-p3/` (p2 vs p3, both with the new
+combination step). `tools/avatar-video` renders are not resumable yet.
