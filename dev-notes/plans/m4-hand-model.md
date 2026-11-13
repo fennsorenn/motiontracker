@@ -169,3 +169,38 @@ Next steps (v2):
   landmarks vs truth): Holistic median 28.3 deg (p90 164: 14% mirrored), Hand Landmarker 24.8 deg (p90 43,
   1% mirrored); both see the hand about 15% small. m1-v10's hand bone: 67.5 deg global (lower arm 49.5, wrist
   35.4): the body model barely knows how the hand is turned, matching the owner's wrist observation.
+- Interaction moveset reworked over three owner review rounds (collisions on MHR's capsules, anatomical wrist
+  limits, elbow placement, heel-to-heel palm contacts, rub/clap/turn motions, eased timing; b71f21f). Per-event
+  acceptance over 8 bodies: palms, steeple, rub, clap, cross, count_on_hand 8/8; tap, approach 7/8; turn 5/8;
+  wrist 3/8; occlude 2/8. Set `pairs2` (8 x 20 s, Holistic and Hand Landmarker landmarks, m1-v10 poses).
+- `pairs2` detector baselines: Holistic swaps 4.4% of frames (36% with the hands close), doubles 9.5%, flips
+  8.2%; Hand Landmarker swaps 6.2% (47% close), flips 0.2%.
+
+## Pair model p2 (2026-11-13)
+
+`train2 --name p2` (30k steps, pool2 1098 sequences, orientation target = the true 3D palm frame in the
+camera frame; 23 min on GPU). Synthetic validation: orientation 22.9 deg, fingers 5.6 deg.
+
+Rendered sets, orientation error median / p90 (camera frame), detected frames:
+
+| set (landmarks) | learned | MediaPipe raw | no detection | fingers | orientation motion vs truth |
+|---|---|---|---|---|---|
+| pairs2 (Holistic) | 20.4 / 51 | 36.3 / 125 | 51.1 | 15.6 | x2.30 |
+| pairs2 (Hand Landmarker) | 17.1 / 43 | 32.3 / 68 | 58.4 | 13.8 | x1.35 |
+| hands2 (Holistic) | 23.8 / 67 | 32.2 / 168 | 44.1 | 17.3 | x3.89 |
+
+Fingers on hands2 are worse than h2's (13.2): the pair model regressed on single-hand fingers.
+
+Combination (`mttrain.hands.wrist`, merger stand-in): palm frame -> VRM hand global -> local to m1-v10's lower
+arm. The rendered truth carries most of the forearm twist on the hand bone (median 120 deg about the forearm
+axis), so the whole rotation goes onto the hand; moving the twist onto the lower arm put it 129 deg off.
+Avatar level on pairs2 (Holistic / Hand Landmarker), hand global: m1-v10 68.9 / 69.2 deg -> 21.1 / 18.1 deg.
+The lower arm stays m1-v10's (50 deg off), so the hand-vs-lower-arm local gets worse (33.8 -> 49.8 / 56.4).
+
+Comparison video `data/videos/seated-v1-p2/compare-landmarks.mp4` (ported vs p2 fingers + wrist on the
+seated-v1 session). Held last pose for lost hands is visible (open hand while the arms hang).
+
+Open: occlude/wrist/turn acceptance rates; finger fixes (counting, independent fingers, bend axis) and the
+single-hand finger regression; lost-hand behaviour (relax toward rest); forearm twist from the hand model
+onto the lower arm needs a truth convention first; Hand Landmarker runtime option; hands-only arms; the
+hands-v1 retake isn't used for calibration yet.
