@@ -476,11 +476,14 @@ class PairChoreo:
                 # the bottom hand in the middle of the lap, loosely curled (knuckles off the lap, fingertips down)
                 # palms down, stacked (owner, 2026-11-13): the bottom hand in the middle of the lap where the thighs
                 # meet, knuckles raised so the fingers curl down onto the lap; the top hand over its back
+                # the bottom hand a loose fist (owner, 2026-11-13), resting on its heel and the curled fingers
+                w = rng.uniform(0.5, 0.75)
+                q_fist = np.clip(w * self._g("fist") + (1 - w) * self._g("relaxed"), self.hm.lo, self.hm.hi)
                 spec_b = self.contact_spec(rng, bottom, mid + lat * sb * rng.uniform(1.5, 4) + up * 14.0, up,
-                                           _unit(fwd_h - lat * sb * rng.uniform(0.3, 0.9)))
+                                           _unit(fwd_h - lat * sb * rng.uniform(0.3, 0.9)), q_fist)
                 if spec_b is None:
                     return []
-                self.style[bottom] = {"front": rng.uniform(2.5, 4.0), "drape": DRAPE_MAX_CURLED}
+                self.style[bottom] = {"fist": True}
                 gap = rng.uniform(2.6, 3.4) + slack
 
                 def follow(act):  # the top hand's palm on the back of the bottom hand, fingers across it
@@ -713,11 +716,11 @@ class PairChoreo:
         return m
 
     def finger_depth(self, m, side):
-        """How deep (cm, <= 0: clear) the fingers of hand `side` in pose m (P,) go into the skin, joint centres
-        against the finger radius."""
+        """How deep (cm; negative: the closest finger joint's clearance) the fingers of hand `side` in pose m (P,)
+        go into the skin, joint centres against the finger radius."""
         from mtcore.mhr import positions
         P = positions(self.ch, m[None].astype(np.float32))[0][self.hm.fk.mp21[side]]
-        deep = 0.0
+        deep = -np.inf
         for f, base in (("index", 5), ("middle", 9), ("ring", 13), ("pinky", 17)):
             pts = P[base + 1:base + 4]
             deep = max(deep, float((FINGER_R[f] - self.mesh.distance(pts)).max()))
@@ -892,15 +895,24 @@ class PairChoreo:
                 # palm settled onto the surface, fingers draped
                 style = getattr(self, "style", {}).get(side, {})
                 front = style.get("front", 0.0)
-                for _ in range(3):  # fingers that go in even straight (a bulge ahead): tilt the palm's front up
-                    self.settle(m0, side, elbow=el[0], front=front)
-                    self.drape(m0, side, max_frac=style.get("drape"))
-                    deep = self.finger_depth(m0, side)
-                    if deep <= 0.05:
-                        break
-                    front += deep + 0.1
-                self.drape_thumb(m0, side)
-                self.curl_thumb_tip(m0, side)  # (what still clips is the mesh check's to reject; a lift here floats the palm)
+                if style.get("fist"):  # a loose fist: the palm's front lowered or raised until the curled fingers touch
+                    front = 2.0
+                    for _ in range(5):
+                        self.settle(m0, side, elbow=el[0], front=front)
+                        gap = -self.finger_depth(m0, side)  # closest finger joint's clearance beyond its radius
+                        if abs(gap - DRAPE_GAP_CM) < 0.2:
+                            break
+                        front -= gap - DRAPE_GAP_CM
+                else:
+                    for _ in range(3):  # fingers that go in even straight (a bulge ahead): tilt the palm's front up
+                        self.settle(m0, side, elbow=el[0], front=front)
+                        self.drape(m0, side, max_frac=style.get("drape"))
+                        deep = self.finger_depth(m0, side)
+                        if deep <= 0.05:
+                            break
+                        front += deep + 0.1
+                    self.drape_thumb(m0, side)
+                    self.curl_thumb_tip(m0, side)  # (what still clips is the mesh check's to reject; a lift floats the palm)
                 q = m0[self.fing[side]].copy()
                 sol = m0.copy()
             if stacked:
