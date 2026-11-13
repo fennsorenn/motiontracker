@@ -284,6 +284,8 @@ def video(out, threads=8):
             # mirrored, so the recorder's own mirroring hands MediaPipe the unmirrored render
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-framerate", str(FPS), "-i", str(frames / "%05d.png"),
                             "-vf", "hflip,format=yuv420p", "-c:v", "libvpx-vp9", "-b:v", "4M",
+                            # realtime settings: 35 s -> 2 s per 20 s sequence, file ~15% larger (2026-11-13)
+                            "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1",
                             "-threads", str(threads), str(d / "video.webm")], check=True)
         print(f"{d.name}: video ok", flush=True)
 

@@ -239,15 +239,23 @@ class PairChoreo:
             # rubbing starts with the fingers further forward than prayer hands: room in the wrists for the strokes
             d = _unit(up * 0.7 + fwd) if kind == "rub" else _unit(up + fwd * 0.5)
             C = sh + fwd * rng.uniform(22, 32) - up * rng.uniform(15, 25) + lat * rng.uniform(-3, 3)
-            C = self.forward_clear(C, fwd, 14.0 if kind == "rub" else 10.0)  # room for the forearms in front of the belly
-            touch = 2.6 + slack
+            # owner, 2026-11-13: hands further forward, wrists not forced close, the hands turned a little outward so
+            # the fingers just touch; physics only for soft contact. The palm heels meet; the fingers open in a
+            # slight V (alpha about the thumb axis); the right hand is the left one reflected across the contact plane.
+            C = self.forward_clear(C, fwd, 16.0)
+            touch = 3.2 + slack  # palm heel to palm heel (wrist joints), cm
+            alpha = np.radians(rng.uniform(1.5, 3.0) if kind == "rub" else rng.uniform(3.0, 7.0))
+            n_open = _rotate(-lat, _unit(np.cross(-lat, d)), alpha)  # left palm normal, opened outward at the fingers
 
             def contact(gap):
-                def follow(act):  # right hand: the left one's actual pose reflected across its palm plane
-                    dl, _, nl = hand_axes(act["l"], "l")
-                    return (q, dl, -nl, 9, act["l"][9] + nl * gap)
-                return {"l": (q, d, -lat, 9, C + lat * gap / 2, 30.0 if kind == "rub" else 50.0), "r": follow}
-            keys.append((rng.uniform(0.5, 1.0), rng.uniform(0.6, 2.0), contact(touch)))
+                def follow(act):
+                    dl, tl, nl = hand_axes(act["l"], "l")
+                    nu = _unit(_rotate(nl, tl, -alpha))  # the un-opened palm normal: the contact plane's normal
+                    refl = lambda v: v - 2 * (v @ nu) * nu
+                    heel = act["l"][0] + nu * gap  # right heel across the contact plane
+                    return (q, refl(dl), refl(nl), 0, heel)
+                return {"l": (q, d, n_open, 0, C + lat * gap / 2, 30.0 if kind == "rub" else 50.0), "r": follow}
+            keys.append((rng.uniform(0.7, 1.2), rng.uniform(0.6, 2.0), contact(touch)))
             if kind == "rub":
                 # strokes relative to the contact pose: the hands slide in opposite directions along the fingers
                 # and counter-rotate a little about the contact, so the fingers trail (owner, 2026-11-12: a slide
@@ -259,19 +267,19 @@ class PairChoreo:
                     if not base:  # the contact key's left hand, once
                         P0, _ = act["prev"]["l"]
                         base["d"], _, base["n"] = hand_axes(P0, "l")
-                        base["mid"] = P0[9]
+                        base["mid"] = P0[0]
                     sgn = 1.0 if k % 2 else -1.0
                     shift = slide[k] * sgn
-                    return (q, _rotate(base["d"], base["n"], sgn * ang), base["n"], 9, base["mid"] + base["d"] * shift / 2)
+                    return (q, _rotate(base["d"], base["n"], sgn * ang), base["n"], 0, base["mid"] + base["d"] * shift / 2)
 
                 def stroke_r(act, k):
                     sgn = 1.0 if k % 2 else -1.0
                     dl, _, nl = hand_axes(act["l"], "l")
-                    return (q, _rotate(dl, nl, -2 * sgn * ang), -nl, 9, act["l"][9] + nl * touch - dl * slide[k] * sgn, 10.0)
+                    return (q, _rotate(dl, nl, -2 * sgn * ang), -nl, 0, act["l"][0] + nl * touch - dl * slide[k] * sgn, 10.0)
                 n_strokes = int(rng.integers(4, 9))
                 slide = rng.uniform(1.5, 2.5, n_strokes)
                 for k in range(n_strokes):
-                    keys.append((0.28, 0.0, {"l": (lambda act, k=k: stroke(act, k)), "r": (lambda act, k=k: stroke_r(act, k))}))
+                    keys.append((rng.uniform(0.45, 0.6), 0.0, {"l": (lambda act, k=k: stroke(act, k)), "r": (lambda act, k=k: stroke_r(act, k))}))
             if kind == "clap":
                 # the hands open by swinging the forearms about the elbows, not by moving the whole arm
                 for _ in range(int(rng.integers(3, 6))):
@@ -286,8 +294,8 @@ class PairChoreo:
                             Wn = E + _rotate(P[0] - E, axis, sgn * swing)
                             return (q, _rotate(d_, axis, sgn * swing), _rotate(n_, axis, sgn * swing), 0, Wn)
                         return f
-                    keys.append((0.16, 0.04, {"l": open_("l"), "r": open_("r")}))
-                    keys.append((0.14, 0.08, contact(touch)))
+                    keys.append((rng.uniform(0.25, 0.35), 0.05, {"l": open_("l"), "r": open_("r")}))
+                    keys.append((rng.uniform(0.2, 0.28), 0.1, contact(touch)))
         elif kind == "steeple":
             q = self._g("relaxed")
             d_l = _unit(up + fwd * 0.3 - lat * 0.35)
@@ -347,9 +355,10 @@ class PairChoreo:
                 d = _unit(up + fwd * 0.2)
                 off = rng.uniform(4, 12)
                 face = fwd if rng.random() < 0.6 else -fwd  # palms to the camera or to the body
-                keys.append((rng.uniform(0.6, 1.0), rng.uniform(0.5, 1.5),
-                             {"l": (ql, d, face, 0, C - lat * off - up * 6 + fwd * rng.uniform(3.5, 4.5) * front, 70.0),
-                              "r": (qr, d, face, 0, C + lat * off - up * 6 - fwd * rng.uniform(3.5, 4.5) * front, 70.0)}))
+                dh = rng.uniform(4, 8) * front  # the arms cross at different heights (owner: they clipped)
+                keys.append((rng.uniform(0.8, 1.3), rng.uniform(0.5, 1.5),
+                             {"l": (ql, d, face, 0, C - lat * off - up * (6 - dh) + fwd * rng.uniform(3.5, 4.5) * front, 70.0),
+                              "r": (qr, d, face, 0, C + lat * off - up * (6 + dh) - fwd * rng.uniform(3.5, 4.5) * front, 70.0)}))
                 keys.append((rng.uniform(0.5, 0.9), rng.uniform(0.2, 0.6),
                              {"l": (ql, d, face, 0, C + lat * off - up * 6, 70.0), "r": (qr, d, face, 0, C - lat * off - up * 6, 70.0)}))
                 front = -front
@@ -378,7 +387,7 @@ class PairChoreo:
             keys.append((rng.uniform(0.6, 1.0), rng.uniform(0.2, 0.6), {side: (q, d, n0, 0, W, 40.0)}))
             fast = rng.random() < 0.5
             for k in range(int(rng.integers(2, 5))):
-                amount = np.radians(rng.uniform(70, 160)) * (1 if k % 2 == 0 else -1)
+                amount = np.radians(rng.uniform(130, 175)) * (1 if k % 2 == 0 else -1)  # close to a full palm turn
 
                 def turned(act, amount=amount):
                     P, E = act["prev"][side]
@@ -562,7 +571,7 @@ class PairChoreo:
                 sol = self._solve(m, {s: self.neutral(rng, X, s) for s in "lr"})
                 if not sol:
                     continue
-                end = min(T - 1, k + int(rng.uniform(0.6, 1.0) * fps))
+                end = min(T - 1, k + int(rng.uniform(0.8, 1.3) * fps))
                 trial = {s: keys[s] + [(k, end, *sol[s])] for s in "lr"}
                 if self._clear(mp, trial, T, k, end):
                     keys, cur = trial, {s: sol[s] for s in "lr"}
