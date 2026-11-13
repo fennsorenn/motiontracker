@@ -70,7 +70,11 @@ def targets(truth, q):
     img = truth["img"][:, :2]  # (B, 2 frames, 2 slots, 21, 3)
     left, right = img[:, :, 0], img[:, :, 1] * MIRROR_X.to(img)
     pts = torch.cat([left, right], 0)
-    R, size = palm_frame_t(pts)
+    _, size = palm_frame_t(pts)
+    # orientation target: the true 3D palm frame in the camera frame (right hands mirrored), not the image-point
+    # frame (perspective x/y and relative depth disagree in scale: 13 deg off the true orientation)
+    cam = truth["cam"][:, :2]
+    R, _ = palm_frame_t(torch.cat([cam[:, :, 0], cam[:, :, 1] * MIRROR_X.to(cam)], 0))
     inside = torch.cat([truth["inside"][:, :2, 0], truth["inside"][:, :2, 1]], 0)
     return {"q": torch.cat([q[:, :2, 0], q[:, :2, 1]], 0), "rot": R, "wrist": pts[..., 0, :2],
             "log_size": torch.log(size.clamp_min(1e-4)), "inside": inside, "size": size}

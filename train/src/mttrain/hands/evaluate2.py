@@ -87,7 +87,8 @@ def evaluate(set_dir, ckpt, landmarks="landmarks.jsonl"):
                 if not inside:
                     prev.pop(side, None)
                     continue
-                _, Rt, _ = palm_frame(Ti)
+                # truth: the 3D palm frame in the camera frame (right hands mirrored), the model's target
+                _, Rt, _ = palm_frame(C[side] * ([-1.0, 1.0, 1.0] if side == "r" else 1.0))
                 q, Rp = out[side]
                 # MediaPipe's raw orientation, if some detection sits on this hand
                 raw, det = None, False

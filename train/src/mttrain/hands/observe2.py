@@ -134,4 +134,4 @@ class PairObserver:
 
         R_true, _ = palm_frame_t(img)  # left hands: palm side; right hands' frames are left-handed (mirror later)
         return ({"img": img_obs, "canon": canon_obs, "lost": lost},
-                {"img": img, "rot": R_true, "size": size, "inside": inside, "flip": flip, "swap": swap, "dbl": dbl})
+                {"img": img, "cam": C, "rot": R_true, "size": size, "inside": inside, "flip": flip, "swap": swap, "dbl": dbl})

@@ -39,7 +39,15 @@ def main():
     ap.add_argument("--n", type=int, required=True)
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--name", help="output file stem (default: the split); shards are merged with --merge")
+    ap.add_argument("--merge", nargs="+", help="merge these stems' files into --name (no generation)")
     a = ap.parse_args()
+    if a.merge:
+        parts = [np.load(POOL2 / f"{m}.npz") for m in a.merge]
+        np.savez_compressed(POOL2 / f"{a.name}.npz", **{k: np.concatenate([p[k] for p in parts]) for k in ("hands", "body", "q", "kind")},
+                            fps=OUT_FPS)
+        print(f"merged {a.merge} -> {a.name}: {sum(len(p['kind']) for p in parts)} sequences")
+        return
     rng = np.random.default_rng(a.seed)
     ch = load()
     pn = list(ch.parameter_transform.names)
@@ -85,10 +93,11 @@ def main():
         if (i + 1) % 50 == 0:
             print(f"{i + 1}/{a.n} sequences, {time.time() - t0:.0f} s", flush=True)
     POOL2.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(POOL2 / f"{a.split}.npz", hands=np.stack(H), body=np.stack(Bd), q=np.stack(Q),
+    name = a.name or a.split
+    np.savez_compressed(POOL2 / f"{name}.npz", hands=np.stack(H), body=np.stack(Bd), q=np.stack(Q),
                         kind=np.array(K, np.int8), fps=OUT_FPS)
-    print(f"{a.split}: {len(H)} sequences ({skipped} skipped: hands still overlapping) in {time.time() - t0:.0f} s"
-          f" -> {POOL2 / f'{a.split}.npz'}")
+    print(f"{name}: {len(H)} sequences ({skipped} skipped: hands still overlapping) in {time.time() - t0:.0f} s"
+          f" -> {POOL2 / f'{name}.npz'}")
 
 
 if __name__ == "__main__":
