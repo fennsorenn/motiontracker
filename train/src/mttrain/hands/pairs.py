@@ -83,10 +83,16 @@ _DEBUG = bool(os.environ.get("MT_PAIRS_DEBUG"))
 PAD_DEPTH_CM = {5: 1.65, 9: KNUCKLE_DEPTH_CM, 17: 1.55}
 DRAPE_GAP_CM = 0.15  # finger joint centres rest this far beyond the finger's radius from the skin
 DRAPE_MAX = {1: 0.3, 2: 0.4, 3: 0.4}  # a draped finger curls at most this fraction of its range per joint (relaxed)
+DRAPE_MAX_CURLED = {1: 0.5, 2: 0.7, 3: 0.65}  # a loosely curled resting hand (folded in the lap: the bottom hand)
+# knees together (owner, 2026-11-13: hands folded in the lap need the legs closer): share of pair sequences, the
+# hip abduction range (MHR upleg_ry; 0 -> ~22 cm knee gap, 0.15 -> ~10 cm), and the knee gap folded hands need
+P_KNEES_TOGETHER = 0.35
+KNEES_TOGETHER_RY = (0.05, 0.13)
+LAP_FOLD_KNEE_GAP_CM = 18.0
 # hand and forearm points against the body mesh (every event): finger/palm points at least MESH_HAND_CM from the
 # skin, forearm points (elbow -> wrist) at least MESH_FORE_CM (their radius minus a little give)
 MESH_HAND_CM = 0.3
-MESH_FORE_CM = (2.5, 1.5)
+MESH_FORE_CM = (2.0, 1.2)  # (2.5, 1.5) kept forearms off the thighs they rest on (knees together, folded hands)
 
 
 def _unit(v):
@@ -188,6 +194,15 @@ def still_head(mp, pn):
     mp[:, idx] = mp[0, idx]
 
 
+def knees_together(rng, mp, pn):
+    """Seated legs (T, P) moved to knees together for the whole sequence (in place; hands folded in the lap)."""
+    P = {n: i for i, n in enumerate(pn)}
+    ry = rng.uniform(*KNEES_TOGETHER_RY)
+    for s in "lr":
+        mp[:, P[f"{s}_upleg_ry"]] = ry + rng.normal(0, 0.015)
+        mp[:, P[f"{s}_upleg_twist"]] = -rng.uniform(0.0, 0.15)  # feet not splayed out
+
+
 def mirror_lat(v, lat):
     return v - 2 * (v @ lat) * lat
 
@@ -271,6 +286,7 @@ class PairChoreo:
         """A list of keys: (move s, hold s, {side: (q, d, n, anchor, at)}). slack (cm): contacts that far apart."""
         sh, lat, up, fwd = self._frame(X)
         self._body = (sh, lat, up, fwd)
+        self.style = {}  # side -> contact style for _solve (front: palm front off the surface, cm; drape: curl limits)
         C = sh + fwd * rng.uniform(25, 40) - up * rng.uniform(8, 25) + lat * rng.uniform(-5, 5)
         C = self.forward_clear(C, fwd, 10.0)
         keys = []
@@ -452,18 +468,25 @@ class PairChoreo:
                 bottom = "l" if rng.random() < 0.5 else "r"
                 top = "r" if bottom == "l" else "l"
                 sb = 1.0 if bottom == "l" else -1.0
-                mid = (hip["l"] + hip["r"]) / 2 + ((knee["l"] + knee["r"]) / 2 - (hip["l"] + hip["r"]) / 2) * rng.uniform(0.3, 0.55)
+                mid = (hip["l"] + hip["r"]) / 2 + ((knee["l"] + knee["r"]) / 2 - (hip["l"] + hip["r"]) / 2) * rng.uniform(0.45, 0.7)
                 fwd_h = _unit(fwd - (fwd @ up) * up)
                 qb, qt = q_rest(), q_rest()
-                spec_b = self.contact_spec(rng, bottom, mid + lat * sb * rng.uniform(6, 11) + up * 14.0, up,
-                                           _unit(fwd_h - lat * sb * rng.uniform(0.4, 1.2)))
+                if np.linalg.norm(knee["l"] - knee["r"]) > LAP_FOLD_KNEE_GAP_CM:
+                    return []  # knees apart: no lap to fold the hands in
+                # the bottom hand in the middle of the lap, loosely curled (knuckles off the lap, fingertips down)
+                # palms down, stacked (owner, 2026-11-13): the bottom hand in the middle of the lap where the thighs
+                # meet, knuckles raised so the fingers curl down onto the lap; the top hand over its back
+                spec_b = self.contact_spec(rng, bottom, mid + lat * sb * rng.uniform(1.5, 4) + up * 14.0, up,
+                                           _unit(fwd_h - lat * sb * rng.uniform(0.3, 0.9)))
                 if spec_b is None:
                     return []
+                self.style[bottom] = {"front": rng.uniform(2.5, 4.0), "drape": DRAPE_MAX_CURLED}
                 gap = rng.uniform(2.6, 3.4) + slack
 
                 def follow(act):  # the top hand's palm on the back of the bottom hand, fingers across it
                     db, tb, nb = hand_axes(act[bottom], bottom)
-                    d_t = _unit(fwd_h + lat * sb * rng.uniform(0.4, 1.2))
+                    d_t = _unit(fwd_h + lat * sb * rng.uniform(0.2, 0.7))
+                    d_t = _unit(d_t - (d_t @ nb) * nb)
                     return (qt, d_t, nb, 9, act[bottom][9] - nb * gap + d_t * rng.uniform(-1, 2), 30.0)
                 keys.append((rng.uniform(0.8, 1.4), rng.uniform(1.5, 4.0), {bottom: spec_b, top: follow}))
         elif kind in ("belly", "chest"):
@@ -661,7 +684,7 @@ class PairChoreo:
             m[self.arm[side]] = sol[self.arm[side]]
         return m
 
-    def drape(self, m, side, gap=DRAPE_GAP_CM, n_ang=20):
+    def drape(self, m, side, gap=DRAPE_GAP_CM, n_ang=20, max_frac=None):
         """Fingers (and the thumb's outer joints) of hand `side` in pose m (P,) curled onto the skin, joint by joint
         from the knuckle out: each joint flexes until the rest of its finger (held straight) would touch the
         surface, at most DRAPE_MAX of its range (a finger over a surface that falls away stays relaxed); if even
@@ -678,7 +701,7 @@ class PairChoreo:
                     if k2 > k:
                         m[idx[PARAMS.index(f"{f}{k2}_rz")]] = np.clip(0.0, fk.lo[PARAMS.index(f"{f}{k2}_rz")], fk.hi[PARAMS.index(f"{f}{k2}_rz")])
                 lo, hi = max(fk.lo[pi], -0.1), fk.hi[pi]  # straight at most (a draped finger never bends back)
-                angs = np.linspace(lo, lo + (hi - lo) * DRAPE_MAX.get(k, 0.6) if f != "thumb" else hi * 0.6, n_ang)
+                angs = np.linspace(lo, lo + (hi - lo) * (max_frac or DRAPE_MAX).get(k, 0.6), n_ang)
                 M = np.repeat(m[None], n_ang, 0)
                 M[:, idx[pi]] = angs
                 P = positions(self.ch, M.astype(np.float32))
@@ -867,10 +890,11 @@ class PairChoreo:
                 body_mesh, self.mesh = self.mesh, self.mesh_stack
             if self.body_slack > 0:  # a hand on the skin or on the other hand:
                 # palm settled onto the surface, fingers draped
-                front = 0.0
+                style = getattr(self, "style", {}).get(side, {})
+                front = style.get("front", 0.0)
                 for _ in range(3):  # fingers that go in even straight (a bulge ahead): tilt the palm's front up
                     self.settle(m0, side, elbow=el[0], front=front)
-                    self.drape(m0, side)
+                    self.drape(m0, side, max_frac=style.get("drape"))
                     deep = self.finger_depth(m0, side)
                     if deep <= 0.05:
                         break
@@ -969,6 +993,8 @@ class PairChoreo:
         pair = tuple(rng.choice(["lap", "desk"], 2))
         mp = seat(rng, pn, np.repeat(body[None], T, 0), fps, self.limits, force_rest=pair, moves=False)
         still_head(mp, pn)
+        if rng.random() < P_KNEES_TOGETHER:
+            knees_together(rng, mp, pn)
         mp[0] = self.fix_rest(mp[0], rng)  # the starting rest out of the thighs (the keys blend from it)
         keys = {s: [(0, 0, mp[0, self.arm[s]].copy(), np.zeros(len(PARAMS)))] for s in "lr"}
         segs = []

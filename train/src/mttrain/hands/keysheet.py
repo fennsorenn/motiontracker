@@ -43,6 +43,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--body", type=int, default=0)
     ap.add_argument("--wide", action="store_true", help="body contacts: also a wide view of the upper body (elbows)")
+    ap.add_argument("--knees-together", action="store_true", help="seat the body with the knees together (lap_folded)")
+    ap.add_argument("--prefer-pass", action="store_true", help="retry each tile until a pose passes the checks")
+    ap.add_argument("--tries", type=int, default=6, help="with --prefer-pass: rounds of attempts per tile")
     ap.add_argument("--events", default=",".join(DEFAULT))
     ap.add_argument("--clips", default="")
     ap.add_argument("--exposure", type=float, default=-0.8)
@@ -62,6 +65,8 @@ def main():
     pc.set_body(np.where([n.startswith("scale_") for n in pn], base, 0.0))
     m = seat(rng, pn, np.repeat(pc.body[None].astype(np.float64), 3, 0), 30.0, lim, force_rest=("lap", "lap"), moves=False)[1]
     pairs.still_head(m[None], pn)
+    if a.knees_together:
+        pairs.knees_together(rng, m[None], pn)
     m = pc.fix_rest(m)
     X = lm(skeleton_state(ch, m)[None])[0]
     pc.set_pose(m)
@@ -69,7 +74,8 @@ def main():
     labels, tiles = [], []
     for i, kind in enumerate(a.events.split(",")):
         sol, why = None, "no solve"
-        for slack in ((0.0, 1.0, 2.0) if kind in CONTACT else (0.0, 0.0, 0.0)):
+        attempts = (0.0, 1.0, 2.0) if kind in CONTACT else (0.0, 0.0, 0.0)
+        for slack in attempts * (a.tries if a.prefer_pass else 1):
             keys = pc.event(rng, kind, X, slack)
             if not keys:
                 continue
@@ -77,6 +83,15 @@ def main():
             pc.body_slack = pairs.BODY_CONTACT_SLACK_CM if kind in pairs.BODY_CONTACT else 0.0
             sol = pc._solve(m, keys[k][2], kind in PALM_CHECKED)
             pc.body_slack = 0.0
+            if sol is not None and a.prefer_pass:  # review the poses the data would keep: relaxed and clear
+                mm_ = m.copy()
+                for s_, (arm_, q_) in sol.items():
+                    mm_[pc.arm[s_]] = arm_
+                    mm_[pc.fing[s_]] = q_
+                mm_, _, after_ = pc.relaxer(mm_[None])
+                if after_[0] > pairs.FINAL_OVERLAP_CM or not pc.mesh_clear(mm_):
+                    sol = None
+                    continue
             if sol is not None:
                 break
         if sol is None:
