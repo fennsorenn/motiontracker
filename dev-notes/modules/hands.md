@@ -2,7 +2,7 @@
 
 Location: `train/src/mttrain/hands/` (part of the `train` uv project, `modules/train.md`). Learned hand model: MediaPipe hand landmarks → finger parameters (MHR's finger joints) and, in v2, each hand's orientation and position in the camera frame. Plan, numbers and open items: `plans/m4-hand-model.md`; decisions `PLAN.md` §5.6. Data, renders and runs live in gitignored `data/m4/` (`pool/`, `calib/`, `renders/`, `runs/<name>/`).
 
-Status (2026-11-13): v1 single-hand model (`h1`, `h2`) and v2 pair model (`p2`) trained and evaluated on renders; combination onto the body model's arm done offline (`wrist`). Not yet in the live runtime (`service/`, `modules/service.md`). Results for p2: plan section "Pair model p2".
+Status (2026-11-13): v1 single-hand model (`h1`, `h2`) and v2 pair model (`p2`) trained and evaluated on renders; combination onto the body model's arm done offline (`wrist`). v3 training data WIP (see "v3" below). Not yet in the live runtime (`service/`, `modules/service.md`). Results for p2: plan section "Pair model p2".
 
 ## Shared building blocks
 - `skeleton`: MHR hand skeleton, MediaPipe's 21 points ↔ MHR joints, finger parameters, FK. Canonical hand = MHR's left hand; right hands are mirrored across x (one model for both).
@@ -34,6 +34,9 @@ Status (2026-11-13): v1 single-hand model (`h1`, `h2`) and v2 pair model (`p2`) 
 - The whole rotation goes onto the hand bone: the rendered truth carries the forearm twist on the hand. `twist_to_forearm=True` moves the twist onto the lower arm but put it 129 deg off the truth; it stays off until a truth convention for forearm twist exists.
 - Bends beyond `MAX_BEND_DEG` (100) after removing the forearm twist are rejected (likely palm/back flip): the body model's hand is kept.
 - `pair_track` / CLI: `python -m mttrain.hands.wrist <ckpt> <landmarks> --body <poses> --out <out> --avatar <name> [--no-wrist]` writes a pose track with learned fingers and (unless `--no-wrist`) learned hand orientation. Lost hands hold their last pose (open item: relax toward rest).
+
+## v3 (WIP, 2026-11-13)
+Training data for counting, off-screen rest and body contact, plus a per-hand detector score input; target run `p3`. Touches `motion` (independent per-finger sampler, counting), `stage` and `pairs` (rest episodes, body contact poses), `observe2` (detector score, out-of-frame hands), `model2` (score input slot, confidence), `train2` (scoring out-of-frame hands) and `wrist` (blend to the body model's hand by confidence instead of holding). Steps and decisions: plan section "v3" in `plans/m4-hand-model.md`, `PLAN.md` §5.6 (v3). Module notes here get updated as each step lands.
 
 ## Extending
 - Anything inference needs must stay in `mtcore.hand_features` so training and the runtime cannot diverge.
