@@ -219,6 +219,7 @@ class PairChoreo:
         self.prev = {}  # side -> (hand points, elbow) of the last solved key: later keys can build on it
         from .relax import Relaxer
         self.relaxer = Relaxer(ch)
+        self.relaxer.mesh = self.mesh  # the collision relaxation keeps hands out of the body too
         self.last_overlap = 0.0  # deepest overlap left in the last generated sequence (cm)
         from collections import Counter
         self.rejects = Counter()  # why key poses were rejected (diagnostics)
@@ -478,8 +479,9 @@ class PairChoreo:
                     if len(sides) == 1:
                         p = navel + lat * sg * rng.uniform(-2, 7)
                     else:
-                        # the lower hand at the navel (lower, it went under a heavy belly's overhang), the upper above it
-                        p = navel + lat * sg * rng.uniform(1, 4) + up * (rng.uniform(9.0, 11.0) if k_ == 0 else rng.uniform(-1.0, 1.0))
+                        # the lower hand at the navel (lower, it went under a heavy belly's overhang), the upper well
+                        # above it, each a little toward its own side (owner: further apart)
+                        p = navel + lat * sg * rng.uniform(3, 6) + up * (rng.uniform(11.5, 13.5) if k_ == 0 else rng.uniform(-1.0, 1.0))
                     d = _unit(-lat * sg + up * rng.uniform(-0.15, 0.15))
                 else:
                     p = sh - up * (rng.uniform(10, 18) + h0) + lat * sg * rng.uniform(-6, 6) - lat * sg * 6.0 * k_

@@ -5,6 +5,10 @@ Per frame, a few dozen gradient steps through MHR's forward kinematics (torch, `
 hands' finger parameters, plus a little of the wrists: loss = squared capsule overlap between the two arms
 (`collide` capsules, made differentiable here) + a pull back to the intended pose; parameters clamped to
 MHR's limits. Contact is believable (surfaces touch, fingers flatten or bend away), not soft-tissue accurate.
+With `mesh` set (a `collide.BodyMesh` at the sequence's pose), hand joints are also kept out of the body's skin
+(owner, 2026-11-13: pushing two hands on the belly apart pushed fingers into the belly): a penalty on joint
+centres closer than BODY_CLEAR_CM to the skin, linearised at the closest skin point and its normal (refreshed
+every few steps).
 """
 
 import numpy as np
@@ -29,6 +33,9 @@ def seg_dist_t(a1, b1, a2, b2):
     return (a1 + d1 * s[..., None] - a2 - d2 * t_c[..., None]).norm(dim=-1)
 
 
+BODY_CLEAR_CM = 0.6
+
+
 class Relaxer:
     def __init__(self, ch, device="cpu", steps=60, lr=0.03, prior=0.02, wrist_prior=0.5, margin=0.1):
         self.col = Collider(ch)
@@ -48,6 +55,9 @@ class Relaxer:
         self.radii = torch.tensor(self.lr_)[:, None] + torch.tensor(self.rr_)[None, :]
         self.radii[-1, -1] -= 2.0  # forearm-forearm: as collide (thick capsules resting on each other)
         self.steps, self.lrate, self.margin, self.device = steps, lr, margin, device
+        jn = list(ch.skeleton.joint_names)
+        self.hand_joints = torch.tensor([j for j in keep if not jn[j].endswith(("lowarm", "uparm"))])
+        self.mesh = None  # collide.BodyMesh at the current pose: keep the hands out of the body too
 
     def overlap(self, mp):
         P = self.fk(mp)[..., :3]
@@ -66,11 +76,20 @@ class Relaxer:
             v0 = base[:, self.free].clone()
             v = v0.clone().requires_grad_(True)
             opt = torch.optim.Adam([v], lr=self.lrate)
-            for _ in range(self.steps):
+            body = self.mesh is not None and self.mesh.tree is not None
+            for step in range(self.steps):
                 full = base.clone()
                 full[:, self.free] = v
-                ov = self.overlap(full)
+                P = self.fk(full)[..., :3]
+                d = seg_dist_t(P[:, self.idx["la"], None], P[:, self.idx["lb"], None], P[:, None, self.idx["ra"]], P[:, None, self.idx["rb"]])
+                ov = self.radii - d
                 loss = (torch.relu(ov + self.margin) ** 2).sum((1, 2)).sum() + ((v - v0) ** 2 * self.weight).sum() * 100
+                if body:
+                    H = P[:, self.hand_joints]
+                    if step % 5 == 0:  # closest skin points and normals, linearised for the next steps
+                        c, n, _ = self.mesh.closest(H.detach().numpy().astype(np.float64))
+                        c, n = torch.tensor(c, dtype=H.dtype), torch.tensor(n, dtype=H.dtype)
+                    loss = loss + (torch.relu(BODY_CLEAR_CM - ((H - c) * n).sum(-1)) ** 2).sum()
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
