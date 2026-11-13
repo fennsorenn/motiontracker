@@ -204,3 +204,18 @@ Open: occlude/wrist/turn acceptance rates; finger fixes (counting, independent f
 single-hand finger regression; lost-hand behaviour (relax toward rest); forearm twist from the hand model
 onto the lower arm needs a truth convention first; Hand Landmarker runtime option; hands-only arms; the
 hands-v1 retake isn't used for calibration yet.
+
+## v3: training data for counting, off-screen and body contact (owner, 2026-11-13)
+
+Owner on the p2 video: counting still weak although the landmarks follow; lost hands keep their last pose
+instead of relaxing; hands near the body clip a little. Decisions in `PLAN.md` §5.6 (v3). Steps:
+1. Fingers: independent per-finger sampler, more one/two-finger gestures (thumb-first counting, pinky, rock,
+   middle), counting routines, higher weights; per-finger error check (ring/pinky).
+2. Off-screen: rest episodes (arm hanging beside the chair, on the thighs, in the lap) with relaxed varied
+   fingers and wrist; out-of-frame hands scored (fingers, rotation) so the Laplace scales grow; the
+   combination step blends to the body model's hand by confidence, no hold.
+3. Detector score input (one per-hand slot): Holistic pose visibility of the wrist/hand points, Hand
+   Landmarker handedness score; calibrated per detector and state on the renders, synthesized in training.
+4. Body contact poses in the pair choreography (hands folded in the lap, on thighs/belly/chest, crossed
+   arms); key sheets checked for clipping before any pool or render.
+5. Pool, train p3, evaluate (per finger, off-screen, contact), comparison video.
