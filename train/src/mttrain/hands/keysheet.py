@@ -61,6 +61,7 @@ def main():
     pc.set_body(np.where([n.startswith("scale_") for n in pn], base, 0.0))
     m = seat(rng, pn, np.repeat(pc.body[None].astype(np.float64), 3, 0), 30.0, lim, force_rest=("lap", "lap"), moves=False)[1]
     pairs.still_head(m[None], pn)
+    m = pc.fix_rest(m)
     X = lm(skeleton_state(ch, m)[None])[0]
     pc.set_pose(m)
     sh, lat, up, fwd = choreo._body_frame(X)
@@ -69,8 +70,12 @@ def main():
         sol, why = None, "no solve"
         for slack in ((0.0, 1.0, 2.0) if kind in CONTACT else (0.0, 0.0, 0.0)):
             keys = pc.event(rng, kind, X, slack)
+            if not keys:
+                continue
             k = int(rng.integers(len(keys)))
+            pc.body_slack = pairs.BODY_CONTACT_SLACK_CM if kind in pairs.BODY_CONTACT else 0.0
             sol = pc._solve(m, keys[k][2], kind in PALM_CHECKED)
+            pc.body_slack = 0.0
             if sol is not None:
                 break
         if sol is None:
@@ -91,8 +96,10 @@ def main():
         if after[0] > pairs.FINAL_OVERLAP_CM:
             bad.append(f"overlap {after[0]:.1f}")
         body = pc.collider.penetration(mm[None])[1][0]
-        if body > 0.0:
+        if body > (pairs.BODY_CONTACT_SLACK_CM if kind in pairs.BODY_CONTACT else 0.0):
             bad.append(f"body {body:.1f}")
+        if not pc.mesh_clear(mm[None]):
+            bad.append("mesh")
         if any(not (pairs.WRIST_FLEX[0] <= f <= pairs.WRIST_FLEX[1] and pairs.WRIST_DEV[0] <= d <= pairs.WRIST_DEV[1]) for f, d in wr.values()):
             bad.append("wrist")
         labels.append(f"{i}: {kind} | overlap {before[0]:.1f} -> {after[0]:.1f} cm | wrist flex,dev {wr} | "
@@ -100,6 +107,8 @@ def main():
         verts = np.asarray(ch.skin_points(skeleton_state(ch, mm[None]).astype(np.float32))) / 100.0
         c = np.mean([P[pc.hm.fk.mp21[s]][9] for s in sol], 0) / 100.0
         pos = c + 0.55 * fwd + 0.06 * up
+        if kind in pairs.BODY_CONTACT:  # hands on the body: from the front-side and above, contacts show better
+            pos = c + 0.45 * fwd + 0.35 * lat * (1 if i % 2 else -1) + 0.2 * up
         f_ = c - pos
         f_ /= np.linalg.norm(f_)
         dn = -(up - (up @ f_) * f_)

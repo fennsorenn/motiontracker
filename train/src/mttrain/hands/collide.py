@@ -45,9 +45,10 @@ def seg_closest(a1, b1, a2, b2):
     c, b = (d1 * r).sum(-1), (d1 * d2).sum(-1)
     den = np.maximum(a * e - b * b, 1e-12)
     s = np.clip((b * f - c * e) / den, 0, 1)
-    t = (b * s + f) / np.maximum(e, 1e-12)
+    t = np.where(e > 1e-12, (b * s + f) / np.maximum(e, 1e-12), 0.0)
     t_c = np.clip(t, 0, 1)
-    s = np.where((t < 0) | (t > 1), np.clip((b * t_c - c) / np.maximum(a, 1e-12), 0, 1), s)
+    # second segment clamped (or a point: e = 0, where the first branch has no information): project onto the first
+    s = np.where((t < 0) | (t > 1) | (e <= 1e-12), np.clip((b * t_c - c) / np.maximum(a, 1e-12), 0, 1), s)
     return np.linalg.norm(a1 + d1 * s[..., None] - a2 - d2 * t_c[..., None], axis=-1), s, t_c
 
 
@@ -134,7 +135,65 @@ class Collider:
                 for s in "lr"]
         return self.arms(states[..., :3]), np.maximum(*[x.max((1, 2)) for x in body]) - BODY_TOL_CM
 
+    def capsules_at(self, m, prefixes):
+        """Capsules (start, end, radii) whose parent joint matches prefixes, at one pose m (P,)."""
+        a, b, r = self.caps.world(skeleton_state(self.ch, np.asarray(m, np.float64)[None]))
+        k = self.caps.select(prefixes)
+        return a[0, k], b[0, k], r[0, k]
+
     def body_capsules(self, m):
         """The body capsules (start, end, radii) at one pose m (P,), for the elbow search."""
         a, b, r = self.caps.world(skeleton_state(self.ch, np.asarray(m, np.float64)[None]))
         return a[0, self.body], b[0, self.body], r[0, self.body]
+
+
+class BodyMesh:
+    """MHR's body mesh (arms and hands moved out of the way) as a signed distance for hand contacts (owner,
+    2026-11-13: hands near the body clipped). The capsules only scale with the skeleton, not with the body shape,
+    so on heavier bodies hands placed against them ended up inside the belly or thighs; the skinned mesh follows
+    the shape. Distance = to the nearest vertex (about 1 cm apart), sign from its normal (< 0: inside)."""
+
+    def __init__(self, ch, pn):
+        self.ch = ch
+        self.faces = np.asarray(ch.mesh.faces, np.int64)
+        # arms and hands to MHR's rest (spread to the sides), so their own vertices never count as body
+        self.arm = np.array([k for k, n in enumerate(pn) if n[:2] in ("l_", "r_") and any(
+            n[2:].startswith(w) for w in ("clavicle", "uparm", "lowarm", "elbow", "wrist") + tuple(f for f in ARM[3:]))])
+        self.tree = None
+
+    def set_pose(self, m):
+        from scipy.spatial import cKDTree
+        m = np.asarray(m, np.float64).copy()
+        m[self.arm] = 0.0
+        v = np.asarray(self.ch.skin_points(skeleton_state(self.ch, m[None]).astype(np.float32)))[0].astype(np.float64)
+        f = self.faces
+        fn = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
+        n = np.zeros_like(v)
+        for k in range(3):
+            np.add.at(n, f[:, k], fn)
+        self.v, self.n = v, n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
+        self.tree = cKDTree(v)
+
+    def distance(self, p):
+        """Signed distance (cm) of points p (..., 3) to the body surface."""
+        p = np.asarray(p, np.float64)
+        d, k = self.tree.query(p.reshape(-1, 3))
+        s = np.sign(((p.reshape(-1, 3) - self.v[k]) * self.n[k]).sum(-1))
+        return (d * np.where(s == 0, 1.0, s)).reshape(p.shape[:-1])
+
+    def normal(self, p):
+        """Outward skin normal at the vertex nearest to each point p (..., 3)."""
+        p = np.asarray(p, np.float64)
+        _, k = self.tree.query(p.reshape(-1, 3))
+        return self.n[k].reshape(p.shape)
+
+    def surface(self, p, out, clear):
+        """From p outside the body, move against `out` until p is `clear` cm from the surface. -> point or None."""
+        out = out / np.linalg.norm(out)
+        if self.distance(p) < clear:
+            return None
+        for _ in range(240):
+            if self.distance(p) <= clear:
+                return p
+            p = p - out * 0.5
+        return None

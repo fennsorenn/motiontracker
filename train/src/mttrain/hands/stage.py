@@ -49,25 +49,37 @@ def hand_targets(rng, X, side):
     return out
 
 
-def generate(rng, ch, lm, pn, base, T, fps, limits):
-    """Arm motion (T, P) on the body proportions of a held-out frame `base` (P,); fingers at rest."""
+def generate(rng, ch, lm, pn, base, T, fps, limits, p_rest=0.12, rests=("lap", "desk"), with_rest=False, fix_rest=None,
+             clear=None):
+    """Arm motion (T, P) on the body proportions of a held-out frame `base` (P,); fingers at rest.
+    `p_rest`: chance per move of going back to the rest posture for a while; `rests`: the rest postures drawn
+    per arm (`seated.REST`; "hanging" mostly takes the hand out of a desk camera's view). `with_rest`: also
+    return per side the weight (T,) of the rest posture (1 resting, ramps during moves), for relaxed fingers.
+    `fix_rest` (pose (P,) -> pose): lifts resting hands out of the body (`pairs.PairChoreo.fix_rest`); its change
+    to the first frame's arms is applied to every frame of the rest postures. `clear` (pose (P,) -> bool): key
+    poses it rejects (e.g. hands inside the body mesh, `pairs.PairChoreo.mesh_clear`) are drawn again."""
     jn = list(ch.skeleton.joint_names)
     P = {n: i for i, n in enumerate(pn)}
     from mtcore.mhr import skeleton_state
     body = np.where([n.startswith("scale_") for n in pn], base, 0.0)
-    pair = tuple(rng.choice(["lap", "desk"], 2))
+    pair = tuple(rng.choice(list(rests), 2))
     mp = seat(rng, pn, np.repeat(body[None], T, 0), fps, limits, force_rest=pair, moves=False)
     from .pairs import still_head
     still_head(mp, pn)  # the seated idle head motion carries nothing for hands (owner, 2026-11-12)
+    if fix_rest is not None:
+        arms = [P[f"{s}_{k}"] for s in "lr" for k in ARM_KEYS]
+        mp[:, arms] += (fix_rest(mp[0]) - mp[0])[arms]
     out = mp.copy()
+    rest_w = {}
     for side in "lr":
         idx = [P[f"{side}_{k}"] for k in ARM_KEYS]
         cur = mp[0, idx].copy()
-        keys = [(0, 0, cur)]  # (move start frame, move end frame, arm parameters)
+        keys = [(0, 0, cur, True)]  # (move start frame, move end frame, arm parameters, at rest)
         k = int(rng.uniform(0.0, 1.5) * fps)
         while k < T:
             km = min(T - 1, k + int(rng.uniform(0.5, 1.2) * fps))
-            if rng.random() < 0.12:  # back to rest for a while
+            resting = rng.random() < p_rest
+            if resting:  # back to rest for a while
                 pose = mp[km, idx].copy()
             else:
                 m0 = mp[km].copy()
@@ -85,17 +97,22 @@ def generate(rng, ch, lm, pn, base, T, fps, limits):
                     got = choreo._joint_pos(ch, sol, four, jn)
                     palm_err = np.degrees(np.arccos(np.clip(
                         _palm_normal(*got) @ _palm_normal(*(want[j] for j in four)), -1, 1)))
-                    if res.max() < MAX_RESIDUAL_CM and palm_err < MAX_PALM_DEG:
+                    if res.max() < MAX_RESIDUAL_CM and palm_err < MAX_PALM_DEG and (clear is None or clear(sol)):
                         pose = sol[idx]
                         break
-            keys.append((k, km, pose))
+            resting = resting or pose is cur and keys[-1][3]  # a failed solve keeps the previous pose
+            keys.append((k, km, pose, resting))
             cur = pose
-            k = km + int(rng.uniform(0.8, 3.5) * fps)
+            k = km + int((rng.uniform(1.5, 6.0) if resting else rng.uniform(0.8, 3.5)) * fps)
         arm = np.repeat(keys[0][2][None], T, 0)
+        w = np.ones(T)
         frames = np.arange(T)
-        for (a, b, pose), (_, _, prev) in zip(keys[1:], keys[:-1]):
+        for (a, b, pose, r), (_, _, prev, r0) in zip(keys[1:], keys[:-1]):
             s = min_jerk(np.clip((frames - a) / max(1, b - a), 0, 1))
             after = frames >= a
             arm[after] = prev + (pose - prev) * s[after, None]
+            w[after] = float(r0) + (float(r) - float(r0)) * s[after]
         out[:, idx] = arm
-    return clamp(pn, out, limits)
+        rest_w[side] = w
+    out = clamp(pn, out, limits)
+    return (out, rest_w) if with_rest else out

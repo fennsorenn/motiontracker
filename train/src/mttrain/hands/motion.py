@@ -1,9 +1,11 @@
 """Procedural finger motion for the hand model (PLAN.md §5.6, owner decision 2026-11-12).
 
 A sequence is a timeline of key poses joined by minimum-jerk transitions:
-- key poses come from a gesture library (open, relaxed, fist, point, pinch, OK, counting, thumbs up,
-  grip, claw, flat bend, splay, typing), perturbed, or from coupled random poses (neighbouring fingers
-  curl together, the distal joint follows the middle one, curled fingers spread less);
+- key poses come from a gesture library (open, relaxed, fist, point, pinch, OK, counting in index-first
+  and thumb-first styles, single fingers, rock, thumbs up, grip, claw, flat bend, splay, typing), perturbed;
+  from independent per-finger states (straight, half, curled; owner 2026-11-13: counting read weakly); or
+  from coupled random poses (neighbouring fingers curl together, the distal joint follows the middle one,
+  curled fingers spread less); now and then a counting routine steps through the counts;
 - holds of varying length, transitions of 0.15-0.7 s, each finger slightly early or late;
 - idle motion on top: slow drift, small tremor, occasional single-finger taps.
 
@@ -19,6 +21,12 @@ from scipy.optimize import least_squares
 from .skeleton import FINGERS, PARAMS, THUMB, UNOBSERVABLE, HandFK, hand_frame
 
 P = {p: k for k, p in enumerate(PARAMS)}
+# counting routines: gesture names in order (index-first and thumb-first styles), stepped through quickly
+COUNTS = (("point", "peace", "three", "four", "open"),
+          ("count1_thumb", "count2_thumb", "count3_thumb", "count4_thumb", "open"))
+P_ROUTINE = 0.08  # per key pose: start a counting routine (up or down, from a random start)
+# key pose sources: gesture library, independent per-finger states, coupled random
+P_LIBRARY, P_INDEPENDENT = 0.45, 0.30
 THUMB_SOLVED = ("thumb0_ry", "thumb0_rz", "thumb1_ry", "thumb1_rz", "thumb2_rz", "thumb3_rz")
 # IK pulls the thumb toward a natural, slightly flexed thumb; the two outer joints hardest, so the
 # target is reached mostly from the base (otherwise the solver hooks or hyperextends the thumb tip)
@@ -39,10 +47,10 @@ GESTURES = {
     "flat_together": dict(w=1, fingers=_STRAIGHT, fan=-0.04, thumb=("target", 10.0, 4.0, 1.5)),
     "fist": dict(w=3, fingers=_FIST, fan=0.0, thumb=("touch", 7, 0.0, 0.5, 1.6)),
     "point": dict(w=2, fingers=[(0.02, 0.05, 0.05)] + _FIST[1:], fan=0.0, thumb=("touch", 11, 0.0, 0.5, 1.6)),
-    "peace": dict(w=1.5, fingers=[(0.02, 0.03, 0.03), (0.02, 0.03, 0.03), *_FIST[2:]], fan=0.25,
+    "peace": dict(w=2, fingers=[(0.02, 0.03, 0.03), (0.02, 0.03, 0.03), *_FIST[2:]], fan=0.25,
                   thumb=("touch", 15, 0.0, 0.5, 1.6)),
-    "three": dict(w=1, fingers=[(0.02, 0.03, 0.03)] * 3 + _FIST[3:], fan=0.15, thumb=("touch", 19, 0.0, 0.3, 1.6)),
-    "four": dict(w=1, fingers=_STRAIGHT, fan=0.12, thumb=("target", 7.0, -1.5, 3.0)),
+    "three": dict(w=1.5, fingers=[(0.02, 0.03, 0.03)] * 3 + _FIST[3:], fan=0.15, thumb=("touch", 19, 0.0, 0.3, 1.6)),
+    "four": dict(w=1.5, fingers=_STRAIGHT, fan=0.12, thumb=("target", 7.0, -1.5, 3.0)),
     "thumbs_up": dict(w=1, fingers=_FIST, fan=0.0, thumb=("target", 6.0, 9.5, -1.0)),
     "pinch": dict(w=2, fingers=[(0.45, 0.45, 0.30), (0.40, 0.55, 0.35), (0.40, 0.60, 0.35), (0.40, 0.65, 0.35)],
                   fan=0.0, thumb=("touch", 8, 0.0, 0.0, 1.0)),
@@ -52,6 +60,16 @@ GESTURES = {
                  fan=0.0, thumb=("touch", 7, 0.0, 1.0, 3.5)),
     "claw": dict(w=1, fingers=[(0.0, 0.80, 0.70)] * 4, fan=0.1, thumb=("target", 8.0, 7.0, 3.0)),
     "flat_bend": dict(w=1, fingers=[(0.80, 0.0, 0.0)] * 4, fan=0.0, thumb=("target", 9.0, 5.0, 2.5)),
+    # one- and two-finger poses and counting in more styles (owner, 2026-11-13: counting read weakly)
+    "pinky": dict(w=1, fingers=_FIST[:3] + [(0.02, 0.03, 0.03)], fan=0.1, thumb=("touch", 11, 0.0, 0.5, 1.6)),
+    "middle": dict(w=0.7, fingers=[_FIST[0], (0.02, 0.03, 0.03), *_FIST[2:]], fan=0.0, thumb=("touch", 7, 0.0, 0.5, 1.6)),
+    "rock": dict(w=1, fingers=[(0.02, 0.03, 0.03), *_FIST[1:3], (0.02, 0.03, 0.03)], fan=0.2,
+                 thumb=("touch", 11, 0.0, 0.5, 1.6)),
+    "three_scout": dict(w=0.7, fingers=[(0.02, 0.03, 0.03)] * 3 + [_FIST[3]], fan=0.12, thumb=("touch", 19, 0.0, 0.3, 1.6)),
+    "count1_thumb": dict(w=1.2, fingers=_FIST, fan=0.0, thumb=("target", 5.5, 9.5, 0.5)),
+    "count2_thumb": dict(w=1.5, fingers=[(0.02, 0.03, 0.03)] + _FIST[1:], fan=0.1, thumb=("target", 6.0, 9.5, 0.5)),
+    "count3_thumb": dict(w=1.5, fingers=[(0.02, 0.03, 0.03)] * 2 + _FIST[2:], fan=0.2, thumb=("target", 6.0, 9.5, 0.5)),
+    "count4_thumb": dict(w=1.2, fingers=[(0.02, 0.03, 0.03)] * 3 + _FIST[3:], fan=0.15, thumb=("target", 6.5, 9.5, 0.5)),
     "typing": dict(w=2, fingers=[(0.25, 0.35, 0.22), (0.25, 0.38, 0.22), (0.28, 0.40, 0.24), (0.30, 0.42, 0.24)],
                    fan=0.03, thumb=("target", 8.5, 6.5, 4.5)),
 }
@@ -147,12 +165,60 @@ class HandMotion:
         q[P["thumb1_rx"]] = 0.0
         return np.clip(q, self.lo, self.hi)
 
+    def independent_pose(self, rng):
+        """Each finger straight, half or curled independently (counting, single fingers); the thumb out,
+        or across onto the first curled finger's middle joint."""
+        q = np.zeros(len(PARAMS))
+        curls = []
+        for f in FINGERS:
+            state = rng.choice(3, p=[0.45, 0.15, 0.40])
+            c = (rng.uniform(-0.05, 0.1), rng.uniform(0.3, 0.6), rng.uniform(0.75, 1.0))[state]
+            pip = np.clip(c * rng.uniform(0.9, 1.15) + rng.normal(0, 0.05), -0.05, 1.0)
+            dip = np.clip(pip * rng.uniform(0.5, 0.85), -0.05, 1.0)
+            self._curl(q, f, (c, pip, dip))
+            curls.append(c)
+        self._fan(q, rng.uniform(0.0, 0.25), curls)
+        curled = [k for k, c in enumerate(curls) if c > 0.7]
+        if curled and rng.random() < 0.6:  # thumb across the curled fingers
+            pts = self.fk.points(q)
+            k = curled[0] if rng.random() < 0.7 else curled[rng.integers(len(curled))]
+            target = pts[6 + 4 * k] + (np.array([0.0, 0.5, 1.6]) / 100.0) @ self.R
+        else:  # thumb out to the side, up or relaxed
+            target = self._to_hand((rng.uniform(5.0, 9.0), rng.uniform(6.5, 10.0), rng.uniform(-1.0, 4.0)))
+        q = self.solve_thumb(q, target)
+        q[P["thumb1_rx"]] = 0.0
+        return np.clip(q, self.lo, self.hi)
+
+    def relaxed_pose(self, rng, flat=False):
+        """A resting hand (arm hanging or in the lap): the relaxed gesture, more or less curled, varied.
+        `flat`: less curled (a hand lying on the thigh or the belly)."""
+        q = self.library["relaxed"].copy()
+        curl = rng.uniform(0.2, 0.8) if flat else rng.uniform(0.6, 1.8)
+        fingers = [k for k, n in enumerate(PARAMS) if not n.startswith("thumb") and n.endswith("_rz")]
+        q[fingers] *= curl
+        q += rng.normal(0, 0.04, len(PARAMS)) * (self.hi - self.lo) * 0.5
+        q[P["thumb1_rx"]] = 0.0
+        return np.clip(q, self.lo, self.hi)
+
+    def _noisy(self, name, rng):
+        noise = rng.normal(0, 0.06, len(PARAMS)) * (self.hi - self.lo) * 0.5
+        return np.clip(self.library[name] + noise, self.lo, self.hi)
+
     def key_pose(self, rng):
-        if rng.random() < 0.6:
+        if getattr(self, "_queue", None):
+            name = self._queue.pop(0)
+            return self._noisy(name, rng), name
+        if rng.random() < P_ROUTINE:
+            seq = list(COUNTS[rng.integers(len(COUNTS))])
+            seq = seq[rng.integers(0, 3):] if rng.random() < 0.7 else seq[::-1][rng.integers(0, 3):]
+            self._queue = seq[1:]
+            return self._noisy(seq[0], rng), seq[0]
+        u = rng.random()
+        if u < P_LIBRARY:
             name = self.names[rng.choice(len(self.names), p=self.gesture_p)]
-            q = self.library[name].copy()
-            noise = rng.normal(0, 0.06, len(PARAMS)) * (self.hi - self.lo) * 0.5
-            return np.clip(q + noise, self.lo, self.hi), name
+            return self._noisy(name, rng), name
+        if u < P_LIBRARY + P_INDEPENDENT:
+            return self.independent_pose(rng), "independent"
         return self.random_pose(rng), "random"
 
     # --- sequences -------------------------------------------------------------------------------
@@ -164,10 +230,14 @@ class HandMotion:
         group = np.array([0 if p.startswith("thumb") else 1 + FINGERS.index(next(f for f in FINGERS if p.startswith(f)))
                           for p in PARAMS])
         keys, labels = [], []
+        self._queue = []
         tk, q = t0 - rng.uniform(0, 1.0), self.key_pose(rng)[0]
         keys.append((tk, tk, q))
         while tk < t[-1] + 1.0:
+            in_routine = bool(self._queue)
             hold = rng.choice([rng.uniform(0.0, 0.25), rng.uniform(0.3, 1.5), rng.uniform(1.5, 4.0)], p=[0.15, 0.55, 0.3])
+            if in_routine:
+                hold = rng.uniform(0.3, 1.2)
             q_next, name = self.key_pose(rng)
             dist = np.abs(q_next - q).max()
             dur = np.clip(rng.uniform(0.15, 0.45) + 0.2 * dist, 0.15, 0.9)
