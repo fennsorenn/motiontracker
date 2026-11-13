@@ -140,7 +140,8 @@ function renderHand(p, k, bone, x0) {
   renderer.render(p.scene, handCam);
 }
 
-// Face close-up inset (bottom right) for panels with blendshapes: follows the head.
+// Face close-up inset for panels with blendshapes: follows the head. Bottom right, or top left when the
+// hand close-ups take the bottom corners.
 const faceCam = new THREE.PerspectiveCamera(30, 1, 0.05, 20);
 const headPos = new THREE.Vector3();
 
@@ -163,8 +164,9 @@ window.renderAt = (t) => {
       renderHand(p, k, 'leftHand', S - HI - 6);
     }
     if (p.arkit) {
-      renderer.setViewport(k * S + S - I - 6, S / 16 + 6, I, I);
-      renderer.setScissor(k * S + S - I - 6, S / 16 + 6, I, I);
+      const [fx, fy] = data.handInsets ? [6, S - I - S / 15 - 6] : [S - I - 6, S / 16 + 6];
+      renderer.setViewport(k * S + fx, fy, I, I);
+      renderer.setScissor(k * S + fx, fy, I, I);
       renderer.render(p.scene, faceCam);
     }
   });
@@ -189,8 +191,9 @@ window.renderAt = (t) => {
       }
     }
     if (p.arkit) {
-      ctx.strokeRect(k * S + S - I - 6, S - S / 16 - 6 - I, I, I);
-      ctx.fillText('face', k * S + S - I - 2, S - S / 16 - 2 - I);
+      const [fx, fy] = data.handInsets ? [6, S / 15 + 6] : [S - I - 6, S - S / 16 - 6 - I];
+      ctx.strokeRect(k * S + fx, fy, I, I);
+      ctx.fillText('face', k * S + fx + 4, fy + 4);
     }
     ctx.font = `bold ${Math.round(S / 26)}px sans-serif`;
   });
