@@ -130,7 +130,8 @@ def wrist_angles(elbow, P, side):
     return forearm_angles(_unit(P[0] - elbow), d, t, n)
 
 
-def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96, body=None, body_slack=0.0, mesh=None, relaxed=False):
+def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96, body=None, body_slack=0.0, mesh=None, relaxed=False,
+               elbow_pref=None):
     """Elbow position for a hand at wrist W (hand axes d, t, n) and shoulder S, upper arm U, forearm L (cm):
     on the circle of reachable elbows, the point giving the most natural wrist (least sideways bend, flexion
     in range, elbow not above the shoulder or behind the body). -> (elbow, flex, dev) or None if the wrist is
@@ -163,11 +164,14 @@ def best_elbow(S, W, d, t, n, U, L, up, fwd, n_samples=96, body=None, body_slack
     if relaxed:  # a resting arm (hands on the body; owner 2026-11-13): elbow low, near the body's side, wrist easy
         forward = np.maximum((E - S) @ fwd - RELAXED_ELBOW_FWD_CM, 0.0)
         cost = cost + (flex / 25.0) ** 2 + (forward / 6.0) ** 2
+    if elbow_pref is not None:  # a preferred elbow (forearm resting on the thigh: `PairChoreo.thigh_elbow`)
+        cost = cost + (np.linalg.norm(E - elbow_pref, axis=1) / 4.0) ** 2
     k = int(np.argmin(cost))
     return E[k], float(flex[k]), float(dev[k]), float(cost[k])
 
 
 RELAXED_ELBOW_FWD_CM = 8.0  # resting arms: elbows further forward of the shoulder than this cost
+FOREARM_REST_CM = 3.0  # a forearm resting on the legs: its axis this far from the skin (about its radius)
 
 
 def body_clearance(p, caps):
@@ -287,6 +291,7 @@ class PairChoreo:
         sh, lat, up, fwd = self._frame(X)
         self._body = (sh, lat, up, fwd)
         self.style = {}  # side -> contact style for _solve (front: palm front off the surface, cm; drape: curl limits)
+        self._X = X
         C = sh + fwd * rng.uniform(25, 40) - up * rng.uniform(8, 25) + lat * rng.uniform(-5, 5)
         C = self.forward_clear(C, fwd, 10.0)
         keys = []
@@ -468,7 +473,7 @@ class PairChoreo:
                 bottom = "l" if rng.random() < 0.5 else "r"
                 top = "r" if bottom == "l" else "l"
                 sb = 1.0 if bottom == "l" else -1.0
-                mid = (hip["l"] + hip["r"]) / 2 + ((knee["l"] + knee["r"]) / 2 - (hip["l"] + hip["r"]) / 2) * rng.uniform(0.45, 0.7)
+                mid = (hip["l"] + hip["r"]) / 2 + ((knee["l"] + knee["r"]) / 2 - (hip["l"] + hip["r"]) / 2) * rng.uniform(0.6, 0.85)
                 fwd_h = _unit(fwd - (fwd @ up) * up)
                 qb, qt = q_rest(), q_rest()
                 if np.linalg.norm(knee["l"] - knee["r"]) > LAP_FOLD_KNEE_GAP_CM:
@@ -483,7 +488,8 @@ class PairChoreo:
                                            _unit(fwd_h - lat * sb * rng.uniform(0.3, 0.9)), q_fist)
                 if spec_b is None:
                     return []
-                self.style[bottom] = {"fist": True}
+                self.style[bottom] = {"fist": True, "forearm_rest": True}
+                self.style[top] = {"forearm_rest": True}  # both forearms resting on the legs (owner, 2026-11-13)
                 gap = rng.uniform(2.6, 3.4) + slack
 
                 def follow(act):  # the top hand's palm on the back of the bottom hand, fingers across it
@@ -773,6 +779,19 @@ class PairChoreo:
                 m[idx[pi]] = angs[ok][int(np.argmin(tip[ok]))]
         return m
 
+    def thigh_elbow(self, side, wrist):
+        """Elbow position for a forearm lying along the top of its own thigh with the wrist at `wrist`: a forearm
+        length back from the wrist toward the hip, a forearm radius above the skin (owner, 2026-11-13: folded
+        hands, the arms resting on the legs)."""
+        X = self._X
+        _, lat, up, fwd = self._body
+        hip, knee = X[23 if side == "l" else 24], X[25 if side == "l" else 26]
+        a = hip - knee
+        a = _unit(a - (a @ up) * up)
+        E = wrist + a * self.forearm
+        top = self.mesh.surface(E + up * 20.0, up, FOREARM_REST_CM)
+        return E if top is None else top
+
     def thigh_spec(self, rng, X, side, q=None):
         """Key spec of a hand lying on its thigh (`contact_spec`; q: finger pose, default straight and draped), or None."""
         sh, lat, up, fwd = choreo._body_frame(X)
@@ -866,7 +885,8 @@ class PairChoreo:
                 hd, ht, hn = hand_axes(pp, side)
                 el = best_elbow(J[self.jn.index(f"{side}_uparm")], pp[0], hd, ht, hn, self.upper_arm, self.forearm, up_b, fwd_b,
                                 body=self.caps_now, body_slack=self.body_slack,
-                                mesh=self.mesh if self.mesh.tree is not None else None, relaxed=self.body_slack > 0)
+                                mesh=self.mesh if self.mesh.tree is not None else None, relaxed=self.body_slack > 0,
+                                elbow_pref=self.thigh_elbow(side, pp[0]) if getattr(self, "style", {}).get(side, {}).get("forearm_rest") else None)
                 if el is not None and (best is None or el[3] < best[1][3]):
                     best = (dd, el, pp)
             if best is None:
