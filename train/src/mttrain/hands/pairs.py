@@ -470,9 +470,17 @@ class PairChoreo:
             h0 = rng.uniform(-3, 3)
             for k_, side in enumerate(sides):
                 sg = 1.0 if side == "l" else -1.0
-                if kind == "belly":
-                    p = sh - up * (rng.uniform(24, 32) + 6.0 * k_) + lat * sg * rng.uniform(-3, 8)
-                    d = _unit(-lat * sg + up * rng.uniform(-0.2, 0.3))
+                if kind == "belly":  # around navel height (a third of the way hips -> shoulders), fingers across;
+                    # both hands: one above the other (side by side their fingers met at the navel, and pushing
+                    # them apart pushed them into the belly), each from its own side
+                    hips = (X[23] + X[24]) / 2
+                    navel = hips + (sh - hips) * (rng.uniform(0.3, 0.42) + h0 / 100.0)
+                    if len(sides) == 1:
+                        p = navel + lat * sg * rng.uniform(-2, 7)
+                    else:
+                        # the lower hand at the navel (lower, it went under a heavy belly's overhang), the upper above it
+                        p = navel + lat * sg * rng.uniform(1, 4) + up * (rng.uniform(9.0, 11.0) if k_ == 0 else rng.uniform(-1.0, 1.0))
+                    d = _unit(-lat * sg + up * rng.uniform(-0.15, 0.15))
                 else:
                     p = sh - up * (rng.uniform(10, 18) + h0) + lat * sg * rng.uniform(-6, 6) - lat * sg * 6.0 * k_
                     d = _unit(-lat * sg * rng.uniform(0.4, 1.0) + up * rng.uniform(0.2, 0.8))
@@ -598,17 +606,18 @@ class PairChoreo:
             pads[j] = P[j] + n * depth * k
         return pads
 
-    def settle(self, m, side, tries=8, tol=0.2, elbow=None):
+    def settle(self, m, side, tries=8, tol=0.2, elbow=None, front=0.0):
         """Hand `side` of pose m (P,) settled onto the skin after the arm's IK (which may miss the wrist and knuckle
-        targets by a few cm): the heel pad and the middle knuckle pad are moved onto the skin (PALM_GAP_CM), the
-        index and little finger pads out of it if they sink in, and the arm solved again. Changes m in place."""
+        targets by a few cm): the heel pad and the middle knuckle pad are moved onto the skin (PALM_GAP_CM; the
+        knuckle pads `front` cm further off, when the fingers need room), the index and little finger pads out of
+        it if they sink in, and the arm solved again. Changes m in place."""
         from mtcore.mhr import positions
         for _ in range(tries):
             P = positions(self.ch, m[None].astype(np.float32))[0][self.hm.fk.mp21[side]]
             pads = self.palm_pads(P, side)
             moves, worst = {}, 0.0
             for j, pad in pads.items():
-                gap = float(self.mesh.distance(pad)) - PALM_GAP_CM
+                gap = float(self.mesh.distance(pad)) - PALM_GAP_CM - (front if j else 0.0)
                 if j in (5, 17):
                     gap = min(gap, 0.0)  # the across pads only out of the skin, never pulled down
                 moves[j] = -self.mesh.smooth_normal(pad, 2.0) * gap
@@ -657,6 +666,17 @@ class PairChoreo:
                 ok = dist >= r
                 m[idx[pi]] = angs[ok][-1] if ok.any() else angs[int(np.argmax(dist))]
         return m
+
+    def finger_depth(self, m, side):
+        """How deep (cm, <= 0: clear) the fingers of hand `side` in pose m (P,) go into the skin, joint centres
+        against the finger radius."""
+        from mtcore.mhr import positions
+        P = positions(self.ch, m[None].astype(np.float32))[0][self.hm.fk.mp21[side]]
+        deep = 0.0
+        for f, base in (("index", 5), ("middle", 9), ("ring", 13), ("pinky", 17)):
+            pts = P[base + 1:base + 4]
+            deep = max(deep, float((FINGER_R[f] - self.mesh.distance(pts)).max()))
+        return deep
 
     def drape_thumb(self, m, side, gap=DRAPE_GAP_CM, tries=4):
         """The thumb of hand `side` in pose m (P,) laid onto the skin: its tip target (thumb IK, `motion`) moved
@@ -820,8 +840,14 @@ class PairChoreo:
                 return None
             m0[self.arm[side]] = sol[self.arm[side]]
             if self.body_slack > 0:  # hands resting on the body: palm settled onto the skin, fingers draped
-                self.settle(m0, side, elbow=el[0])
-                self.drape(m0, side)
+                front = 0.0
+                for _ in range(3):  # fingers that go in even straight (a bulge ahead): tilt the palm's front up
+                    self.settle(m0, side, elbow=el[0], front=front)
+                    self.drape(m0, side)
+                    deep = self.finger_depth(m0, side)
+                    if deep <= 0.05:
+                        break
+                    front += deep + 0.1
                 self.drape_thumb(m0, side)
                 self.curl_thumb_tip(m0, side)  # (what still clips is the mesh check's to reject; a lift here floats the palm)
                 q = m0[self.fing[side]].copy()

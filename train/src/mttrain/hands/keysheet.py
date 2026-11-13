@@ -106,6 +106,14 @@ def main():
         if kind in pairs.BODY_CONTACT:  # palm pads to the skin (heel, index, middle, little finger knuckle), cm
             pads = {s_: [round(float(pc.mesh.distance(v)), 1) for v in pc.palm_pads(P[pc.hm.fk.mp21[s_]], s_).values()] for s_ in sol}
             print(f"{i}: {kind} palm pads to skin (heel, index, middle, pinky): {pads}")
+            from mtcore.mhr import positions as _pos
+            for s_ in sol:
+                Pm = _pos(ch, mm[None].astype(np.float32))[0]
+                hd = pc.mesh.distance(Pm[pc.hm.fk.mp21[s_]])
+                E, W = Pm[jn.index(f"{s_}_lowarm")], Pm[jn.index(f"{s_}_wrist")]
+                fd = pc.mesh.distance(E + (W - E) * np.linspace(0.15, 0.9, 5)[:, None])
+                print(f"{i}: {kind} {s_}: thumb points to skin {np.round(hd[1:5], 1).tolist()}, closest hand point "
+                      f"{int(np.argmin(hd))} at {hd.min():.1f}; forearm (elbow -> wrist) {np.round(fd, 1).tolist()}")
         labels.append(f"{i}: {kind} | overlap {before[0]:.1f} -> {after[0]:.1f} cm | wrist flex,dev {wr} | "
                       + ("PASS" if not bad else "FAIL " + ", ".join(bad)))
         verts = np.asarray(ch.skin_points(skeleton_state(ch, mm[None]).astype(np.float32))) / 100.0
