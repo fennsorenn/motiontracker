@@ -90,9 +90,14 @@ scene.view_settings.view_transform = "Standard"
 scene.view_settings.exposure = float(__import__("os").environ.get("MT_EXPOSURE", "0"))  # review sheets: darker
 
 co = np.empty(len(V[0]) * 3, dtype=np.float32)
+import os
 for i in range(len(V)):
+    final = out / f"{i:05d}.png"
+    if final.exists() and final.stat().st_size > 0:  # resumable: frames already rendered are kept
+        continue
     co[:] = to_bl(V[i]).astype(np.float32).ravel()
     mesh.vertices.foreach_set("co", co)
     mesh.update()
-    r.filepath = str(out / f"{i:05d}.png")
+    r.filepath = str(out / f"{i:05d}.tmp.png")  # renamed once written: an interrupted frame never counts as done
     bpy.ops.render.render(write_still=True)
+    os.replace(out / f"{i:05d}.tmp.png", final)

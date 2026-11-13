@@ -23,11 +23,16 @@ from mtservice.sources import VideoSource
 
 def main():
     for d in sorted(Path(sys.argv[1]).glob("seq*")):
+        done = d / "landmarks-hl.jsonl"
+        if done.exists() and "HandScore" in done.read_text():  # resumable: finished sequences (with scores) skipped
+            print(d.name, "already done", flush=True)
+            continue
         hl = vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(cache_dir() / "hand_landmarker-float16-1.task")),
             running_mode=vision.RunningMode.VIDEO, num_hands=2))
         ref = [json.loads(line)["t"] for line in open(d / "landmarks.jsonl")]
-        with open(d / "landmarks-hl.jsonl", "w") as out:
+        tmp = d / "landmarks-hl.tmp.jsonl"
+        with open(tmp, "w") as out:
             for (t, f), tr in zip(VideoSource(d / "video.webm"), ref):
                 r = hl.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(prepare(f))),
                                         int(t * 1000) + 1)
@@ -43,6 +48,7 @@ def main():
                     fr[k + "Score"] = round(float(score), 4)
                 out.write(json.dumps(fr) + "\n")
         hl.close()
+        tmp.replace(done)
         print(d.name, "done", flush=True)
 
 

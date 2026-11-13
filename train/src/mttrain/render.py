@@ -135,7 +135,17 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
     # distinct clips (weighted like training), repeating only if there are fewer clips than sequences
     order = rng.choice(len(keys), size=min(n, len(keys)), replace=False, p=w / w.sum())
     print(f"{len(keys)} held-out clips are at least {seconds:.0f} s long", flush=True)
-    for i in range(n):
+    # resumable: after every sequence the generator state is saved; a rerun with the same arguments continues there
+    state_file = Path(out) / "prepare.state.json"
+    run_args = {"n": n, "seconds": seconds, "seed": seed, "fovs": fovs, "rest": rest_mode, "contact": contact_mode,
+                "hands": hands_mode, "pairs": pairs_mode, "head": head_mode}
+    start = 0
+    if state_file.exists():
+        st = json.loads(state_file.read_text())
+        if st["args"] == json.loads(json.dumps(run_args)):
+            rng.bit_generator.state, start = st["rng"], st["next"]
+            print(f"resuming at seq{start:02d}", flush=True)
+    for i in range(start, n):
         key = keys[order[i % len(order)]]
         s0 = rng.integers(0, len(mps[key]) - T + 1)
         contacts = None
@@ -181,6 +191,9 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
                  for v in ("palms-together", "hand-to-face", "near-face")} if contacts else None
         print(f"seq{i:02d}: clip {key} from frame {s0}, {T} frames" + (f", rest {pair}" if rest_mode or head_mode else "")
               + (f", fov {fovs}" if fovs else "") + (f", contact s {tally}" if tally else ""), flush=True)
+        tmp = state_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"args": run_args, "next": i + 1, "rng": rng.bit_generator.state}))
+        tmp.replace(state_file)
 
 
 def _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, tries=40, pairs=False):
@@ -281,7 +294,7 @@ def video(out, threads=8):
     for d in sorted(Path(out).glob("seq*")):
         frames = d / "frames"
         if not (d / "video.webm").exists():
-            if not frames.exists() or len(list(frames.glob("*.png"))) < len(np.load(d / "seq.npz")["mp"]):
+            if not frames.exists() or len(list(frames.glob("[0-9][0-9][0-9][0-9][0-9].png"))) < len(np.load(d / "seq.npz")["mp"]):
                 subprocess.run([BLENDER, "-b", "-t", str(threads), "--python", str(SCRIPT), "--",
                                 str(d / "seq.npz"), str(frames)], check=True, stdout=subprocess.DEVNULL)
             # mirrored, so the recorder's own mirroring hands MediaPipe the unmirrored render

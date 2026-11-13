@@ -9,7 +9,8 @@ Targets follow hand identity, not slots: a swapped detection must still give the
 Losses: fingers (Laplace NLL + canonical point L1 via GPU FK + velocity), orientation (geodesic angle with a
 Laplace scale + velocity), position (wrist in the image and log palm length, in palm lengths). Hands out of view
 count too (v3: the NLLs fully, the rest by OUT_W), so the model learns their probable pose and its scales grow
-there; `--scores` adds the detector's per-slot confidence as input (observe2, scorecal).
+there; `--scores` adds the detector's per-slot confidence as input (observe2, scorecal). Resumable: every evaluation
+writes last.pt with optimizer, scheduler and generator states; `--resume` continues from it.
 """
 
 import argparse
@@ -138,10 +139,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--pool", default=str(POOL2))
     ap.add_argument("--scores", help="detector score calibration (scorecal) -> the model's score input (v3)")
+    ap.add_argument("--resume", action="store_true", help="continue from <run>/last.pt (saved at every evaluation)")
     a = ap.parse_args()
     run = RUNS / a.name
     run.mkdir(parents=True, exist_ok=True)
-    (run / "config.json").write_text(json.dumps(vars(a), indent=1))
+    if not a.resume:
+        (run / "config.json").write_text(json.dumps(vars(a), indent=1))
     torch.manual_seed(a.seed)
     dev = torch.device(a.device)
     from pathlib import Path
@@ -151,9 +154,19 @@ def main():
     model = PairNet().to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, a.lr, total_steps=a.steps, pct_start=0.05)
-    best, t0 = float("inf"), time.time()
+    best, t0, start = float("inf"), time.time(), 1
+    if a.resume and (run / "last.pt").exists():  # continue an interrupted run where its last evaluation left it
+        ck = torch.load(run / "last.pt", map_location=dev, weights_only=False)
+        if "opt" in ck:
+            model.load_state_dict(ck["model"])
+            opt.load_state_dict(ck["opt"])
+            sched.load_state_dict(ck["sched"])
+            train.gen.set_state(ck["gen"].cpu())  # generator states are CPU byte tensors whatever the device
+            torch.set_rng_state(ck["torch_rng"].cpu())
+            best, start = ck["best"], ck["step"] + 1
+            print(f"resuming {a.name} at step {start}", flush=True)
     log = open(run / "log.jsonl", "a")
-    for step in range(1, a.steps + 1):
+    for step in range(start, a.steps + 1):
         model.train()
         L = losses(model, train, *train.sample(a.batch))
         loss = L["nll"] + a.w_points * L["pts"] + a.w_vel * (L["vel"] + 0.5 * L["rot_vel"]) + a.w_rot * L["rot_nll"] + a.w_pos * L["pos"]
@@ -171,11 +184,14 @@ def main():
             log.write(json.dumps(rec) + "\n")
             log.flush()
             print(json.dumps(rec), flush=True)
-            torch.save({"model": model.state_dict(), "step": step}, run / "last.pt")
             score = rec["val_pts"] + rec["val_rot_deg"] / 100
             if score < best:
                 best = score
                 torch.save({"model": model.state_dict(), "step": step}, run / "best.pt")
+            # everything a resumed run needs (--resume), written atomically
+            torch.save({"model": model.state_dict(), "step": step, "opt": opt.state_dict(), "sched": sched.state_dict(),
+                        "gen": train.gen.get_state(), "torch_rng": torch.get_rng_state(), "best": best}, run / "last.tmp.pt")
+            (run / "last.tmp.pt").replace(run / "last.pt")
 
 
 if __name__ == "__main__":
