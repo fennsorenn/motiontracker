@@ -216,6 +216,7 @@ class PairChoreo:
         self.thighs_now = None  # thigh capsules per side at the current key's pose (set_pose)
         self.body_slack = 0.0  # extra arm-body overlap allowed while solving (body contact events)
         self.mesh = BodyMesh(ch, pn)  # the body's skin at the current key's pose (set_pose)
+        self.mesh_stack = BodyMesh(ch, pn)  # body + the other hand: the surface for a hand resting on a hand
         self.prev = {}  # side -> (hand points, elbow) of the last solved key: later keys can build on it
         from .relax import Relaxer
         self.relaxer = Relaxer(ch)
@@ -497,6 +498,8 @@ class PairChoreo:
                     gap = rng.uniform(3.0, 3.6) + slack
 
                     def follow(act, bottom=bottom, st=st, gap=gap, q=self.resting_hand(rng)):
+                        # the top hand over the bottom one, from its own side: the hands cross (both pointing the same
+                        # way needs an impossible wrist for the hand coming from the other side)
                         db, tb, nb = hand_axes(act[bottom], bottom)
                         d_t = _unit(-lat * st * rng.uniform(0.5, 1.0) + up * rng.uniform(0.1, 0.6))
                         d_t = _unit(d_t - (d_t @ nb) * nb)
@@ -858,8 +861,12 @@ class PairChoreo:
                 self.rejects["target"] += 1
                 return None
             m0[self.arm[side]] = sol[self.arm[side]]
-            if self.body_slack > 0 and not callable(specs[side]):  # a hand on the skin (not on the other hand):
-                # palm settled onto the skin, fingers draped
+            stacked = self.body_slack > 0 and callable(specs[side]) and len(actual) > 0
+            if stacked:  # a hand resting on the other (already settled) hand: its surface is the body plus that hand
+                self.mesh_stack.set_pose(m0, sides=(side,))
+                body_mesh, self.mesh = self.mesh, self.mesh_stack
+            if self.body_slack > 0:  # a hand on the skin or on the other hand:
+                # palm settled onto the surface, fingers draped
                 front = 0.0
                 for _ in range(3):  # fingers that go in even straight (a bulge ahead): tilt the palm's front up
                     self.settle(m0, side, elbow=el[0], front=front)
@@ -872,6 +879,12 @@ class PairChoreo:
                 self.curl_thumb_tip(m0, side)  # (what still clips is the mesh check's to reject; a lift here floats the palm)
                 q = m0[self.fing[side]].copy()
                 sol = m0.copy()
+            if stacked:
+                if _DEBUG:
+                    Pd = self._points(m0, side)[0]
+                    print("stacked", side, "palm pads to the other hand / body:",
+                          [round(float(self.mesh.distance(v)), 2) for v in self.palm_pads(Pd, side).values()], flush=True)
+                self.mesh = body_mesh
             P, elbow = self._points(m0, side)
             flex, dev = wrist_angles(elbow, P, side)
             if not (WRIST_FLEX[0] <= flex <= WRIST_FLEX[1] and WRIST_DEV[0] <= dev <= WRIST_DEV[1]):

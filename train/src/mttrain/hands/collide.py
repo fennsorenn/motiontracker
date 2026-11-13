@@ -184,7 +184,7 @@ class BodyMesh:
     vertex normals interpolated there (< 0: inside)."""
 
     def __init__(self, ch, pn):
-        self.ch = ch
+        self.ch, self.pn = ch, list(pn)
         self.faces = np.asarray(ch.mesh.faces, np.int64)
         # arms and hands to MHR's rest (spread to the sides), so their own vertices never count as body
         self.arm = np.array([k for k, n in enumerate(pn) if n[:2] in ("l_", "r_") and any(
@@ -201,10 +201,12 @@ class BodyMesh:
             self.vf[v, :len(x)] = x
         self.tree = None
 
-    def set_pose(self, m):
+    def set_pose(self, m, sides="lr"):
+        """The skin at pose m (P,), the arms of `sides` moved out of the way (default both: the body alone; one
+        side: the body plus the other arm and hand, a surface for a hand resting on the other hand)."""
         from scipy.spatial import cKDTree
         m = np.asarray(m, np.float64).copy()
-        m[self.arm] = 0.0
+        m[[k for k in self.arm if self.pn[k][0] in sides]] = 0.0
         v = np.asarray(self.ch.skin_points(skeleton_state(self.ch, m[None]).astype(np.float32)))[0].astype(np.float64)
         f = self.faces
         fn = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
