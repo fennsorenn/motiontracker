@@ -36,6 +36,21 @@ P_REST = 0.18  # stage sequences: chance per arm move of resting a while (lap, d
 FPS, OUT_FPS = 30.0, 10.0
 
 
+def stage_sequence(rng, ch, lm, pn, base, T, fps, lim, hm, pc):
+    """Hands-in-use arms (`stage`, v3: rest episodes in the lap, on the desk or hanging, resting arms lifted out
+    of the body, key poses clear of the body mesh) with procedural fingers that relax while the arm rests.
+    -> mp (T, P), {side: finger key labels}."""
+    mp, rest_w = stage.generate(rng, ch, lm, pn, base, T, fps, lim, p_rest=P_REST, rests=("lap", "desk", "hanging"),
+                                with_rest=True, fix_rest=pc.fix_rest, clear=lambda m: pc.mesh_clear(m[None]))
+    labels = {}
+    for side in "lr":  # fingers relax while the arm rests (often out of the camera's view)
+        q, labels[side] = hm.sequence(rng, T / fps, fps)
+        wr = rest_w[side][:, None]
+        q_rest = hm.relaxed_pose(rng) + hm._idle(rng, np.arange(T) / fps)
+        mp[:, pc.fing[side]] = np.clip((1 - wr) * q + wr * q_rest, hm.lo, hm.hi)
+    return mp, labels
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", required=True)
@@ -80,14 +95,7 @@ def main():
                 mp, _ = pc.generate(rng, base, T, FPS)
                 left = pc.last_overlap
             else:
-                mp, rest_w = stage.generate(rng, ch, lm, pn, base, T, FPS, lim, p_rest=P_REST,
-                                            rests=("lap", "desk", "hanging"), with_rest=True,
-                                            fix_rest=pc.fix_rest, clear=lambda m: pc.mesh_clear(m[None]))
-                for side in "lr":  # fingers relax while the arm rests (often out of the camera's view)
-                    q = hm.sequence(rng, T / FPS, FPS)[0]
-                    wr = rest_w[side][:, None]
-                    q_rest = hm.relaxed_pose(rng) + hm._idle(rng, np.arange(T) / FPS)
-                    mp[:, fk.idx[side]] = np.clip((1 - wr) * q + wr * q_rest, hm.lo, hm.hi)
+                mp, _ = stage_sequence(rng, ch, lm, pn, base, T, FPS, lim, hm, pc)
                 mp, _, after = pc.relaxer(mp)
                 left = float(after.max())
             pc.mesh.set_pose(mp[0])

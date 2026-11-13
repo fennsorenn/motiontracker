@@ -187,6 +187,15 @@ class BodyMesh:
         _, k = self.tree.query(p.reshape(-1, 3))
         return self.n[k].reshape(p.shape)
 
+    def smooth_normal(self, p, radius=3.0):
+        """Outward skin normal around point p (3,), averaged over the vertices within `radius` cm (a palm-sized
+        patch, so one vertex's facet doesn't tilt the hand)."""
+        k = self.tree.query_ball_point(np.asarray(p, np.float64), radius)
+        if not k:
+            return self.normal(p)
+        n = self.n[k].sum(0)
+        return n / np.linalg.norm(n)
+
     def surface(self, p, out, clear):
         """From p outside the body, move against `out` until p is `clear` cm from the surface. -> point or None."""
         out = out / np.linalg.norm(out)

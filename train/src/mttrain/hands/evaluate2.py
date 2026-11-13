@@ -69,7 +69,7 @@ class LearnedPair:
             q = np.zeros(len(PARAMS))
             q[OUT_IDX] = out["fingers"][k].numpy()
             res[side] = (np.clip(q, self.fk.lo, self.fk.hi), out["rot"][k].numpy())
-            self.conf[side] = (float(np.degrees(np.exp(out["rot_log_s"][k]))), float(np.exp(out["fingers_log_s"][k]).mean()))
+            self.conf[side] = (float(np.degrees(torch.exp(out["rot_log_s"][k]).item())), float(torch.exp(out["fingers_log_s"][k]).mean()))
         return res
 
 
@@ -113,8 +113,10 @@ def evaluate(set_dir, ckpt, landmarks="landmarks.jsonl"):
                         det = True
                         _, Rm, _ = palm_frame(image_points(L, side))
                         raw = rot_angle(Rm, Rt)
-                fe = angle_errors(fk.points(q, side), truth.points(side, f["t"])).mean()
-                row = {"det": det, "rot": rot_angle(Rp, Rt), "raw": raw, "fing": float(fe), "rot_s": run.conf[side][0]}
+                seg = angle_errors(fk.points(q, side), truth.points(side, f["t"]))
+                fe = seg.mean()
+                row = {"det": det, "rot": rot_angle(Rp, Rt), "raw": raw, "fing": float(fe), "rot_s": run.conf[side][0],
+                       "per_finger": seg.reshape(5, 3).mean(1).tolist()}
                 if side in prev and f["t"] - prev[side][0] < 150:
                     row["rot_motion"] = rot_angle(Rp, prev[side][1])
                     row["true_motion"] = rot_angle(Rt, prev[side][2])
@@ -135,6 +137,10 @@ def report(rows, name):
           f"MediaPipe raw median {med([r['raw'] for r in det]):.1f}, p90 {p90([r['raw'] for r in det]):.1f}")
     print(f"  without a detection: learned orientation median {med([r['rot'] for r in nodet]):.1f} deg (n {len(nodet)})")
     print(f"  fingers (segment directions, detected frames): median {med([r['fing'] for r in det]):.1f} deg")
+    pf = np.array([r["per_finger"] for r in det]) if det else np.zeros((0, 5))
+    if len(pf):
+        print("  per finger (median deg): " + ", ".join(f"{n} {v:.1f}" for n, v in
+                                                      zip(("thumb", "index", "middle", "ring", "pinky"), np.median(pf, 0))))
     mo = [r for r in rows if "rot_motion" in r]
     if mo:
         sm, tm = np.mean([r["rot_motion"] for r in mo]), np.mean([r["true_motion"] for r in mo])

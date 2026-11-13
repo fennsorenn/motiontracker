@@ -45,7 +45,7 @@ from .. import choreo
 from ..seated import ARM_KEYS, clamp, min_jerk, seat
 from .motion import HandMotion
 from .skeleton import MP21, PARAMS, UNOBSERVABLE, hand_frame
-from .collide import BodyMesh, Collider
+from .collide import FINGER_R, BodyMesh, Collider
 from .stage import MAX_PALM_DEG, _palm_normal
 
 MAX_RESIDUAL_CM = 2.0  # contact anchors (fingertip on fingertip, palm on palm)
@@ -64,10 +64,16 @@ EVENTS = {"palms": 1.0, "steeple": 1.0, "tap": 1.0, "count_on_hand": 1.2, "rub":
           "thighs": 0.8, "lap_folded": 0.6, "belly": 0.7, "chest": 0.6}
 # hands resting on the body (owner, 2026-11-13: hands near the body clipped on the avatar). MHR's body capsules are
 # coarser than the mesh (hands in the lap read 2.5 cm inside), so these events allow BODY_CONTACT_SLACK_CM more
-# arm-body overlap, and palm contacts aim the middle knuckle at a capsule clearance in BODY_CONTACT_CLEAR_CM
+# arm-body overlap; contacts are placed on the skinned body mesh (`contact_spec`)
 BODY_CONTACT = {"thighs", "lap_folded", "belly", "chest"}
 BODY_CONTACT_SLACK_CM = 3.0
-BODY_CONTACT_CLEAR_CM = (1.4, 2.2)  # middle knuckle to the skin (mesh, `collide.BodyMesh`): the palm's half thickness
+# hand contacts with the body (owner, 2026-11-13: first contact at the root of the hand, the palm aligned with the
+# skin's normal there, the fingers curled to follow the surface): the palm heel sits HEEL_CM along the hand from the
+# wrist joint and HEEL_DEPTH_CM toward the palm side (MHR's hand: joint centre to palm skin)
+HEEL_CM = (1.5, 2.5)
+HEEL_DEPTH_CM = 1.7
+DRAPE_GAP_CM = 0.15  # finger joint centres rest this far beyond the finger's radius from the skin
+DRAPE_MAX = {1: 0.3, 2: 0.4, 3: 0.4}  # a draped finger curls at most this fraction of its range per joint (relaxed)
 # hand and forearm points against the body mesh (every event): finger/palm points at least MESH_HAND_CM from the
 # skin, forearm points (elbow -> wrist) at least MESH_FORE_CM (their radius minus a little give)
 MESH_HAND_CM = 0.3
@@ -418,7 +424,6 @@ class PairChoreo:
             hip = {"l": X[23], "r": X[24]}
             knee = {"l": X[25], "r": X[26]}
             q_rest = lambda: (self.hm.relaxed_pose(rng, flat=True) if rng.random() < 0.6 else self._g(["open", "relaxed", "flat_together"][rng.integers(3)]))
-            clear = lambda: rng.uniform(*BODY_CONTACT_CLEAR_CM)
             if kind == "thighs":
                 specs = {}
                 for side in "lr":
@@ -431,20 +436,19 @@ class PairChoreo:
                 top = "r" if bottom == "l" else "l"
                 sb = 1.0 if bottom == "l" else -1.0
                 mid = (hip["l"] + hip["r"]) / 2 + ((knee["l"] + knee["r"]) / 2 - (hip["l"] + hip["r"]) / 2) * rng.uniform(0.3, 0.55)
-                at = self.mesh.surface(mid + lat * sb * rng.uniform(3, 7) + up * 14.0, up, clear())
-                if at is None:
-                    return []
                 fwd_h = _unit(fwd - (fwd @ up) * up)
-                d_b = _unit(fwd_h - lat * sb * rng.uniform(0.4, 1.2))
                 qb, qt = q_rest(), q_rest()
-                at = self.on_skin(qb, bottom, d_b, -up, at, up)
+                spec_b = self.contact_spec(rng, bottom, mid + lat * sb * rng.uniform(6, 11) + up * 14.0, up,
+                                           _unit(fwd_h - lat * sb * rng.uniform(0.4, 1.2)), qb)
+                if spec_b is None:
+                    return []
                 gap = rng.uniform(2.6, 3.4) + slack
 
                 def follow(act):  # the top hand's palm on the back of the bottom hand, fingers across it
                     db, tb, nb = hand_axes(act[bottom], bottom)
                     d_t = _unit(fwd_h + lat * sb * rng.uniform(0.4, 1.2))
                     return (qt, d_t, nb, 9, act[bottom][9] - nb * gap + d_t * rng.uniform(-1, 2), 30.0)
-                keys.append((rng.uniform(0.8, 1.4), rng.uniform(1.5, 4.0), {bottom: (qb, d_b, -up, 9, at, 30.0), top: follow}))
+                keys.append((rng.uniform(0.8, 1.4), rng.uniform(1.5, 4.0), {bottom: spec_b, top: follow}))
         elif kind in ("belly", "chest"):
             sides = ["l", "r"] if rng.random() < 0.4 else ["l" if rng.random() < 0.5 else "r"]
             specs = {}
@@ -452,16 +456,15 @@ class PairChoreo:
             for k_, side in enumerate(sides):
                 sg = 1.0 if side == "l" else -1.0
                 if kind == "belly":
-                    p = sh - up * (rng.uniform(32, 42) + 8.0 * k_) + lat * sg * rng.uniform(-3, 8)
-                    d = _unit(-lat * sg + up * rng.uniform(-0.3, 0.4))
+                    p = sh - up * (rng.uniform(24, 32) + 6.0 * k_) + lat * sg * rng.uniform(-3, 8)
+                    d = _unit(-lat * sg + up * rng.uniform(-0.2, 0.3))
                 else:
                     p = sh - up * (rng.uniform(10, 18) + h0) + lat * sg * rng.uniform(-6, 6) - lat * sg * 6.0 * k_
                     d = _unit(-lat * sg * rng.uniform(0.4, 1.0) + up * rng.uniform(0.2, 0.8))
-                at = self.mesh.surface(p + fwd * 40.0, fwd, rng.uniform(*BODY_CONTACT_CLEAR_CM))
-                if at is None:
-                    return []
                 q = self.hm.relaxed_pose(rng, flat=True) if rng.random() < 0.5 else self._g(["open", "relaxed", "flat_together"][rng.integers(3)])
-                specs[side] = (q, d, -fwd, 9, self.on_skin(q, side, d, -fwd, at, fwd), 30.0)
+                specs[side] = self.contact_spec(rng, side, p + fwd * 40.0, fwd, d, q)
+                if specs[side] is None:
+                    return []
             keys.append((rng.uniform(0.8, 1.4), rng.uniform(1.0, 3.5), specs))
         elif kind == "wrist":
             side = "l" if rng.random() < 0.5 else "r"
@@ -524,19 +527,60 @@ class PairChoreo:
             m[self.arm[side]] = sol[self.arm[side]]
         return m
 
+    def contact_spec(self, rng, side, start, march, d_want, q, roll=25.0):
+        """Key spec of a hand resting on the skin: from `start` (outside the body) move along -`march` to the skin;
+        that point is where the root of the hand (palm heel) touches; the palm normal is the skin's (smoothed)
+        normal there, reversed; the fingers point along `d_want` within the tangent plane (rolled for the most
+        natural arm in `_solve`). The fingers are draped onto the surface after the solve (`drape`). -> spec or None."""
+        c = self.mesh.surface(start, march, 0.0)
+        if c is None:
+            return None
+        N = self.mesh.smooth_normal(c)
+        d = d_want - (d_want @ N) * N
+        if np.linalg.norm(d) < 1e-3:
+            return None
+        d = _unit(d)
+        wrist = c + N * HEEL_DEPTH_CM - d * rng.uniform(*HEEL_CM)  # the wrist joint behind and above the heel
+        return (q, d, -N, 0, wrist, roll)
+
+    def drape(self, m, side, gap=DRAPE_GAP_CM, n_ang=20):
+        """Fingers (and the thumb's outer joints) of hand `side` in pose m (P,) curled onto the skin, joint by joint
+        from the knuckle out: each joint flexes until the rest of its finger (held straight) would touch the
+        surface, at most DRAPE_MAX of its range (a finger over a surface that falls away stays relaxed); if even
+        the most extended angle goes in, the least deep one. Changes m in place."""
+        from mtcore.mhr import positions
+        fk = self.hm.fk
+        idx, mp21 = fk.idx[side], fk.mp21[side]
+        for f, base, joints in (("index", 5, (1, 2, 3)), ("middle", 9, (1, 2, 3)), ("ring", 13, (1, 2, 3)),
+                                ("pinky", 17, (1, 2, 3)), ("thumb", 1, (2, 3))):
+            r = FINGER_R[f] + gap
+            for k in joints:
+                pi = PARAMS.index(f"{f}{k}_rz")
+                for k2 in joints:
+                    if k2 > k:
+                        m[idx[PARAMS.index(f"{f}{k2}_rz")]] = np.clip(0.0, fk.lo[PARAMS.index(f"{f}{k2}_rz")], fk.hi[PARAMS.index(f"{f}{k2}_rz")])
+                lo, hi = fk.lo[pi], fk.hi[pi]
+                angs = np.linspace(lo, lo + (hi - lo) * DRAPE_MAX.get(k, 0.6) if f != "thumb" else hi * 0.6, n_ang)
+                M = np.repeat(m[None], n_ang, 0)
+                M[:, idx[pi]] = angs
+                P = positions(self.ch, M.astype(np.float32))
+                chain = P[:, mp21[base + k - 1: base + 4]]  # this joint and the rest of the finger
+                pts = np.concatenate([chain[:, 1:], (chain[:, 1:] + chain[:, :-1]) / 2], 1)
+                dist = self.mesh.distance(pts).min(1)
+                ok = dist >= r
+                m[idx[pi]] = angs[ok][-1] if ok.any() else angs[int(np.argmax(dist))]
+        return m
+
     def thigh_spec(self, rng, X, side, q):
-        """Key spec of a hand with finger pose q lying on its thigh (mesh surface), or None."""
+        """Key spec of a hand with finger pose q lying on its thigh (`contact_spec`), or None."""
         sh, lat, up, fwd = choreo._body_frame(X)
         hip, knee = X[23 if side == "l" else 24], X[25 if side == "l" else 26]
         sg = 1.0 if side == "l" else -1.0
         along = knee - hip
-        at = self.mesh.surface(hip + along * rng.uniform(0.35, 0.75) + up * 25.0, up, rng.uniform(*BODY_CONTACT_CLEAR_CM))
-        if at is None:
-            return None
         k_dir = _unit(along - (along @ up) * up)
-        d = _unit(k_dir - lat * sg * rng.uniform(0.0, 0.5) - up * rng.uniform(0.0, 0.3))
-        n = _unit(-up + lat * sg * rng.uniform(-0.2, 0.4))
-        return (q, d, n, 9, self.on_skin(q, side, d, n, at, up), 30.0)
+        # on top of the thigh, between mid-thigh and the knee (the hip landmark sits medial of the thigh's crest)
+        start = hip + along * rng.uniform(0.45, 0.8) + lat * sg * rng.uniform(2.0, 6.0) + up * 25.0
+        return self.contact_spec(rng, side, start, up, _unit(k_dir - lat * sg * rng.uniform(0.0, 0.35)), q)
 
     def fix_rest(self, m, rng=None):
         """Resting arms (seated rest templates, solved on MHR's template body) lifted out of this body's skin:
@@ -565,16 +609,6 @@ class PairChoreo:
             self.body_slack = 0.0
         self.prev = {}
         return m
-
-    def on_skin(self, q, side, d, n, at, out):
-        """Lift a hand placed with its middle knuckle at `at` along `out` until no hand point is closer than
-        MESH_HAND_CM + 1.2 cm to the skin (curled fingers, palm curvature, the IK's residual)."""
-        for _ in range(6):
-            need = (MESH_HAND_CM + 1.2) - self.mesh.distance(self.place(q, side, d, n, 9, at)).min()  # + the IK's residual
-            if need <= 0:
-                break
-            at = at + _unit(out) * (need + 0.2)
-        return at
 
     def forward_clear(self, C, fwd, need=9.0):
         """Move point C forward until it is `need` cm clear of the body (bellies differ between bodies)."""
@@ -651,8 +685,10 @@ class PairChoreo:
                 self.rejects["target"] += 1
                 return None
             m0[self.arm[side]] = sol[self.arm[side]]
-            if self.body_slack > 0:  # hands resting on the body: off the skin despite the IK's residual
+            if self.body_slack > 0:  # hands resting on the body: off the skin despite the IK's residual, fingers draped
                 self.lift(m0, side, extra=0.3, max_cm=4.0)
+                self.drape(m0, side)
+                q = m0[self.fing[side]].copy()
                 sol = m0.copy()
             P, elbow = self._points(m0, side)
             flex, dev = wrist_angles(elbow, P, side)
