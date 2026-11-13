@@ -147,11 +147,41 @@ class Collider:
         return a[0, self.body], b[0, self.body], r[0, self.body]
 
 
+def closest_on_triangles(p, a, b, c):
+    """Closest points on triangles (a, b, c) (..., 3) to points p (..., 3) (Ericson, Real-Time Collision Detection
+    5.1.5) -> barycentric weights (..., 3)."""
+    ab, ac, ap = b - a, c - a, p - a
+    d1, d2 = (ab * ap).sum(-1), (ac * ap).sum(-1)
+    bp = p - b
+    d3, d4 = (ab * bp).sum(-1), (ac * bp).sum(-1)
+    cp = p - c
+    d5, d6 = (ab * cp).sum(-1), (ac * cp).sum(-1)
+    vc, vb, va = d1 * d4 - d3 * d2, d5 * d2 - d1 * d6, d3 * d6 - d5 * d4
+    den = va + vb + vc
+    den = np.where(np.abs(den) < 1e-12, 1e-12, den)
+    v, w = vb / den, vc / den
+    bary = np.stack([1 - v - w, v, w], -1)  # inside the face
+    sd = lambda x, y: x / np.where(np.abs(y) < 1e-12, 1e-12, y)
+    t_bc = sd(d4 - d3, (d4 - d3) + (d5 - d6))
+    bary = np.where(((va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0))[..., None], np.stack([0 * t_bc, 1 - t_bc, t_bc], -1), bary)
+    t_ac = sd(d2, d2 - d6)
+    bary = np.where(((vb <= 0) & (d2 >= 0) & (d6 <= 0))[..., None], np.stack([1 - t_ac, 0 * t_ac, t_ac], -1), bary)
+    t_ab = sd(d1, d1 - d3)
+    bary = np.where(((vc <= 0) & (d1 >= 0) & (d3 <= 0))[..., None], np.stack([1 - t_ab, t_ab, 0 * t_ab], -1), bary)
+    one = lambda k: np.broadcast_to(np.eye(3)[k], bary.shape)
+    bary = np.where(((d6 >= 0) & (d5 <= d6))[..., None], one(2), bary)
+    bary = np.where(((d3 >= 0) & (d4 <= d3))[..., None], one(1), bary)
+    bary = np.where(((d1 <= 0) & (d2 <= 0))[..., None], one(0), bary)
+    return bary
+
+
 class BodyMesh:
     """MHR's body mesh (arms and hands moved out of the way) as a signed distance for hand contacts (owner,
     2026-11-13: hands near the body clipped). The capsules only scale with the skeleton, not with the body shape,
     so on heavier bodies hands placed against them ended up inside the belly or thighs; the skinned mesh follows
-    the shape. Distance = to the nearest vertex (about 1 cm apart), sign from its normal (< 0: inside)."""
+    the shape. Distance = to the closest point on the triangles around the nearest vertices (the vertices are 1-2
+    cm apart: a vertex distance read points on the skin as up to ~1 cm off, with a random sign), signed by the
+    vertex normals interpolated there (< 0: inside)."""
 
     def __init__(self, ch, pn):
         self.ch = ch
@@ -159,6 +189,16 @@ class BodyMesh:
         # arms and hands to MHR's rest (spread to the sides), so their own vertices never count as body
         self.arm = np.array([k for k, n in enumerate(pn) if n[:2] in ("l_", "r_") and any(
             n[2:].startswith(w) for w in ("clavicle", "uparm", "lowarm", "elbow", "wrist") + tuple(f for f in ARM[3:]))])
+        # vertex -> its faces (padded with -1)
+        nv = int(self.faces.max()) + 1
+        lists = [[] for _ in range(nv)]
+        for fi, f in enumerate(self.faces):
+            for v in f:
+                lists[v].append(fi)
+        deg = max(len(x) for x in lists)
+        self.vf = np.full((nv, deg), -1, np.int64)
+        for v, x in enumerate(lists):
+            self.vf[v, :len(x)] = x
         self.tree = None
 
     def set_pose(self, m):
@@ -174,22 +214,40 @@ class BodyMesh:
         self.v, self.n = v, n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
         self.tree = cKDTree(v)
 
+    def closest(self, p, k=4):
+        """Points p (..., 3) -> closest skin points (..., 3), interpolated outward normals there (..., 3), distance."""
+        p = np.asarray(p, np.float64)
+        q = p.reshape(-1, 3)
+        _, vi = self.tree.query(q, k=k)
+        fi = self.vf[vi].reshape(len(q), -1)  # candidate faces (-1: padding)
+        valid = fi >= 0
+        F = self.faces[np.where(valid, fi, 0)]  # (n, c, 3)
+        A, B, C = self.v[F[..., 0]], self.v[F[..., 1]], self.v[F[..., 2]]
+        bary = closest_on_triangles(q[:, None], A, B, C)
+        pts = bary[..., 0:1] * A + bary[..., 1:2] * B + bary[..., 2:3] * C
+        d = np.linalg.norm(q[:, None] - pts, axis=-1)
+        d = np.where(valid, d, np.inf)
+        j = np.argmin(d, 1)
+        r = np.arange(len(q))
+        cpt = pts[r, j]
+        nb = (bary[r, j, :, None] * self.n[F[r, j]]).sum(1)
+        nb /= np.maximum(np.linalg.norm(nb, axis=-1, keepdims=True), 1e-9)
+        return cpt.reshape(p.shape), nb.reshape(p.shape), d[r, j].reshape(p.shape[:-1])
+
     def distance(self, p):
         """Signed distance (cm) of points p (..., 3) to the body surface."""
         p = np.asarray(p, np.float64)
-        d, k = self.tree.query(p.reshape(-1, 3))
-        s = np.sign(((p.reshape(-1, 3) - self.v[k]) * self.n[k]).sum(-1))
-        return (d * np.where(s == 0, 1.0, s)).reshape(p.shape[:-1])
+        c, n, d = self.closest(p)
+        s = np.sign(((p - c) * n).sum(-1))
+        return d * np.where(s == 0, 1.0, s)
 
     def normal(self, p):
-        """Outward skin normal at the vertex nearest to each point p (..., 3)."""
-        p = np.asarray(p, np.float64)
-        _, k = self.tree.query(p.reshape(-1, 3))
-        return self.n[k].reshape(p.shape)
+        """Outward skin normal at the closest skin point to each p (..., 3)."""
+        return self.closest(p)[1]
 
     def smooth_normal(self, p, radius=3.0):
         """Outward skin normal around point p (3,), averaged over the vertices within `radius` cm (a palm-sized
-        patch, so one vertex's facet doesn't tilt the hand)."""
+        patch, so one facet doesn't tilt the hand)."""
         k = self.tree.query_ball_point(np.asarray(p, np.float64), radius)
         if not k:
             return self.normal(p)
@@ -202,7 +260,8 @@ class BodyMesh:
         if self.distance(p) < clear:
             return None
         for _ in range(240):
-            if self.distance(p) <= clear:
+            dist = float(self.distance(p))
+            if dist <= clear + 0.05:
                 return p
-            p = p - out * 0.5
+            p = p - out * max(0.1, min(0.5, dist - clear))  # finer as it nears the skin
         return None
