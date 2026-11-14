@@ -1,6 +1,6 @@
 """Train the merger (plan `dev-notes/plans/m4-merger.md`) on `MergerBatches`, part models frozen.
 
-    uv run python -m mttrain.merger.train --name mg1 [--steps 20000] [--jitter-deg 1.5] [--resume]
+    uv run python -m mttrain.merger.train --name mg1 [--steps 20000] [--jitter-deg 0.75] [--resume]
 
 Runs in data/merger/runs/<name>. Per sample the merger runs at the newest three frames (velocity and acceleration
 losses). Losses: the body model's (`mttrain.losses`: rotation with Laplace scales, FK positions, velocity, joint
@@ -103,7 +103,8 @@ def main():
     ap.add_argument("--steps", type=int, default=20000)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=1e-3)
-    ap.add_argument("--jitter-deg", type=float, default=1.5, help="extra input jitter on the part rotations")
+    ap.add_argument("--jitter-deg", type=float, default=0.75,
+                    help="extra input jitter on the part rotations (synthetic part outputs already jitter about as much as real ones)")
     ap.add_argument("--w-glob", type=float, default=1.0)
     ap.add_argument("--w-fing", type=float, default=1.0)
     ap.add_argument("--w-acc", type=float, default=2.0)

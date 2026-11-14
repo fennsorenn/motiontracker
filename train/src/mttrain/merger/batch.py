@@ -9,7 +9,7 @@ then detector frames at 10 Hz (the hand model's rate) observed three ways from o
 - body: the body model's observation path (`GpuGenerator.observe`) -> frozen `m1` at the last K frames;
 - hands: `observe2.PairObserver` on the same camera -> frozen `p3` at the same frames (HISTORY frames each);
 - head: the face-mesh head pose (`mtcore.facepose`) simulated from the true head with the error model calibrated
-  on renders (`facecal`: per-axis slope, per-sequence offset, within-sequence AR(1), lost runs);
+  on renders (`facecal`: per-axis slope, per-sequence offset, slow within-sequence drift plus white jitter, lost runs);
 plus real recorded blendshapes, unpaired (owner, 2026-11-14), with dropout.
 
 All rotations are in the body model's frame: camera axes, rest removed (`gpugen.geom.Targets`). In it the hand
@@ -55,6 +55,7 @@ J = {n: i for i, n in enumerate(OUT_JOINTS)}
 BLEND_FILES = sorted((DATA / "videos").glob("*-full/face.landmarks.jsonl"))
 CONF_DEG = (15.0, 50.0)  # hand model rotation scale -> weight of its wrist (as `hands.wrist`)
 MAX_BEND_DEG = 100.0
+SLOW_RHO = 0.95  # face head pose: slow error drift per 10 Hz frame (time constant ~2 s)
 ARKIT = None  # blendshape names, filled from the first bank file
 
 
@@ -271,13 +272,16 @@ class MergerBatches:
             c = f[ax]
             slope = c["slope"] + 0.1 * self._n(B, 1)
             off = math.radians(c["bias"]) + math.radians(c["sd_between"]) * self._n(B, 1)
-            rho = min(max(c["res_lag1"], 0.0), 0.95)
-            eps = self._n(B, T) * math.radians(c["sd_within"]) * math.sqrt(1 - rho ** 2)
+            # within a sequence: white jitter (sample-to-sample std `jitter` = sqrt(2) sd_white) plus a slow drift
+            # (AR(1), SLOW_RHO at 10 Hz) carrying the rest of sd_within
+            sd_white = c["jitter"] / math.sqrt(2)
+            sd_slow = math.sqrt(max(c["sd_within"] ** 2 - sd_white ** 2, 0.0))
+            eps = self._n(B, T) * math.radians(sd_slow) * math.sqrt(1 - SLOW_RHO ** 2)
             ar = torch.empty_like(eps)
-            ar[:, 0] = self._n(B) * math.radians(c["sd_within"])
+            ar[:, 0] = self._n(B) * math.radians(sd_slow)
             for k in range(1, T):
-                ar[:, k] = rho * ar[:, k - 1] + eps[:, k]
-            obs.append(slope * e[..., i] + off + ar)
+                ar[:, k] = SLOW_RHO * ar[:, k - 1] + eps[:, k]
+            obs.append(slope * e[..., i] + off + ar + math.radians(sd_white) * self._n(B, T))
         R_obs = from_euler_yxz(torch.stack(obs, -1))
         G_obs = R_obs @ self.face_offset.transpose(-1, -2) @ self.rest_head.transpose(-1, -2)
         C = torch.einsum("bij,btj->bti", R, head_pos - t[:, None])
