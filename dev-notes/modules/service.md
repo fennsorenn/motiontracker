@@ -1,4 +1,4 @@
-# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; learned hand model WIP)
+# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; face post-processing implemented 2026-11-14; learned hand model WIP)
 
 Location: `service/` (uv project, package `mtservice`, CLI `mtservice`). Live runtime: camera or video → MediaPipe Holistic → M1 lifter (ONNX) → VRM bone rotations as VMC over UDP. Usage: `service/README.md`. Plan: `plans/m2-vspark-runtime.md` (steps 0-4 done, step 4 = vspark behavior `learned_tracker` on vspark `feature/learned-tracker`, not merged; step 5, the owner's live test, open). Decisions: `PLAN.md` §7.4. Model: `m1-v10` (`m1-v11`, body co-rotation, discarded by the owner 2026-11-12).
 
@@ -10,6 +10,14 @@ Plan: `plans/m2-face-hands.md` (steps 1-4 done, numbers in its Progress section)
 - vspark side (vspark `feature/learned-tracker`, not pushed): the VMC receiver takes `Blend/Val` with ARKit names into its ARKit chain on `Blend/Apply`; other names are ignored.
 - Open: finger calibration (Learned Tracking's graph has no `finger_calib`; ask after the live test).
 
+## Face post-processing (implemented 2026-11-14, branch `feature/blendshape-filter`, commit 9df1dd3)
+Owner decision 2026-11-14 (`PLAN.md` §3.11/§7.5): algorithmic correction first, learned face head in reserve. The filter itself is `mtcore.face_filter` (`modules/mtcore.md`).
+- `face.py` `FaceStream`: eye correction (`EyeFilter`) per detector frame, then a thread sends the glided blendshapes at `--face-rate` Hz (default 60) via `VmcSender.send_blend` (`Blend/Val` + `Blend/Apply`; the socket is guarded by a lock). Bones still go out once per detector frame, now without blendshapes. `--face-rate 0` = blendshapes per detector frame (for receivers that interpolate themselves). Whether vspark should also interpolate on its side: `[OPEN]`.
+- `--no-eye-filter` turns the eye correction off; `--dump-landmarks` keeps the raw values.
+- Videos run without `--realtime` have no wall clock: no stream thread, the processed blendshapes go out with each frame.
+- `faceproc.py`: offline, a landmarks dump → 60 Hz blendshape JSONL for `tools/avatar-video/prepare.py --blendshapes`. Comparison videos (raw vs processed face, same body): `data/videos/{seated-v1,hands-v1}-face/`.
+- Live check (hands session video, `--realtime`): bones 10 packets/s, face 60/s, resting blink 0.08/0.06.
+
 Dependencies: `mtcore` without the `mhr` extra (numpy-only modules, `modules/mtcore.md`), mediapipe 0.10.18, onnxruntime, opencv-contrib-python. No torch, no pymomentum, no MHR assets: everything model- and skeleton-specific comes from the bundle written by `mttrain.export` (`modules/train.md`).
 
 ## Structure
@@ -19,8 +27,10 @@ Dependencies: `mtcore` without the `mhr` extra (numpy-only modules, `modules/mtc
 | `sources.py` | Frame sources yielding `(t seconds, BGR frame)` at 10 FPS. `CameraSource`: reader thread keeps only the newest frame, taken every 1/fps s like the recorder's throttled loop. `VideoSource`: the recorder's stepped replay (`ts = k/fps + 1 ms`, latest frame at or before `ts`), deterministic; `realtime=True` paces it to the wall clock. `list_cameras()` (Linux: sysfs names). |
 | `lifter.py` | `LiveLifter(bundle)`: checks the bundle's input layout against `mtcore.features`, then per frame `mtcore.features.StreamFeatures.push` → ONNX → `mtcore.lifter_pose.LifterPose` (restricted to the output bones, 18 of 127 MHR joints) → `(bones, confidence, present)`. `set_avatar(rest_positions | None)`, `reset()` (on camera switch). |
 | `hands.py` | `solve_hands(obs)`: port of vspark's finger solve (`hand_landmarks_to_bones`) → VRM finger bone rotations. Reference: `baseline/src/hands-cli.ts` runs the frozen TS node over JSONL frames. |
-| `vmc.py` | Own OSC encoder (`message`, `bundle`) and `VmcSender`. See VMC conventions. |
-| `cli.py` | `mtservice` entry point and main loop; standalone or `--stdio`. `--dump-poses` / `--dump-landmarks` write JSONL for offline comparison; `--vmc off` disables sending; `--face-mesh`, `--no-face`, `--no-fingers`. |
+| `face.py` | `FaceStream`: eye correction + glided blendshape stream on its own thread (see Face post-processing). |
+| `faceproc.py` | Offline face post-processing of a landmarks dump → 60 Hz blendshape JSONL for the avatar video. |
+| `vmc.py` | Own OSC encoder (`message`, `bundle`) and `VmcSender` (`send` per frame, `send_blend` for the face stream). See VMC conventions. |
+| `cli.py` | `mtservice` entry point and main loop; standalone or `--stdio`. `--dump-poses` / `--dump-landmarks` write JSONL for offline comparison; `--vmc off` disables sending; `--face-mesh`, `--no-face`, `--no-fingers`, `--face-rate`, `--no-eye-filter`. |
 
 Default bundle: `data/m1/runs/m1-v10/live/` (gitignored, CMU-derived weights; never committed).
 
@@ -34,14 +44,14 @@ JSON lines; stdout carries only events (MediaPipe and log output go to stderr). 
 - One OSC bundle per frame: `/VMC/Ext/OK 1`, `/VMC/Ext/T`, `/VMC/Ext/Root/Pos` (identity), one `/VMC/Ext/Bone/Pos` per output bone, then the extensions.
 - Bone names: Unity HumanBodyBones (`UNITY_NAMES`): hips, spine, chest, upperChest, neck, head, shoulders, upper/lower arms, hands, finger bones. Bones without a Unity name are skipped. Thumb: Unity's Proximal/Intermediate/Distal = VRM 1.0 Metacarpal/Proximal/Distal. `VRM_PARENT` covers the finger chains for rest offsets.
 - Rotation sent as `(x, -y, -z, w)`: vspark's `rhylive_bone_mapper` applies the same self-inverse map, so vspark receives exactly the lifter's VRM normalized locals. Positions: the avatar's rest offsets from the nearest present parent (`rest_offsets`), mapped `(-x, y, z)`.
-- Blendshapes: one `/VMC/Ext/Blend/Val <ARKit name> <v>` per shape, then `/VMC/Ext/Blend/Apply`.
+- Blendshapes: one `/VMC/Ext/Blend/Val <ARKit name> <v>` per shape, then `/VMC/Ext/Blend/Apply`; by default in their own packets at `--face-rate` (60 Hz), not in the bone bundle.
 - Extensions: `/MT/Present 0|1`, `/MT/Conf <lifter joint> <0..1>` (confidence = exp(-log_scale)). Namespace `/MT/` is provisional (`PLAN.md` §7.2, `[OPEN]`); receivers ignore unknown addresses.
-- No smoothing: output goes out as is at 10 FPS. Whether vspark smooths VMC input (the model was judged through glide) is an open question in the plan.
+- No smoothing of bones: they go out as is at 10 FPS (blendshapes are glided, not smoothed, see Face post-processing). Whether vspark smooths VMC input (the model was judged through glide) is an open question in the plan.
 
 ## Checks (2026-11-12, recorded seated-v1 session video)
 - Bones within 0.12 deg of offline `mttrain.infer` on the same landmarks; ONNX vs torch 3e-6.
 - Per frame: detection ~21 ms (CPU), features + ONNX + VRM conversion ~1.4 ms.
-- Tests (`service/tests/`, `uv run pytest`): VMC encoding against vspark's mapping (bones, Blend/Val + Apply, finger names and rest offsets); streaming vs offline inference (skips without the local bundle and session); finger port vs the TS reference on synthetic hands (`tests/fixtures`, generator `make_hands_input.py`).
+- Tests (`service/tests/`, `uv run pytest`): VMC encoding against vspark's mapping (bones, Blend/Val + Apply, finger names and rest offsets); streaming vs offline inference (skips without the local bundle and session); finger port vs the TS reference on synthetic hands (`tests/fixtures`, generator `make_hands_input.py`); face post-processing (`test_face.py`: rest near 0, blink reaches closed, look-down doesn't close the eyes, small asymmetry linked / wink kept, glide reaches target, stream rate).
 
 ## Extending
 - **New frame source**: a class with `__iter__` yielding `(t seconds, BGR frame)` at the lifter's frame rate (10 FPS; the model's history offsets assume it) and `close()`; `CameraSource` also exposes `t0` for the latency stat. Wire it into `open_source` in `cli.py`. Keep the recorder's capture settings (mirroring happens in `detector.prepare`).
@@ -52,6 +62,6 @@ JSON lines; stdout carries only events (MediaPipe and log output go to stderr). 
 - **Learned face path** (`PLAN.md` §3.11/§7.5): may replace the MediaPipe blendshapes or consume them (e.g. as merger input); keep the `{ARKit name: 0..1}` observation key so `vmc.py` is unchanged.
 
 ## Open
-- Owner's live test of face and fingers; finger calibration; learned hand model (WIP, `plans/m4-hand-model.md`).
+- Owner's live test of face and fingers (and of the face post-processing); whether vspark should also interpolate blendshapes; finger calibration; learned hand model (WIP, `plans/m4-hand-model.md`).
 - Checking the stream with vspark's existing `vmc_receiver` (plan step 3) is not recorded as done; only the unit test against its mapping exists.
 - vspark-side smoothing, camera naming (OpenCV indices vs the browser's device list), camera exclusivity with MediaPipe Tracking, the OSC namespace name (plan open questions).

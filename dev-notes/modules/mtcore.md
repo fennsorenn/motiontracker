@@ -5,7 +5,7 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 ## Using it
 - Consumers add it as an editable path dependency: `mtcore = { path = "../core", editable = true }`.
 - Consumers choose their own torch build (CPU in the spike, CUDA in `train/`). Core's own CPU torch is a dev-only dependency for its tests.
-- The base install depends on numpy only. pymomentum (imported by `mhr` and `cmu_fit`) is the optional extra `mtcore[mhr]`, installed by `train/` and the M3 spike; `service/` installs mtcore without it and uses only the numpy-only modules (`features`, `lifter_pose`, `convert`, `vrm`, `paths`).
+- The base install depends on numpy only. pymomentum (imported by `mhr` and `cmu_fit`) is the optional extra `mtcore[mhr]`, installed by `train/` and the M3 spike; `service/` installs mtcore without it and uses only the numpy-only modules (`features`, `lifter_pose`, `convert`, `vrm`, `paths`, `face_filter`).
 - Data paths come from `paths.py`; `MT_DATA` overrides the gitignored `data/`.
 
 ## Modules
@@ -20,6 +20,7 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 | `landmarks.py` | `LandmarkModel`: MediaPipe's 33 pose landmarks from an MHR pose. See below. |
 | `features.py` | M1 model input (moved from `mttrain.features`, 2026-11-12), numpy only. See below. |
 | `lifter_pose.py` | M1 lifter output → MHR globals → VRM locals, numpy only. See below. |
+| `face_filter.py` | Causal blendshape post-processing (eye correction, glide), plain Python. See below. |
 
 ## cmu_fit
 - `fit(subject, clip, ...)`: spike-style single-clip fit (shared scales + per-frame pose), default `PAIRS`.
@@ -48,6 +49,16 @@ Shared by training (`mttrain.dataset`, `model`, `infer`, mirrored by `gpugen/fea
 - `bones=`: compute only the MHR joints those VRM bones need (plus forearm twist joints); live use computes 18 of 127 joints, ~1 ms/frame instead of ~3 ms. `set_avatar` swaps the avatar rest pose.
 - Also `quat_to_mat`, `mat_to_quat` (xyzw); `mttrain.skeleton` re-exports `quat_to_mat`.
 - Used by `mttrain.infer.Runner` (same output as before within ~0.01 deg, float32 vs float64 rest data) and `mtservice.lifter.LiveLifter`.
+
+## face_filter
+Algorithmic, causal post-processing of MediaPipe's ARKit blendshapes (owner decision 2026-11-14, `PLAN.md` §3.11/§7.5; learned face head in reserve). Used by `mtservice.face` (live) and `mtservice.faceproc` (offline), `modules/service.md`.
+- `EyeFilter`, per eye:
+  - Open-eye blink level fitted online as a linear function of that eye's `eyeLookDown` (exponential forgetting, tau 60 s; prior a=0.18, k=0.4); frames above fit + 0.12 are treated as blinks and excluded from the fit. Blink is rescaled from that level to 0.7 = closed.
+  - Squint rescaled above a resting baseline that follows drops fast (1 s) and rises slowly (20 s).
+  - Left/right linked to their mean when the processed values differ by < 0.15, independent above 0.35, so winks pass.
+- Glide: smoothing-free upsampling like the harness's bone glide (`mteval.upsample`): linear from the shown value to the new one, finishing one tick before the next detector frame is expected (mean of the last 10 intervals).
+- Effect on the recorded sessions: resting blink 0.27-0.34 → 0.02-0.06, squint 0.39-0.40 → 0.12-0.13, left/right difference 0; blinks still reach 1.0 on seated-v1 (hands session peaks ~0.6, as do its raw peaks).
+- Tests live with the consumer: `service/tests/test_face.py`.
 
 ## Tests
 `core/tests/` (`uv run pytest`): streaming vs batch features, conversion round trip (direction match for non-`REST_ALIGNED` bones; MHR rest → identity locals and torso following MHR world rotation for `REST_ALIGNED`; arm world rotations equal to all-direction matching), CMU fit, landmarks, quaternions. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
