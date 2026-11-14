@@ -3,7 +3,9 @@
     uv run python -m mttrain.legeval data/m1/runs/m1-v12/best.pt --renders m1/v1 m1/rest1 m1/contact1 m4/pairs3 \
         [--sessions 2026-11-01T15-29-11-session ...]
 
-Rendered sets (truth from seq.npz: MHR parameters and the camera): per set the median local angle error of thighs,
+Rendered sets (truth from seq.npz: MHR parameters and the camera): per set the median global angle error of the
+head, chest, upper arms, forearms and wrists (any body model, so older ones compare), and (m1-v12+) the median
+local angle error of thighs,
 shins and feet, the root position error in the image plane and in depth (cm), the up direction error (deg), and the
 knee position error relative to the root (cm). Detector frames are matched to the nearest rendered frame.
 
@@ -26,6 +28,8 @@ from .infer import Runner, read_session
 from .skeleton import OUT_JOINTS, TargetExtractor, fk
 
 LEGS = {"thigh": ("l_upleg", "r_upleg"), "shin": ("l_lowleg", "r_lowleg"), "foot": ("l_subtalar", "r_subtalar")}
+ARMS = {"head": ("c_head",), "chest": ("c_spine3",), "uparm": ("l_uparm", "r_uparm"), "lowarm": ("l_lowarm", "r_lowarm"),
+        "wrist": ("l_wrist", "r_wrist")}
 
 
 def angle(Ra, Rb):
@@ -39,12 +43,15 @@ def render_set(r, te, ch, d):
     fps = float(z["fps"])
     times, world, image, vis, present = read_session(d)
     rot, _ = r.predict(times, world, image, vis, present)
-    if r.aux is None:
-        raise SystemExit("this checkpoint has no root/up outputs (m1-v12+ needed)")
     k = np.clip(np.round(times * fps).astype(int), 0, len(st) - 1)
     rt, pos_t, off_t = te(st[k], z["R"])
+    G, _ = fk(rot, off_t)
+    Gt, _ = fk(rt, off_t)
+    out = {f"glob_{g}": np.concatenate([angle(G[present, OUT_JOINTS.index(j)], Gt[present, OUT_JOINTS.index(j)]) for j in js])
+           for g, js in ARMS.items()}
+    if r.aux is None:  # older body models: no legs, root or up
+        return out
     root_t, up_t = te.root(st[k], z["R"], z["t"])
-    out = {}
     for g, js in LEGS.items():
         out[f"deg_{g}"] = np.concatenate([angle(rot[:, OUT_JOINTS.index(j)], rt[:, OUT_JOINTS.index(j)]) for j in js])
     _, P = fk(rot, off_t)
@@ -109,7 +116,7 @@ def main():
                 acc.setdefault(k, []).append(v)
         rows[s] = {k: round(float(np.median(np.concatenate(v))), 1) for k, v in acc.items()}
         print(s, json.dumps(rows[s]), flush=True)
-    for s in a.sessions:
+    for s in a.sessions if r.model.root else []:
         res = session(r, REPO_ROOT / "sessions" / s)
         rows[s] = {k: round(v, 3) if isinstance(v, float) else v for k, v in res.items()}
         print(s, json.dumps(rows[s]), flush=True)

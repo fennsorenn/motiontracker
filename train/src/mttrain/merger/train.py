@@ -25,7 +25,10 @@ from .model import Merger, apply, frame_inputs
 
 RUNS = MERGER / "runs"
 GLOBAL_J = [OUT_JOINTS.index(j) for j in ("l_wrist", "r_wrist", "c_head")]
-WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 1.0, "con": 2.0, "leg": 1.0, "root": 1.0, "up": 2.0}
+# leg/root small like the body model's (`mttrain.train`: their confidence-weighted gradients swamp the rest under
+# the global clip)
+WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 1.0, "con": 2.0, "leg": 0.05, "leg_pos": 1.0, "leg_vel": 0.5,
+           "root": 0.05, "up": 1.0}
 NEWEST = (-1, -2, -3)
 SCORE = ("glob_l_wrist", "glob_r_wrist", "glob_c_head", "deg_forearm", "deg_head", "fing_deg_in")  # best.pt: lowest sum
 M1_RUN = MERGER.parent / "m1" / "runs" / "m1-v10" / "best.pt"
