@@ -22,3 +22,12 @@ def test_twist_is_rotation_about_axis(rng):
         swing = qmul(q, qinv(t))
         # swing moves the axis by the same amount q does, with no rotation about it left over
         assert np.allclose(qrot(swing, axis), qrot(q, axis), atol=1e-6)
+
+
+def test_mat_to_quat_exact_near_180_degrees(rng):
+    from mtcore.lifter_pose import mat_to_quat, quat_to_mat
+    q = rng.normal(size=(2000, 4))
+    q[:1000, 3] = rng.normal(scale=1e-7, size=1000)  # rotations within ~1e-5 deg of 180
+    q /= np.linalg.norm(q, axis=1, keepdims=True)
+    R = quat_to_mat(q)
+    assert np.abs(quat_to_mat(mat_to_quat(R)) - R).max() < 1e-9
