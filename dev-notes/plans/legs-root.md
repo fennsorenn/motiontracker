@@ -1,6 +1,6 @@
 # Plan: legs, hip position and up direction in the body model and the merger
 
-> Branch: `feature/legs-root` (from `feature/relational-retarget`, which builds on `feature/m4-merger`) · Status: in progress
+> Branch: `feature/legs-root` (from `feature/relational-retarget`, which builds on `feature/m4-merger`) · Status: trained and evaluated (m1-v14, mg3), awaiting the owner's review
 
 ## Goal
 
@@ -60,3 +60,32 @@ never a decision (the body model's 17 joints came from the M1 plan's scope).
 ## Progress
 
 - 2026-11-14: decisions recorded, branch created.
+- 2026-11-14: steps 1-5 done, step 6 partly (pose files carry leg bones and root/up; videos show legs, root/up not
+  applied). Status: trained and evaluated, awaiting the owner's review.
+  - Weights lesson: confidence-weighted leg/root gradients swamped the arms under the global grad clip 1.0
+    (m1-v13 step 5000: grad norm legs 91, root 120, upper 8; arms ~5 deg behind m1-v11 in m1-v12/v13). Fix: leg and
+    root weights 0.05 (`train.py` `WEIGHTS`, `--w-*`).
+  - **m1-v14** (40k steps), synthetic validation vs m1-v11: upper arm 11.8 vs 12.0, forearm 6.6 vs 6.7, wrist 16.4
+    vs 16.3, head 7.5 vs 6.9 deg; thighs 10.7, shins 4.8 deg; root 1.9 cm image plane / 4.7 cm depth; up 4.3 deg.
+  - m1-v14 on rendered sets (real Holistic) vs m1-v11: chest better on all sets; head 1-2.5 deg worse on
+    v1/contact1/head1/pairs3; upper arm within +-2 deg except head1 (+6.5). Legs: thighs 14-40 deg, knees 16-28 cm.
+    Root image plane fine (3-8 cm), depth systematically too far (ratio 1.1-1.5, median ~1.35); suspected
+    apparent-size mismatch between synthetic and real landmarks, fix would go in the observation simulation (not
+    done, owner to decide).
+  - m1-v14 on real sessions: seated-v1 and the hands-v1 retake read seated throughout (0 switches, thigh jitter
+    ~1 deg/frame); the first hands-v1 take (framed without the head) reads standing 32-40% with ~90 switches
+    (framing outside the training distribution).
+  - Gap calibration m1-v14 (real / synthetic p50): legs ~29 / 9 deg, root xy 5.4 / 1.4 cm, depth 41.7 / 3.0 cm
+    (log ratio 0.3 / 0.0), up 6.7 / 3.6 deg.
+  - mg3 first attempt went NaN at ~4500 steps with additive depth gap noise (~60 cm sd); kept as
+    `data/merger/runs/mg3-nan`. Fix: depth gap as log-depth (ratio) noise along the viewing ray, depth clamp, skip
+    non-finite steps.
+  - **mg3** (merger on m1-v14, 20k steps), validation (includes gap noise) vs mg1: wrists 27.5 vs 27.4, forearm 13.5
+    vs 13.4, head 8.0; thighs 27, shins 23.7 deg; root 6.3 / 7.4 cm; up 5.1 deg. Rendered sets: head and wrists much
+    better than m1-v14 alone (head 5.8-9.4 vs 11.7-21.3 deg); thighs 2-6 deg worse than m1-v14 alone on most sets;
+    depth mixed. Harness vs mg1: level on 5 of 6 sets, regression on pairs3 (hands 52.8 vs 38.4, lower arms 42 vs
+    36.5). Videos `data/videos/{seated-v1,hands-v1}-mg3/`.
+  - Body-contact render sets `data/m4/renders/body1`, `body2` (`render.py --events`): the generator accepted only
+    belly and chest events, never thighs/lap.
+  - Open: pairs3 regression, merger thigh regression, root depth bias in the simulation, framing without the head,
+    live runtime / VMC output of legs/root/up, combining with relational retargeting (`feature/relational-retarget`).

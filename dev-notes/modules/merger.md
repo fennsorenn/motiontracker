@@ -4,7 +4,7 @@ Location: `train/src/mttrain/merger/` (part of the `train` uv project, `modules/
 
 Status (2026-11-14): first full models `mg1` and `mg2` trained and evaluated on all rendered sets; not in the live runtime (`service/`, follow-up plan once a checkpoint is accepted). Branch `feature/m4-merger`.
 
-WIP (started 2026-11-14, branch `feature/legs-root`): legs, hip position and up direction as merger inputs (from the body model) and residual outputs, gap calibration for them, retrain as `mg3`. Plan: `plans/legs-root.md`; decisions `PLAN.md` §3.9.
+WIP (branch `feature/legs-root`, trained and evaluated, awaiting the owner's review): legs, hip position and up direction as inputs and residual outputs; `mg3` on body model `m1-v14`. See "Legs, root and up" below. Plan and numbers: `plans/legs-root.md`; decisions `PLAN.md` §3.9.
 
 Data (gitignored): `data/merger/` (`pool/`, `calib/`, `runs/<name>/`, `eval/<run>/`); comparison videos `data/videos/<session>-<run>/`.
 
@@ -50,6 +50,15 @@ Data (gitignored): `data/merger/` (`pool/`, `calib/`, `runs/<name>/`, `eval/<run
 - Rendered sets vs body model and base pose: lower arms better nearly everywhere, head better on most sets (slightly worse on rest1, v1), hands better on pairs3, level on hands3/rest1, worse on contact1, head1 and v1.
 - Open: on contact1 the merger overrides even confident hand-model wrists (not the contact loss, see `mg2`). Suspects: training data near the face (only from the body model's choreography source, procedural fingers) and the hand model's confidence calibration on synthetic data.
 
+## Legs, root and up (WIP, `feature/legs-root`)
+Body-model side: `modules/train.md` ("Legs, root and up").
+- `model.py`: `Merger(nj, root)` takes the body model's root/up as inputs and outputs residuals on them (`apply_root`; depth clamped >= 0.1 m). `load_merger` still loads `mg1`/`mg2` (17 joints, no root).
+- `batch.py`: body root/up inputs, root/up targets; gap noise for legs and root/up read from the per-run calibration `gap_file(m1)` (`m1_gap-<run>.json`). Depth gap is applied as log-depth (ratio) noise along the viewing ray; additive depth noise of the measured size made training diverge.
+- `gapcal.py` takes the body model checkpoint and also measures legs, root xy / z / log z and up.
+- `train.py`: `--m1` selects the body model; leg/root weights 0.05 (same reason as the body model's); non-finite steps skipped.
+- `run.py`: `infer()` returns root/up; pose files include leg bones and per-frame root/up. Videos show the legs; root/up are not applied yet.
+- Evaluation of legs/root/up: `mttrain.legeval --merger`.
+
 ## Shared-code changes made for the merger
 - `gpugen.GpuGenerator.sample` split into `crop` / `observe` (m1 batches bit-identical), optional landmark `push` hook; `gpugen.motion.Seater` `smooth_life` (`modules/train.md`).
 - `hands`: `observe2.PairObserver` optional camera; `HandMotion` tremor flag; `pool2 --full` (full MHR sequences) / `--no-tremor`; `evaluate2.LearnedPair` exposes raw outputs (`raw`, `lost`, `score`) (`modules/hands.md`).
@@ -61,4 +70,5 @@ Data (gitignored): `data/merger/` (`pool/`, `calib/`, `runs/<name>/`, `eval/<run
 
 ## Open
 - The contact1 wrist override (above); hands behind the base pose on head1 and v1.
+- `mg3`: regression vs `mg1` on pairs3 (hands, lower arms) and thighs worse than the body model alone; root/up not yet in the runtime or the videos.
 - Runtime integration (`service`), internal features as inputs, joint fine-tuning, gaze, a learned face model: out of scope for this plan.

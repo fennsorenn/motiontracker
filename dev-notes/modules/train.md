@@ -4,7 +4,7 @@ Location: `train/` (uv project, package `mttrain`, CUDA PyTorch). Builds M1 trai
 
 All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) and are never committed.
 
-WIP (started 2026-11-14, branch `feature/legs-root`): leg outputs, a hip position and an up direction for the body model (`skeleton`, `model`, `losses`, `train` (adds `--resume`), `dataset`, `gpugen`), next run `m1-v12`. Plan: `plans/legs-root.md`; decisions `PLAN.md` §3.9. The tables below still describe the 17-joint model.
+WIP (branch `feature/legs-root`, trained and evaluated, awaiting the owner's review): legs, hip position and up direction in the body model; current run `m1-v14` (`m1-v12`/`m1-v13` slowed the arms). See "Legs, root and up" below. Plan and numbers: `plans/legs-root.md`; decisions `PLAN.md` §3.9. The pipeline table below describes the 17-joint parts; the leg/root additions are listed in that section.
 
 ## Pipeline (in order)
 | Module | Role |
@@ -143,6 +143,18 @@ Finding (2026-11-11): on the head clips MediaPipe's 3D torso co-rotates with the
 Context: training data never passes through MediaPipe (synthetic landmarks + hand-modelled MediaPipe biases). Taps into MediaPipe's internal state remain M7 and need rendered training video (M6).
 
 Still unclear: how to model the 3D torso co-rotation (next run not yet planned), how the 3D head masking is signalled to the model at inference.
+
+## Legs, root and up (WIP, `feature/legs-root`, 2026-11-14)
+Outputs added to the body model; owner decisions `PLAN.md` §3.9, numbers in `plans/legs-root.md` (Progress).
+- `skeleton`: `OUT_JOINTS` is 23: the 17 upper-body joints first, then `{l,r}_upleg`, `{l,r}_lowleg`, `{l,r}_subtalar` (VRM UpperLeg, LowerLeg, Foot). Index helpers `N_UPPER`, `UPPER_IDX`, `LEG_IDX`, `LEG_POS_JOINTS`. `TargetExtractor.root`: root joint position in the camera frame (metres) and up = `cam_R @ +y`. Mirrored in `gpugen` (`geom.Targets.root`); both generators return `root` / `up`.
+- `model`: `Lifter(n_joints, root=True)` adds a root head: (x/z, y/z, log z around `ROOT_Z0` = 1.5 m), two log scales (image plane, depth), up (normalized 3-vector). `load_lifter(ckpt)` rebuilds old 17-joint checkpoints; `pad_joints` pads their outputs with rest legs, so old and new models share downstream code.
+- `losses`: upper-body terms on the 17 joints only (unchanged); a separate leg term (`leg`, `leg_pos`, `leg_vel`); `root_losses` (Laplace NLL image plane + depth, velocity); up as a chord loss.
+- Pattern, loss weights: leg and root weights are 0.05 (`train.py` `WEIGHTS`, overridable with `--w-*`). Confidence-weighted leg/root gradients otherwise dominate the global grad clip (1.0) and slow the arms. When adding an output head, check per-group gradient norms against the upper body before trusting the weights.
+- `train`: `--resume` (`last.pt` with optimizer, scheduler, generator and RNG state); non-finite steps are skipped.
+- `infer.Runner` uses `load_lifter`; `.aux` holds `root`, `root_log_s`, `up`. `export` refuses root models (the live runtime does not consume them yet).
+- `legeval`: per render set, global errors (head, chest, upper arm, forearm, wrist; any model) and, for root models, thigh/shin/foot local errors, knee cm, root xy/z cm, up deg; on real sessions trunk-thigh angle, standing share (> 135 deg), sit/stand switches, jitter. `--merger` evaluates merger outputs.
+- `render --events`: filters pair-clip events (body-contact sets `data/m4/renders/body1`, `body2`).
+- Known gaps: root depth on renders reads too far (apparent-size mismatch suspected in the observation simulation); framing without the head is outside the training distribution.
 
 ## Model input features
 Moved to `mtcore.features` (2026-11-12) so the live runtime shares one implementation without torch; train imports it from there. Causal shoulder-width scale, history at time offsets 0-1.6 s, plus a streaming variant. Details: `modules/mtcore.md`.
