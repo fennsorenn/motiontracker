@@ -163,27 +163,45 @@ class MhrToVrm:
                 ang = np.arctan2(np.cross(a_vrm, a_mhr) @ n, a_vrm @ a_mhr)
                 self.D[b] = qmul(np.append(n * np.sin(ang / 2), np.cos(ang / 2)), self.D[b])
 
-    def globals(self, state):
+    def _index(self):
+        """Per-bone index arrays for the batched globals / locals (bones are fixed after __init__)."""
+        if getattr(self, "_idx", None) is None:
+            B = self.bones
+            jidx = np.array([self.jn.index(MAP[b][0]) for b in B])
+            rest_inv = np.stack([self.q_rest_inv[b] for b in B])
+            D = np.stack([self.D[b] for b in B])
+            par = []
+            for b in B:
+                p = VRM_PARENT.get(b)
+                while p is not None and p not in self.q_rest_inv:  # e.g. avatar without upperChest
+                    p = VRM_PARENT.get(p)
+                par.append(-1 if p is None else B.index(p))
+            par = np.array(par)
+            fore = [(B.index(b), v) for b, v in self.forearm.items() if b in B]
+            self._idx = (jidx, rest_inv, D, par, fore)
+        return self._idx
+
+    def _globals(self, state):
+        """(..., B, 4) VRM world rotations, bones in self.bones order (all bones in one batched product)."""
+        jidx, rest_inv, D, _, fore = self._index()
         Q = state[..., 3:7]
-        out = {}
-        for b in self.bones:
-            Qj = Q[..., self.jn.index(MAP[b][0]), :]
-            if b in self.forearm:
-                lo, wt, axis = self.forearm[b]
-                rel = qmul(qinv(Q[..., lo, :]), Q[..., wt, :])
-                Qj = qmul(Q[..., lo, :], twist(rel, axis))
-            out[b] = qmul(qmul(Qj, self.q_rest_inv[b]), self.D[b])
-        return out
+        Qj = Q[..., jidx, :].copy()
+        for i, (lo, wt, axis) in fore:
+            rel = qmul(qinv(Q[..., lo, :]), Q[..., wt, :])
+            Qj[..., i, :] = qmul(Q[..., lo, :], twist(rel, axis))
+        return qmul(qmul(Qj, rest_inv), D)
+
+    def globals(self, state):
+        G = self._globals(state)
+        return {b: G[..., i, :] for i, b in enumerate(self.bones)}
 
     def locals(self, state):
-        G = self.globals(state)
-        out = {}
-        for b in self.bones:
-            p = VRM_PARENT.get(b)
-            while p is not None and p not in G:  # e.g. avatar without upperChest
-                p = VRM_PARENT.get(p)
-            out[b] = G[b] if p is None else qmul(qinv(G[p]), G[b])
-        return out
+        G = self._globals(state)
+        par = self._index()[3]
+        has = par >= 0
+        L = G.copy()
+        L[..., has, :] = qmul(qinv(G[..., par[has], :]), G[..., has, :])
+        return {b: L[..., i, :] for i, b in enumerate(self.bones)}
 
 
 def vrm_fk(local, rest_positions, parent=VRM_PARENT):
