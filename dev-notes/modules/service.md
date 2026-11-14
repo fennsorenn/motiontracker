@@ -10,8 +10,8 @@ Plan: `plans/m2-face-hands.md` (steps 1-4 done, numbers in its Progress section)
 - vspark side (vspark `feature/learned-tracker`, not pushed): the VMC receiver takes `Blend/Val` with ARKit names into its ARKit chain on `Blend/Apply`; other names are ignored.
 - Open: finger calibration (Learned Tracking's graph has no `finger_calib`; ask after the live test).
 
-## Face post-processing (implemented 2026-11-14, branch `feature/blendshape-filter`, commit 9df1dd3)
-Owner decision 2026-11-14 (`PLAN.md` §3.11/§7.5): algorithmic correction first, learned face head in reserve. The filter itself is `mtcore.face_filter` (`modules/mtcore.md`).
+## Face post-processing (implemented 2026-11-14, merged into `dev` 7602316)
+Owner decision 2026-11-14 (`PLAN.md` §3.11/§7.5): algorithmic correction first, learned face head in reserve. Owner-approved as good enough for vspark use; Learned Tracking runs it live with no vspark change (eye filter and 60 Hz face stream are on by default; vspark's VMC receiver handles the separate `Blend/Val` + `Apply` packets independently of the bone packets). The filter itself is `mtcore.face_filter` (`modules/mtcore.md`).
 - `face.py` `FaceStream`: eye correction (`EyeFilter`) per detector frame, then a thread sends the glided blendshapes at `--face-rate` Hz (default 60) via `VmcSender.send_blend` (`Blend/Val` + `Blend/Apply`; the socket is guarded by a lock). Bones still go out once per detector frame, now without blendshapes. `--face-rate 0` = blendshapes per detector frame (for receivers that interpolate themselves). Whether vspark should also interpolate on its side: `[OPEN]`.
 - `--no-eye-filter` turns the eye correction off; `--dump-landmarks` keeps the raw values.
 - Videos run without `--realtime` have no wall clock: no stream thread, the processed blendshapes go out with each frame.
@@ -62,6 +62,6 @@ JSON lines; stdout carries only events (MediaPipe and log output go to stderr). 
 - **Learned face path** (`PLAN.md` §3.11/§7.5): may replace the MediaPipe blendshapes or consume them (e.g. as merger input); keep the `{ARKit name: 0..1}` observation key so `vmc.py` is unchanged.
 
 ## Open
-- Owner's live test of face and fingers (and of the face post-processing); whether vspark should also interpolate blendshapes; finger calibration; learned hand model (WIP, `plans/m4-hand-model.md`).
+- Owner's live test of face and fingers (face post-processing approved 2026-11-14); whether vspark should also interpolate blendshapes; finger calibration; learned hand model (WIP, `plans/m4-hand-model.md`).
 - Checking the stream with vspark's existing `vmc_receiver` (plan step 3) is not recorded as done; only the unit test against its mapping exists.
 - vspark-side smoothing, camera naming (OpenCV indices vs the browser's device list), camera exclusivity with MediaPipe Tracking, the OSC namespace name (plan open questions).
