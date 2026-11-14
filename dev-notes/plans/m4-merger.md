@@ -49,6 +49,18 @@ against the chest (which `m1` under-reads, head-vs-chest slope ~0.2 against a ta
    Observations and the frozen part models run on the GPU per batch. Clipping correction: part of the samples get
    observed hands pushed into the body while the target stays outside it.
 
+5. **Smoothing through training (owner, 2026-11-14): jitter on the input, none on the output.**
+   - Input: on top of the jitter the frozen part models already pass on from noisy observations, extra
+     high-frequency jitter on the merger's inputs (part rotations, hand position/size, head pose), its strength
+     calibrated on the part models' frame-to-frame noise on real sessions (rest segments) so it is realistic, not
+     larger.
+   - Output: targets free of jitter. The current generators put some into the truth: `m1`'s idle life is AR(1)
+     noise (rough frame to frame), and the hand motion adds an 8-12 Hz finger tremor (`hands.motion._idle`). Merger
+     targets use smooth idle signals (low-pass) and no tremor; deliberate fast motion (taps, sharp starts and stops)
+     stays, so the merger learns to filter noise, not to lag (`PLAN.md` §3.6: hedging). Acceleration/jerk loss on
+     the output against the truth's.
+   - Check: lag and peak-velocity metrics on the rendered sets alongside rest jitter, so smoothing doesn't buy lag.
+
 ## Approach
 
 1. Head observation: the canonical-face fit (decision 1) as a shared function (runtime and analysis); measure it
