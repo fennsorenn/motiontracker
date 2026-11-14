@@ -30,8 +30,10 @@ from ..hands.infer import FINGER_WORDS
 from ..hands.model import OUT_IDX
 from ..hands.skeleton import HandFK
 from ..infer import OUTPUT_BONES, Runner
+
+LEG_BONES = [f"{s}{b}" for s in ("left", "right") for b in ("UpperLeg", "LowerLeg", "Foot")]
 from .batch import MERGER, blend_bank, combine, unmirror_frame
-from .model import OFFSETS, Merger, corrected, frame_inputs
+from .model import OFFSETS, apply_root, corrected, frame_inputs, load_merger
 
 M1 = DATA / "m1" / "runs" / "m1-v10" / "best.pt"
 P3 = DATA / "m4" / "runs" / "p3" / "best.pt"
@@ -50,6 +52,7 @@ def part_outputs(rows, runner, pair, canon, face_offset, rest_head, F_rest, name
             present[i] = True
     rot, conf = runner.predict(times, world, image, vis, present)
     log_s = -np.log(np.clip(conf, 1e-6, None))
+    root_aux = runner.aux  # m1-v12+: root position, its log scales and up; else None
     hand = {s: {k: [] for k in ("G", "rot_log_s", "fingers", "fingers_log_s", "pos", "log_size", "lost", "score")}
             for s in "lr"}
     head = {k: [] for k in ("G", "centre", "log_scale", "seen")}
@@ -85,7 +88,8 @@ def part_outputs(rows, runner, pair, canon, face_offset, rest_head, F_rest, name
         blend.append([bs.get(n, 0.0) for n in names] if bs else [0.0] * len(names))
         bpresent.append(bool(bs))
     t = lambda x, dt=torch.float32: torch.tensor(np.asarray(x), dtype=dt)[None]
-    b = {"body": {"rot": t(rot), "log_s": t(log_s)},
+    b = {"body": {"rot": t(rot), "log_s": t(log_s), **({"root": t(root_aux["root"]), "root_log_s": t(root_aux["root_log_s"]),
+                                                       "up": t(root_aux["up"])} if root_aux is not None else {})},
          "hand": {s: {k: t(v, torch.bool if k == "lost" else torch.float32) for k, v in hand[s].items()} for s in "lr"},
          "head": {k: t(v, torch.bool if k == "seen" else torch.float32) for k, v in head.items()},
          "blend": {"values": t(blend), "present": t(bpresent, torch.bool)}}
@@ -101,13 +105,15 @@ def finger_locals(conv, fk, ch, q):
     return {n: v for n, v in loc.items() if any(k in n for k in FINGER_WORDS)}
 
 
-def infer(ckpt, rows, avatar="AvatarSample_D"):
+def infer(ckpt, rows, avatar="AvatarSample_D", m1=M1):
     """Recorder-format frames -> dict: times (T,) s, base batch `b`, merger body locals L (T, NJ, 3, 3), finger
     parameters {side: (T, 27)} of the merger and of the base (hand model), and the runner, hand FK and character."""
     ch = load()
     pn = list(ch.parameter_transform.names)
     jn = list(ch.skeleton.joint_names)
-    runner = Runner(M1, avatar)
+    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    m1 = Path(ck.get("config", {}).get("m1", m1))  # the body model the merger was trained with
+    runner = Runner(m1, avatar)
     fk = HandFK(ch)
     pair = LearnedPair(P3, fk)
     canon = CanonicalFace()
@@ -120,16 +126,20 @@ def infer(ckpt, rows, avatar="AvatarSample_D"):
     from . import batch
     names = batch.ARKIT
     times, b = part_outputs(rows, runner, pair, canon, np.array(fc["offset"]), rest_head, F_rest, names)
-    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
-    model = Merger()
-    model.load_state_dict(ck["model"])
+    model = load_merger(ck)
     model.eval()
-    feats = frame_inputs(b)  # (1, T, D)
+    feats = frame_inputs(b, model.nj, model.root)  # (1, T, D)
     T = feats.shape[1]
     idx = torch.tensor([[max(0, t - o) for o in OFFSETS] for t in range(T)])
     with torch.no_grad():
         out = model(feats[0, idx])  # (T, n_offsets, D) -> per frame
-    L = corrected(b["base"][0], out["res"]).numpy().astype(np.float64)
+    L = corrected(b["base"][0, :, :model.nj], out["res"])
+    if model.nj < b["base"].shape[2]:  # older mergers: the remaining joints (legs) as the base has them
+        L = torch.cat([L, b["base"][0, :, model.nj:]], 1)
+    L = L.numpy().astype(np.float64)
+    root = up = None
+    if model.root:
+        root, up = (x.numpy().astype(np.float64) for x in apply_root(b["body"]["root"][0], b["body"]["up"][0], out))
     fingers, base_f = {}, {}
     for k, s in enumerate("lr"):
         for dst, f in ((fingers, b["hand"][s]["fingers"][0] + out["fingers_res"][:, k]), (base_f, b["hand"][s]["fingers"][0])):
@@ -137,7 +147,7 @@ def infer(ckpt, rows, avatar="AvatarSample_D"):
             q[:, OUT_IDX] = f.numpy()
             dst[s] = np.clip(q, fk.lo, fk.hi)
     return {"times": times, "b": b, "L": L, "fingers": fingers, "base_fingers": base_f, "runner": runner, "fk": fk,
-            "ch": ch}
+            "ch": ch, "root": root, "up": up}
 
 
 def main():
@@ -154,16 +164,21 @@ def main():
     T = len(times)
     conv = runner.pose.conv
     a.out_dir.mkdir(parents=True, exist_ok=True)
-    tracks = {"merger": (L, fingers), "base": (b["base"][0].numpy().astype(np.float64), base_f),
-              "m1": (b["body"]["rot"][0].numpy().astype(np.float64), None)}
-    for name, (rot, fq) in tracks.items():
+    body_root = (b["body"]["root"][0].numpy(), b["body"]["up"][0].numpy()) if "root" in b["body"] else None
+    tracks = {"merger": (L, fingers, (r["root"], r["up"]) if r["root"] is not None else None),
+              "base": (b["base"][0].numpy().astype(np.float64), base_f, body_root),
+              "m1": (b["body"]["rot"][0].numpy().astype(np.float64), None, body_root)}
+    for name, (rot, fq, rp) in tracks.items():
         bones = runner.vrm(rot)
         fl = finger_locals(conv, fk, ch, fq) if fq is not None else {}
         with open(a.out_dir / f"{name}.poses.jsonl", "w") as fo:
             for i, tt in enumerate(times):
-                out_b = {n: bones[n][i].round(6).tolist() for n in OUTPUT_BONES if n in bones}
+                out_b = {n: bones[n][i].round(6).tolist() for n in OUTPUT_BONES + LEG_BONES if n in bones}
                 out_b.update({n: v[i].round(6).tolist() for n, v in fl.items()})
-                fo.write(json.dumps({"t": round(tt * 1000, 1), "bones": out_b}) + "\n")
+                rec = {"t": round(tt * 1000, 1), "bones": out_b}
+                if rp is not None:  # root position (camera frame, m) and up (camera frame)
+                    rec.update(root=rp[0][i].round(4).tolist(), up=rp[1][i].round(4).tolist())
+                fo.write(json.dumps(rec) + "\n")
     print(f"{T} frames -> {a.out_dir}/{{merger,base,m1}}.poses.jsonl")
 
 

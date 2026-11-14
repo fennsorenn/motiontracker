@@ -1,0 +1,120 @@
+"""Legs, root position and up direction of a body model (m1-v12+) on rendered sets and real sessions.
+
+    uv run python -m mttrain.legeval data/m1/runs/m1-v12/best.pt --renders m1/v1 m1/rest1 m1/contact1 m4/pairs3 \
+        [--sessions 2026-11-01T15-29-11-session ...]
+
+Rendered sets (truth from seq.npz: MHR parameters and the camera): per set the median local angle error of thighs,
+shins and feet, the root position error in the image plane and in depth (cm), the up direction error (deg), and the
+knee position error relative to the root (cm). Detector frames are matched to the nearest rendered frame.
+
+Real sessions (no truth): sitting vs standing from the predicted pose, per frame the angle between the trunk's up
+axis and the thighs (seated ~90 deg, standing ~180): share of frames that read as standing (> 135 deg), the number
+of sitting/standing switches, and the frame-to-frame jitter of the thigh direction and the root position.
+"""
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+
+from mtcore.lifter_pose import quat_to_mat
+from mtcore.mhr import skeleton_state
+from mtcore.paths import DATA, REPO_ROOT
+
+from .infer import Runner, read_session
+from .skeleton import OUT_JOINTS, TargetExtractor, fk
+
+LEGS = {"thigh": ("l_upleg", "r_upleg"), "shin": ("l_lowleg", "r_lowleg"), "foot": ("l_subtalar", "r_subtalar")}
+
+
+def angle(Ra, Rb):
+    c = (np.trace(np.swapaxes(Ra, -1, -2) @ Rb, axis1=-2, axis2=-1) - 1) / 2
+    return np.degrees(np.arccos(np.clip(c, -1, 1)))
+
+
+def render_set(r, te, ch, d):
+    z = np.load(d / "seq.npz")
+    st = skeleton_state(ch, z["mp"].astype(np.float64))
+    fps = float(z["fps"])
+    times, world, image, vis, present = read_session(d)
+    rot, _ = r.predict(times, world, image, vis, present)
+    if r.aux is None:
+        raise SystemExit("this checkpoint has no root/up outputs (m1-v12+ needed)")
+    k = np.clip(np.round(times * fps).astype(int), 0, len(st) - 1)
+    rt, pos_t, off_t = te(st[k], z["R"])
+    root_t, up_t = te.root(st[k], z["R"], z["t"])
+    out = {}
+    for g, js in LEGS.items():
+        out[f"deg_{g}"] = np.concatenate([angle(rot[:, OUT_JOINTS.index(j)], rt[:, OUT_JOINTS.index(j)]) for j in js])
+    _, P = fk(rot, off_t)
+    out["cm_knee"] = np.concatenate([np.linalg.norm(P[:, OUT_JOINTS.index(j)] - pos_t[:, OUT_JOINTS.index(j)], axis=-1)
+                                     for j in ("l_lowleg", "r_lowleg")]) * 100
+    d_root = (r.aux["root"] - root_t) * 100
+    out["cm_root_xy"] = np.linalg.norm(d_root[:, :2], axis=-1)
+    out["cm_root_z"] = np.abs(d_root[:, 2])
+    out["deg_up"] = np.degrees(np.arccos(np.clip((r.aux["up"] * up_t).sum(-1), -1, 1)))
+    return out
+
+
+def trunk_thigh(r, rot):
+    """Angle (T,) between the trunk's up axis and the thighs (mean of both), from the predicted rotations."""
+    G = r.mhr_globals(rot)  # MHR world joint rotations (rest included)
+    jn = r.jn
+    rest = skeleton_state(r.ch, np.zeros(len(r.ch.parameter_transform.names)))
+    rg = quat_to_mat(rest[:, 3:7])
+    out = []
+    for m in "lr":
+        a, b = jn.index(f"{m}_upleg"), jn.index(f"{m}_lowleg")
+        thigh = np.einsum("tij,j->ti", G[:, a] @ rg[a].T, rest[b, :3] - rest[a, :3])
+        out.append(thigh / np.linalg.norm(thigh, axis=-1, keepdims=True))
+    root = jn.index("root")
+    up = np.einsum("tij,j->ti", G[:, root] @ rg[root].T, np.array([0.0, 1.0, 0.0]))  # the pelvis's rest up, carried
+    thigh = (out[0] + out[1]) / 2
+    thigh /= np.linalg.norm(thigh, axis=-1, keepdims=True)
+    return np.degrees(np.arccos(np.clip((thigh * up).sum(-1), -1, 1))), thigh
+
+
+def session(r, path):
+    times, world, image, vis, present = read_session(path)
+    rot, _ = r.predict(times, world, image, vis, present)
+    ang, thigh = trunk_thigh(r, rot)
+    standing = ang > 135
+    switches = int(np.sum(standing[1:] != standing[:-1]))
+    dth = np.degrees(np.arccos(np.clip((thigh[1:] * thigh[:-1]).sum(-1), -1, 1)))
+    droot = np.linalg.norm(np.diff(r.aux["root"], axis=0), axis=-1) * 100
+    return {"frames": len(times), "trunk_thigh_deg_p50": float(np.median(ang)), "standing_frac": float(standing.mean()),
+            "switches": switches, "thigh_jitter_deg_p50": float(np.median(dth)),
+            "root_step_cm_p50": float(np.median(droot)), "root_step_cm_p95": float(np.percentile(droot, 95)),
+            "root_z_m_p50": float(np.median(r.aux["root"][:, 2])),
+            "up_vs_camera_down_deg_p50": float(np.median(np.degrees(np.arccos(np.clip(-r.aux["up"][:, 1], -1, 1)))))}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("ckpt", type=Path)
+    ap.add_argument("--renders", nargs="*", default=[])
+    ap.add_argument("--sessions", nargs="*", default=[])
+    a = ap.parse_args()
+    r = Runner(a.ckpt)
+    ch = r.ch
+    te = TargetExtractor(list(ch.skeleton.joint_names), skeleton_state(ch, np.zeros(len(ch.parameter_transform.names))))
+    rows = {}
+    for s in a.renders:
+        acc = {}
+        for d in sorted((DATA / s.split("/")[0] / "renders" / s.split("/")[1]).glob("seq*")):
+            if not (d / "landmarks.jsonl").exists():
+                continue
+            for k, v in render_set(r, te, ch, d).items():
+                acc.setdefault(k, []).append(v)
+        rows[s] = {k: round(float(np.median(np.concatenate(v))), 1) for k, v in acc.items()}
+        print(s, json.dumps(rows[s]), flush=True)
+    for s in a.sessions:
+        res = session(r, REPO_ROOT / "sessions" / s)
+        rows[s] = {k: round(v, 3) if isinstance(v, float) else v for k, v in res.items()}
+        print(s, json.dumps(rows[s]), flush=True)
+    (a.ckpt.parent / "legeval.json").write_text(json.dumps(rows, indent=1))
+
+
+if __name__ == "__main__":
+    main()
