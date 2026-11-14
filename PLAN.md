@@ -364,14 +364,15 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 ### 7.4 vspark integration (2026-11-12)
 Pulled forward from M2 so the model can be tried live. Plan: `dev-notes/plans/m2-vspark-runtime.md`.
 - **vspark gets its own behavior** (kind `learned_tracker`, label "Learned Tracking") so the runtime feels native. `[USER]`
-- **Runtime loaded lazily from this repo, not bundled into vspark**: vspark starts it through `uv` from a local checkout now, from the public git URL later. `[USER]`
+- **Runtime loaded lazily from this repo, not bundled into vspark**: vspark starts it through `uv` from a local checkout now, from the public git URL later. `[USER]` The "public git URL later" part (`uvx --from git+...`) is superseded (2026-11-14) by the release asset download below; that route installs the code only, without models.
+- **vspark downloads the runtime release asset itself** (`motiontracker-runtime-<version>.zip`: `core/` + `service/` at the tag plus model bundles, run with `uv run --project motiontracker-<version>/service mtservice`). The version is pinned by vspark (`packages/backend/src/behaviors/learned_tracker/download.ts`, `MOTIONTRACKER_RUNTIME`) and updated together with vspark. `[USER]` (2026-11-14) First release v0.1.0 (2026-11-14).
 - **Output: VMC** (OSC over localhost UDP); confidence and presence under an own OSC namespace. `[USER]` ("VMC if that's the most suitable format")
 - **Control over the child process's stdin/stdout** (JSON lines: start/stop, camera, avatar; status and camera list back). WebSocket deferred to the browser viewer. `[USER]` (deviates for now from §7.2's WebSocket-first shape)
 - **Avatar rest pose passed by vspark at start** (limb rest directions for MHR → VRM), VRoid rest as the default. `[USER]` All CC0 VRoid samples share the same rest offsets from an ideal T-pose (upper arm 2.7, forearm 4.7, hand ~8.3 deg).
 - **The model drives every bone it predicts**, head included; vspark's mixer combines it with other sources. `[USER]`
 - **First model: m1-v10.** `[USER]`
-- Weights stay in this repo's gitignored `data/`; vspark never holds them. `[CLAUDE]`
-- Repo made public 2026-11-12 without a license yet (all rights reserved). Weights to be published separately later (release asset with model card), never CMU-derived data. `[USER]`
+- Weights stay in this repo's gitignored `data/`; vspark never holds them. `[CLAUDE]` Superseded 2026-11-14: weights are published as release assets (§9 #9) and vspark downloads them inside the runtime asset.
+- Repo made public 2026-11-12 without a license yet (all rights reserved). Weights to be published separately later (release asset with model card), never CMU-derived data. `[USER]` Published from v0.1.0 (2026-11-14, §9 #9).
 
 ### 7.5 Face and hands in the runtime (2026-11-12)
 Plan: `dev-notes/plans/m2-face-hands.md`. Model stays m1-v10 for the body. `[USER]`
