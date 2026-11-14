@@ -126,7 +126,9 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
 - **Asynchronous update rates** per part (e.g. hands at lower rate when compute-tight): each head receives time since its last update. `[CLAUDE]`
 
 ### 3.4 Head ↔ merger interface
-- Heads output **rotations + per-bone confidence**, optionally a small latent. Merger predicts **residual corrections** to head rotations. `[CLAUDE]`
+- Heads output **rotations + per-bone confidence**, optionally a small latent. Merger predicts **residual corrections** to head rotations. `[USER]` (2026-11-14: corrections on top of the combined head outputs, `mttrain.hands.wrist`'s combination as the starting point)
+- **First merger (M4, 2026-11-14): body + hands + head/face.** Joins the body model (`m1`) and the pair hand model (`p3`): forearm twist, wrist, body pose preferred where hand confidence is low, hands/arms kept out of the body (the correction data of §5.6); plus neck/head and the face (blendshapes as input). `[USER]`
+- **Merger inputs, first version: head outputs only** (rotations, confidences, the hand model's image position and size); internal features follow as a second step with feature dropout. `[USER]` (2026-11-14)
   - Reasons: swappable sources (e.g. ARKit can plug in as an alternative head module), staged training, graceful degradation if merger is off, confidence-weighted fusion at shared joints.
   - Owner noted swapped-in sources could still get a trained **adapter** even with a latent interface; accepted the point. `[USER]`
 - **Merger taps heads' internal layers** (pooled penultimate features) in addition to rotations. Owner's idea `[USER]`; Claude agreed.
