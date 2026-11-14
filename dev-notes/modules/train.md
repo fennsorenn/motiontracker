@@ -4,6 +4,8 @@ Location: `train/` (uv project, package `mttrain`, CUDA PyTorch). Builds M1 trai
 
 All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) and are never committed.
 
+WIP (started 2026-11-14, branch `feature/legs-root`): leg outputs, a hip position and an up direction for the body model (`skeleton`, `model`, `losses`, `train` (adds `--resume`), `dataset`, `gpugen`), next run `m1-v12`. Plan: `plans/legs-root.md`; decisions `PLAN.md` §3.9. The tables below still describe the 17-joint model.
+
 ## Pipeline (in order)
 | Module | Role |
 |---|---|

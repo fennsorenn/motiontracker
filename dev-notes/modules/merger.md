@@ -4,6 +4,8 @@ Location: `train/src/mttrain/merger/` (part of the `train` uv project, `modules/
 
 Status (2026-11-14): first full models `mg1` and `mg2` trained and evaluated on all rendered sets; not in the live runtime (`service/`, follow-up plan once a checkpoint is accepted). Branch `feature/m4-merger`.
 
+WIP (started 2026-11-14, branch `feature/legs-root`): legs, hip position and up direction as merger inputs (from the body model) and residual outputs, gap calibration for them, retrain as `mg3`. Plan: `plans/legs-root.md`; decisions `PLAN.md` §3.9.
+
 Data (gitignored): `data/merger/` (`pool/`, `calib/`, `runs/<name>/`, `eval/<run>/`); comparison videos `data/videos/<session>-<run>/`.
 
 ## Design (owner decisions, 2026-11-14)
