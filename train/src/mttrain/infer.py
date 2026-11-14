@@ -23,7 +23,7 @@ from mtcore.mhr import load, skeleton_state
 from mtcore.paths import AVATARS
 from mtcore.vrm import load_vrm
 
-from .model import Lifter
+from .model import load_lifter, pad_joints
 from .skeleton import OUT_JOINTS, PARENT_IDX
 
 # VRM bones the model drives; legs, feet, eyes and fingers would only be the rest pose
@@ -48,9 +48,9 @@ def read_session(path):
 class Runner:
     def __init__(self, ckpt_path, avatar="AvatarSample_D"):
         ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        self.model = Lifter()
-        self.model.load_state_dict(ck["model"])
+        self.model = load_lifter(ck)
         self.model.eval()
+        self.aux = None  # root position / up of the last predict (m1-v12+), else None
         self.ch = load()
         rest = skeleton_state(self.ch, np.zeros(len(self.ch.parameter_transform.names)))
         self.pose = LifterPose(OUT_JOINTS, PARENT_IDX, self.ch.skeleton.joint_names, self.ch.skeleton.joint_parents,
@@ -62,7 +62,9 @@ class Runner:
         idx, age = history_indices(times, np.arange(len(times)))
         x = torch.from_numpy(model_input(feats, idx, age))
         with torch.no_grad():
-            rot, ls = self.model(x)
+            out = self.model(x)
+        rot, ls = pad_joints(*out[:2])
+        self.aux = {k: v.numpy().astype(np.float64) for k, v in out[2].items()} if len(out) > 2 else None
         return rot.numpy().astype(np.float64), torch.exp(-ls).numpy()
 
     def mhr_globals(self, rot):

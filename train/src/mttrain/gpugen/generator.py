@@ -81,7 +81,7 @@ class GpuGenerator:
         fps, mp, seated = self.crop(B)
         out = self.observe(mp, fps)
         return dict(x=out["x"], rot=out["rot"], pos=out["pos"], off=out["off"], cof=out["cof"], dt=out["dt"],
-                    seated=seated.float())
+                    root=out["root"], up=out["up"], seated=seated.float())
 
     def crop(self, B, fps=None, smooth_life=False):
         """Source crops: detector rates (B,) (random unless given), seated MHR parameters (B, N, P) at SRC_FPS,
@@ -142,6 +142,7 @@ class GpuGenerator:
         st_t = states.gather(1, tgt[..., None, None].expand(B, K, *states.shape[2:]))
         rot, pos, off = self.targets(st_t, R)
         cof = self.targets.contact_offsets(st_t, R, self.lm(st_t))
+        root, up = self.targets.root(st_t, R, t)
         feats = GF.frame_features(times, W, Im, vis, present, valid, style.head3d)
         idx, age = GF.history_indices(times, tgt)
         # session start: no history before a random point, for 10% of samples
@@ -155,5 +156,5 @@ class GpuGenerator:
         prev = tz.gather(1, (tgt[:, :1] - 1).clamp_min(0))
         tt = tz.gather(1, tgt)
         dt_out = torch.diff(tt, dim=1, prepend=prev)
-        return dict(x=x, rot=rot, pos=pos, off=off, cof=cof, dt=dt_out, times=times, valid=valid, states=states,
+        return dict(x=x, rot=rot, pos=pos, off=off, cof=cof, dt=dt_out, root=root, up=up, times=times, valid=valid, states=states,
                     tgt=tgt, R=R, t=t, fx=fx)

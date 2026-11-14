@@ -26,7 +26,7 @@ from mtcore.paths import AVATARS
 from mtcore.vrm import load_vrm
 
 from .infer import OUTPUT_BONES, read_session
-from .model import Lifter
+from .model import load_lifter
 from .skeleton import OUT_JOINTS, PARENT_IDX
 
 DEFAULT_AVATAR = "AvatarSample_D"  # VRoid CC0 sample; all VRoid samples share the same arm rest directions
@@ -34,9 +34,10 @@ DEFAULT_AVATAR = "AvatarSample_D"  # VRoid CC0 sample; all VRoid samples share t
 
 def export(ckpt_path, out):
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    model = Lifter()
-    model.load_state_dict(ck["model"])
+    model = load_lifter(ck)
     model.eval()
+    if model.root:  # m1-v12+: the root position and up heads as extra outputs; the runtime does not read them yet
+        raise NotImplementedError("export of root/leg models: the live runtime does not consume them yet")
     out.mkdir(parents=True, exist_ok=True)
     x = torch.zeros(1, len(OFFSETS), FRAME_DIM + 2)
     torch.onnx.export(model, (x,), str(out / "model.onnx"), dynamo=False, opset_version=17,

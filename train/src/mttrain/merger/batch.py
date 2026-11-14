@@ -40,7 +40,7 @@ from ..hands.model2 import HISTORY, PairNet, scenes
 from ..hands.motion import HandMotion
 from ..hands.observe2 import PairObserver
 from ..hands.skeleton import HandFK
-from ..model import Lifter
+from ..model import load_lifter, pad_joints
 from ..seated import HEAD_LIFE, HEAD_LIFE_TAU, HEAD_MOVES, HEAD_SHARES
 from ..skeleton import OUT_JOINTS, PARENT_IDX
 
@@ -294,8 +294,7 @@ class MergerBatches:
             self.gap = sd.to(self.dev)
         # frozen part models
         ck = torch.load(m1, map_location="cpu", weights_only=False)
-        self.m1 = Lifter().to(self.dev).eval()
-        self.m1.load_state_dict(ck["model"])
+        self.m1 = load_lifter(ck).to(self.dev).eval()
         sd = torch.load(p3, map_location="cpu")["model"]
         self.p3 = PairNet(frame_dim=sd["frame.0.weight"].shape[1]).to(self.dev).eval()
         self.p3.load_state_dict(sd)
@@ -442,7 +441,8 @@ class MergerBatches:
         obs, truth = self.hands_obs(hands, body_lm, self.gen, camera=(R, t, fx))
 
         # body model at the K target frames
-        rot, log_s = self.m1(ob["x"])  # (B, K, 17, 3, 3), (B, K, 17)
+        m1_out = self.m1(ob["x"])
+        rot, log_s = pad_joints(*m1_out[:2])  # older body models: legs at rest, no confidence  # (B, K, 17, 3, 3), (B, K, 17)
         if gap:
             rot = self.degrade(rot)
         rot = self.jitter(rot, jitter_deg)
