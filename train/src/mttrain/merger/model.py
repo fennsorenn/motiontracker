@@ -106,9 +106,10 @@ def load_merger(ck):
 def apply_root(root, up, out):
     """Body model root (..., 3) and up (..., 3), merger output -> corrected root and up."""
     r = out["root_res"]
-    z = root[..., 2] * torch.exp(r[..., 2])
-    x = (root[..., 0] / root[..., 2] + r[..., 0]) * z
-    y = (root[..., 1] / root[..., 2] + r[..., 1]) * z
+    z0 = root[..., 2].clamp_min(0.1)  # in front of the camera
+    z = z0 * torch.exp(r[..., 2])
+    x = (root[..., 0] / z0 + r[..., 0]) * z
+    y = (root[..., 1] / z0 + r[..., 1]) * z
     return torch.stack([x, y, z], -1), nn.functional.normalize(up + out["up_res"], dim=-1)
 
 

@@ -172,6 +172,9 @@ def main():
         b = tb.sample(a.batch, jitter_deg=a.jitter_deg, gap=not a.no_gap)
         L, ls, f, fs, aux = run(model, b)
         loss, parts = loss_fn(b, L, ls, f, fs, box, w, aux)
+        if not torch.isfinite(loss):  # one bad batch must not poison the run (mg3 went NaN at ~4500 steps)
+            print(f"step {step}: non-finite loss, skipped", flush=True)
+            continue
         opt.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

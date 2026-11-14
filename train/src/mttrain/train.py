@@ -104,6 +104,9 @@ def main():
         batch = {k: v.to(dev, non_blocking=True) for k, v in batch.items()}
         rot, ls, aux = model(batch["x"])
         loss, parts = losses(rot, ls, batch, box, WEIGHTS, aux)
+        if not torch.isfinite(loss):  # one bad batch must not poison the run (mg3 went NaN at ~4500 steps)
+            print(f"step {step}: non-finite loss, skipped", flush=True)
+            continue
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

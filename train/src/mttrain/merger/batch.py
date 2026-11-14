@@ -304,8 +304,10 @@ class MergerBatches:
                 if ref in g:
                     sd[J[j]] = extra(ref) / MEDIAN_CHI3
             self.gap = sd.to(self.dev)
-            if "root_xy_cm" in g:  # root position (image plane, depth; cm) and up (deg): extra noise like the joints'
-                self.gap_root = {"xy": extra("root_xy_cm") / 100 / 1.177, "z": extra("root_z_cm") / 100 / 0.674,
+            if "root_logz" in g:  # root position (image plane, depth; cm) and up (deg): extra noise like the joints'
+                # depth fails as a scale (apparent size; real renders 1.1-1.5x too far): log-depth noise, with x and y
+                # moving along their viewing ray, then the image-plane error on top
+                self.gap_root = {"xy": extra("root_xy_cm") / 100 / 1.177, "logz": extra("root_logz") / 0.674,
                                  "up": math.radians(extra("up_deg")) / 1.177}
         # frozen part models
         ck = torch.load(m1, map_location="cpu", weights_only=False)
@@ -439,7 +441,8 @@ class MergerBatches:
                 ar[:, k] = GAP_RHO * ar[:, k - 1] + eps[:, k]
             return off + ar
         d = drift(6)
-        root = root + torch.cat([d[..., :2] * self.gap_root["xy"], d[..., 2:3] * self.gap_root["z"]], -1)
+        root = root * torch.exp(d[..., 2:3] * self.gap_root["logz"])  # along the viewing ray
+        root = root + torch.cat([d[..., :2] * self.gap_root["xy"], torch.zeros_like(d[..., 2:3])], -1)
         up = (rotvec_to_mat(d[..., 3:] * self.gap_root["up"]) @ up[..., None])[..., 0]
         return root, up
 

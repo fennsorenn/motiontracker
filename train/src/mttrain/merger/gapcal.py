@@ -21,7 +21,7 @@ runner = Runner(M1)
 if runner.model.n_out > 17:
     J += LEGS
 te = TargetExtractor(jn, skeleton_state(ch, np.zeros(len(pn))))
-RX = ["root_xy_cm", "root_z_cm", "up_deg"]
+RX = ["root_xy_cm", "root_z_cm", "root_logz", "up_deg"]  # root_logz: |log(predicted / true depth)|
 rest = skeleton_state(ch, np.zeros(len(pn)))
 idxJ = [jn.index(j) for j in OUT_JOINTS]
 rest_g = quat_to_mat(torch.tensor(rest[idxJ, 3:7], dtype=torch.float32))
@@ -49,6 +49,7 @@ for setd in ["../data/m1/renders/v1", "../data/m1/renders/rest1", "../data/m1/re
             d = (runner.aux["root"] - rt) * 100
             real["root_xy_cm"].append(np.linalg.norm(d[:, :2], axis=-1)[present])
             real["root_z_cm"].append(np.abs(d[:, 2])[present])
+            real["root_logz"].append(np.abs(np.log(np.clip(runner.aux["root"][:, 2], 0.05, None) / rt[:, 2]))[present])
             real["up_deg"].append(np.degrees(np.arccos(np.clip((runner.aux["up"] * ut).sum(-1), -1, 1)))[present])
 mb = MergerBatches("val", "cuda", seed=9, pool=Path(sys.argv[1]), m1=M1)
 syn = {j: [] for j in J + RX}
@@ -58,6 +59,7 @@ for _ in range(8):
         d = (b["body"]["root"] - b["target"]["root"]) * 100
         syn["root_xy_cm"].append(d[..., :2].norm(dim=-1).flatten().cpu().numpy())
         syn["root_z_cm"].append(d[..., 2].abs().flatten().cpu().numpy())
+        syn["root_logz"].append(torch.log(b["body"]["root"][..., 2].clamp_min(0.05) / b["target"]["root"][..., 2]).abs().flatten().cpu().numpy())
         syn["up_deg"].append(torch.rad2deg(torch.acos((b["body"]["up"] * b["target"]["up"]).sum(-1).clamp(-1, 1))).flatten().cpu().numpy())
     G, Gt = globals_from_locals(b["body"]["rot"]), globals_from_locals(b["target"]["rot"])
     for j in J:
