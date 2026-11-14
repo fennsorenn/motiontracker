@@ -1,6 +1,6 @@
 # Plan: learned merger (body + hands + head/face)
 
-> Branch: `feature/m4-merger` · Status: draft (open decisions below need the owner)
+> Branch: `feature/m4-merger` · Status: in progress
 
 ## Goal
 
@@ -35,25 +35,19 @@ against the chest (which `m1` under-reads, head-vs-chest slope ~0.2 against a ta
 - No synthetic face mesh exists yet. No paired data of expressions and body motion exists (needs the ARKit + webcam
   recordings, `PLAN.md` §3.11).
 
-## Open decisions (owner)
+## Decisions on the design (owner, 2026-11-14)
 
-1. **Head observation.** (a) Recommended: reduce the face mesh to a head pose (rotation, plus position and scale in
-   the image) by fitting MediaPipe's canonical face model (Apache-2.0) to the 478 points, at runtime and on renders;
-   in training, simulate that head pose from the true head with an error model calibrated on the renders (`head1` and
-   the others), like the hand calibration. (b) Simulate the face points themselves from MHR's head mesh (needs a
-   vertex correspondence to MediaPipe's topology) and let the merger read a subset. More faithful, much more work.
-2. **Blendshapes in training.** Synthetic data can't pair expressions with motion. (a) Recommended: feed real
-   recorded blendshape sequences (independent of the motion) with dropout, so the slot exists, the merger stays
-   robust to them, and it learns from them once paired recordings arrive. (b) Keep the slot always empty until then.
-   Either way blendshapes pass through to the output unchanged in this version.
-3. **Time.** (a) Recommended: a short history of the part outputs at a few time offsets (like `m1`), so twist, rest
-   and clipping decisions can use motion and how long confidence has been low. (b) Per frame only, temporal state
-   left to the part models (`PLAN.md` §3.6 `[CLAUDE]`).
-4. **Training data.** Recommended: a new merger pool of full MHR parameter sequences (resumable shards): `m1`'s body
-   sources (seated clips, choreography, head moves) with procedural fingers, plus `hands.stage`/`hands.pairs`
-   sequences with torso and head motion added. Observations and the frozen part models run on the GPU per batch.
-   Clipping correction: part of the samples get observed hands pushed into the body (as MediaPipe does near the
-   skin) while the target stays outside it.
+1. **Head observation: head pose from the face mesh.** Fit MediaPipe's canonical face model (Apache-2.0) to the 478
+   points (rotation, plus position and scale in the image), at runtime and on renders; in training, simulate that head
+   pose from the true head with an error model calibrated on the rendered sets. (Rejected for now: simulating the face
+   points from MHR's head mesh.)
+2. **Blendshapes in training: real, unpaired.** Real recorded blendshape sequences, independent of the motion, with
+   dropout. Blendshapes pass through to the output unchanged in this version.
+3. **Time: short history** of the part outputs at a few time offsets (like `m1`).
+4. **Training data: a new combined pool** of full MHR parameter sequences (resumable shards): `m1`'s body sources
+   with procedural fingers, plus `hands.stage`/`hands.pairs` sequences with torso and head motion added.
+   Observations and the frozen part models run on the GPU per batch. Clipping correction: part of the samples get
+   observed hands pushed into the body while the target stays outside it.
 
 ## Approach
 
