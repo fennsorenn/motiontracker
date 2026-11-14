@@ -49,7 +49,7 @@ def last3(x):
 def loss_fn(b, L, ls, f, fs, box, w):
     tg = {k: last3(v) for k, v in b["target"].items() if k not in ("seated",)}
     tg["seated"] = b["target"]["seated"]
-    total, parts = body_losses(L, ls, tg, box, WEIGHTS)
+    total, parts = body_losses(L, ls, tg, box, {**WEIGHTS, "con": w.get("con", WEIGHTS["con"])})
     G, P = fk(L, tg["off"])
     Gt, Pt = fk(tg["rot"], tg["off"])
     l_glob = torch.rad2deg(geodesic(G[..., GLOBAL_J, :, :], Gt[..., GLOBAL_J, :, :])).mean() / 10.0
@@ -108,6 +108,7 @@ def main():
     ap.add_argument("--w-glob", type=float, default=1.0)
     ap.add_argument("--w-fing", type=float, default=1.0)
     ap.add_argument("--w-acc", type=float, default=2.0)
+    ap.add_argument("--w-con", type=float, default=WEIGHTS["con"], help="contact loss (hand-hand, hand-face points)")
     ap.add_argument("--val", type=int, default=16, help="validation batches (of --batch / 2)")
     ap.add_argument("--eval-every", type=int, default=1000)
     ap.add_argument("--device", default="cuda:1")
@@ -132,7 +133,7 @@ def main():
     warm = 500
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / warm) * 0.5 * (1 + torch.cos(torch.tensor(min(s, a.steps) / a.steps * 3.14159)).item()))
-    w = {"glob": a.w_glob, "fing": a.w_fing, "acc": a.w_acc}
+    w = {"glob": a.w_glob, "fing": a.w_fing, "acc": a.w_acc, "con": a.w_con}
     cfg = vars(a)
     start, best = 0, float("inf")
     if a.resume and (out / "last.pt").exists():
