@@ -93,6 +93,15 @@ class CanonicalFace:
         self.weights = np.array(weights)
         self.points = verts[self.ids] @ FLIP.T  # the Procrustes points in camera-like axes
 
+    @classmethod
+    def from_arrays(cls, points, ids, weights):
+        """From the Procrustes points (camera-like axes), ids and weights alone (merger bundles carry these)."""
+        c = cls.__new__(cls)
+        c.vertices = None
+        c.points = np.asarray(points, dtype=np.float64)
+        c.ids, c.weights = np.asarray(ids), np.asarray(weights, dtype=np.float64)
+        return c
+
 
 def image_points(face, aspect=ASPECT):
     """Face landmarks (..., >=468, 3) normalized -> camera-frame points in frame widths, origin at the image centre."""
