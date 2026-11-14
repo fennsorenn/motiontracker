@@ -46,7 +46,8 @@ from ..skeleton import OUT_JOINTS, PARENT_IDX
 
 MERGER = DATA / "merger"
 FPS = 10.0  # detector rate (the hand model is trained at 10 Hz)
-K = 10  # target frames per sample: merger history offsets up to 8 frames back, plus one for velocity
+K = 11  # target frames per sample: merger history offsets up to 8 frames back, at the newest three frames
+# (velocity and acceleration losses)
 P_POOL = 0.5  # share of samples from the merger pool (hand events) vs the body model's sources
 SRC_FPS = 30.0
 MIRROR = torch.diag(torch.tensor([-1.0, 1.0, 1.0]))
@@ -307,8 +308,24 @@ class MergerBatches:
         present = torch.isfinite(out).all(-1) & ~drop
         return torch.where(present[..., None], out.nan_to_num(), torch.zeros_like(out)), present
 
+    def jitter(self, R, deg):
+        """Small random rotations (sd `deg` per axis) applied to rotations (..., 3, 3): the merger's input jitter
+        (owner, 2026-11-14: jitter on the input, none on the output)."""
+        if deg <= 0:
+            return R
+        v = torch.randn(R.shape[:-2] + (3,), generator=self.gen, device=self.dev) * math.radians(deg)
+        a = v.norm(dim=-1, keepdim=True).clamp_min(1e-9)
+        k = v / a
+        Kx = torch.zeros(R.shape, device=self.dev)
+        Kx[..., 0, 1], Kx[..., 0, 2], Kx[..., 1, 2] = -k[..., 2], k[..., 1], -k[..., 0]
+        Kx = Kx - Kx.transpose(-1, -2)
+        a = a[..., None]
+        return R @ (torch.eye(3, device=self.dev) + a.sin() * Kx + (1 - a.cos()) * (Kx @ Kx))
+
     @torch.no_grad()
-    def sample(self, B):
+    def sample(self, B, jitter_deg=0.0):
+        """`jitter_deg`: extra input jitter on the part rotations (body locals, hand wrists, face head), before the
+        base combination, so base and inputs agree."""
         dev = self.dev
         mp, src = self.sources(B)
         fps = torch.full((B,), FPS, device=dev)
@@ -325,6 +342,7 @@ class MergerBatches:
 
         # body model at the K target frames
         rot, log_s = self.m1(ob["x"])  # (B, K, 17, 3, 3), (B, K, 17)
+        rot = self.jitter(rot, jitter_deg)
         # hand model: a HISTORY window ending at each target frame (newest first)
         win = tgt[:, :, None] - torch.arange(HISTORY, device=dev)[None, None]  # (B, K, H)
         g = lambda x: x.gather(1, win.reshape(B, -1).reshape(B, K * HISTORY, *([1] * (x.dim() - 2))).expand(
@@ -337,7 +355,7 @@ class MergerBatches:
         for i, s in enumerate("lr"):
             sl = slice(i * BK, (i + 1) * BK)
             F = out["rot"][sl] if s == "l" else unmirror_frame(out["rot"][sl])
-            hand[s] = {"G": (F.transpose(-1, -2) @ self.F_rest[s]).reshape(B, K, 3, 3),
+            hand[s] = {"G": self.jitter((F.transpose(-1, -2) @ self.F_rest[s]).reshape(B, K, 3, 3), jitter_deg),
                        "rot_log_s": out["rot_log_s"][sl].reshape(B, K),
                        "fingers": out["fingers"][sl].reshape(B, K, -1),
                        "fingers_log_s": out["fingers_log_s"][sl].reshape(B, K, -1),
@@ -348,7 +366,7 @@ class MergerBatches:
         G_head_true = R[:, None] @ Gt @ self.rest_head.T
         hG, hc, hs, hseen = self.head_obs(G_head_true, st[:, :, self.head, :3] / 100.0, R, t, fx, ob["valid"][:, :Tv])
         pick = lambda x: x.gather(1, tgt.reshape(B, K, *([1] * (x.dim() - 2))).expand(B, K, *x.shape[2:]))
-        head = {"G": pick(hG), "centre": pick(hc), "log_scale": pick(hs), "seen": pick(hseen)}
+        head = {"G": self.jitter(pick(hG), jitter_deg), "centre": pick(hc), "log_scale": pick(hs), "seen": pick(hseen)}
         bs, bs_present = self.blendshapes(B, K)
 
         base = combine(rot, {s: hand[s]["G"] for s in "lr"}, {s: hand[s]["rot_log_s"] for s in "lr"},
@@ -356,5 +374,6 @@ class MergerBatches:
         true_fingers = torch.stack([pick(mpd)[..., self.fing[s]] for s in "lr"], 2)  # (B, K, 2, 27)
         return {"body": {"rot": rot, "log_s": log_s}, "hand": hand, "head": head,
                 "blend": {"values": bs, "present": bs_present}, "base": base, "src": src,
-                "target": {"rot": ob["rot"], "pos": ob["pos"], "off": ob["off"], "fingers": true_fingers,
+                "target": {"rot": ob["rot"], "pos": ob["pos"], "off": ob["off"], "cof": ob["cof"], "fingers": true_fingers,
+                           "seated": torch.ones(B, device=dev),
                            "inside": truth["inside"].gather(1, tgt[..., None].expand(B, K, 2))}}
