@@ -127,3 +127,19 @@ Merge into `dev` when the owner accepts the evaluation.
     (51 -> 44 deg). Remaining in-view wrist gap (~4 deg where the hand model is moderately confident): the hand
     model is slightly worse on synthetic data than on renders in that band (28 vs 24 deg) and the degraded body
     wrist slightly too far off (69 vs 65 deg); calibration levers for later.
+- Step 2 done: merger pool 1228 train / 93 val sequences (20 s, 30 fps; ~20% redrawn as before).
+- Step 5/6 (2026-11-14, overnight): full runs on the pool, 20000 steps each (~50 min on the RTX 4060), evaluated on all
+  rendered sets with real Holistic output (`tools/merger/eval.sh`, summary `data/merger/eval/<run>/summary.md`) and
+  rendered as comparison videos with face (`tools/merger/video.sh`: webcam | hand-written combination | merger).
+  - `mg1` (pilot-3 setup): validation wrists 27 deg (base 48-54 with the gap noise), forearm 13 (45), spine 3 (17),
+    contacts 8 cm (23), limit violations 1% (41%), output acceleration 1.70 cm vs the truth's 1.50 (base 3.88).
+  - `mg2` (contact weight 2 -> 0.5, wrist/head global weight 1 -> 3): about level with `mg1`.
+  - Rendered sets (median global error, deg; body model / base / mg1 / mg2): lower arms better everywhere except
+    rest1-left (pairs3 55 -> 35-37, hands3 28-37 -> 23-29, contact1 32-36 -> 27-32, rest1-right 40 -> 32); upper
+    arms mostly better; head better on contact1, hands3, head1 (12.5 -> 10.6-11.4), slightly worse on rest1 and
+    v1 (+0.5-1); hands: pairs3 49 -> 36-38, hands3 and rest1 level, worse on contact1 (49 -> 54-56), head1
+    (39 -> 48) and v1 (47 -> 49-50).
+  - Open: on contact1 the merger overrides even confident hand-model wrists (hand model 15 deg, merger 28 where its
+    scale is < 15 deg); not the contact loss (`mg2`). Next suspects: the training data near the face (hands at the
+    face come only from the body model's choreography source, with procedural fingers) and the hand model's
+    confidence calibration on synthetic data (worse there than on renders in the 15-50 deg band).
