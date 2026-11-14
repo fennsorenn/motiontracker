@@ -78,19 +78,35 @@ class GpuGenerator:
 
     @torch.no_grad()
     def sample(self, B):
-        dev, K = self.dev, self.K
-        fps = torch.where(torch.rand(B, generator=self.gen, device=dev) < 0.5, torch.full((B,), 10.0, device=dev),
-                          self._u(B, self.min_fps, self.max_fps))
-        dur = OFFSETS[-1] + K / fps + 0.6
+        fps, mp, seated = self.crop(B)
+        out = self.observe(mp, fps)
+        return dict(x=out["x"], rot=out["rot"], pos=out["pos"], off=out["off"], cof=out["cof"], dt=out["dt"],
+                    seated=seated.float())
+
+    def crop(self, B, fps=None, smooth_life=False):
+        """Source crops: detector rates (B,) (random unless given), seated MHR parameters (B, N, P) at SRC_FPS,
+        seated (B,). `smooth_life`: low-pass the seater's idle signals (jitter-free targets, merger)."""
+        dev = self.dev
+        f = torch.where(torch.rand(B, generator=self.gen, device=dev) < 0.5, torch.full((B,), 10.0, device=dev),
+                        self._u(B, self.min_fps, self.max_fps))
+        fps = f if fps is None else torch.full((B,), float(fps), device=dev)
         clip = torch.multinomial(self.p, B, replacement=True, generator=self.gen)
         s0 = torch.floor(torch.rand(B, generator=self.gen, device=dev) * (self.lens[clip] - self.N + 1)).long()
         rows = self.start[clip, None] + s0[:, None] + torch.arange(self.N, device=dev)[None]
         seated = torch.rand(B, generator=self.gen, device=dev) < self.p_seated
         choreo = self.is_choreo[clip]
-        mp = self.seater(self.gen, self.mp[rows], seated & ~choreo, SRC_FPS)
-        seated = seated | choreo
+        mp = self.seater(self.gen, self.mp[rows], seated & ~choreo, SRC_FPS, smooth_life=smooth_life)
+        return fps, mp, seated | choreo
 
-        times, valid = self.frame_times(fps, dur)
+    @torch.no_grad()
+    def observe(self, mp, fps, drop_rate=0.03):
+        """Source crops (B, N, P) at SRC_FPS, detector rates (B,) -> model input x (B, K, ...) for the last K
+        detector frames, their targets, and the detector frames (times, valid, states, target frame indices) and
+        camera (R, t, fx) for other observers (merger)."""
+        dev, K = self.dev, self.K
+        B = mp.shape[0]
+        dur = OFFSETS[-1] + K / fps + 0.6
+        times, valid = self.frame_times(fps, dur, drop_rate)
         tz = torch.where(valid, times, torch.zeros_like(times))
         src = torch.round(tz * SRC_FPS).long().clamp(max=self.N - 1)
         states = self.fk(mp.gather(1, src[..., None].expand(B, self.Tmax, mp.shape[-1])))  # (B, T, J, 8)
@@ -136,4 +152,5 @@ class GpuGenerator:
         prev = tz.gather(1, (tgt[:, :1] - 1).clamp_min(0))
         tt = tz.gather(1, tgt)
         dt_out = torch.diff(tt, dim=1, prepend=prev)
-        return dict(x=x, rot=rot, pos=pos, off=off, cof=cof, dt=dt_out, seated=seated.float())
+        return dict(x=x, rot=rot, pos=pos, off=off, cof=cof, dt=dt_out, times=times, valid=valid, states=states,
+                    tgt=tgt, R=R, t=t, fx=fx)
