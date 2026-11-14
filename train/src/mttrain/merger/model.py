@@ -7,8 +7,9 @@ position, log size, lost flag and detector score, the face head pose (6D global)
 and the blendshapes with a present flag. History: frames at OFFSETS back (10 Hz), each encoded by one frame MLP plus
 an offset embedding, with the differences between neighbouring offsets (like `mttrain.model.Lifter`).
 
-Outputs at the newest frame: per body joint a 6D residual (applied to the base local: L = L_base R(res)) and a log
-scale; per hand finger residuals (on the hand model's fingers) and log scales. The last layer starts at zero: an
+Outputs at the newest frame: per body joint a 6D residual applied to the base pose's global rotation (G = G_base
+R(res); locals follow), so correcting a forearm leaves the hand's global orientation from the hand model in place
+(pilot, 2026-11-14: local residuals pulled hand-model wrists off by ~6 deg); and a log scale; per hand finger residuals (on the hand model's fingers) and log scales. The last layer starts at zero: an
 untrained merger returns the base pose. Blendshapes pass through unchanged (not output here).
 """
 
@@ -18,6 +19,7 @@ from torch import nn
 from ..hands.model import OUT_IDX
 from ..model import IDENTITY_6D, rot6d_to_mat
 from ..skeleton import OUT_JOINTS
+from .batch import globals_from_locals, locals_from_globals
 
 OFFSETS = (0, 1, 2, 4, 8)  # frames back at 10 Hz
 NJ = len(OUT_JOINTS)
@@ -76,9 +78,14 @@ def history(feats, newest):
     return feats[:, [newest - o for o in OFFSETS]]
 
 
+def corrected(base, res):
+    """Base locals (..., NJ, 3, 3) and global residuals -> corrected locals."""
+    return locals_from_globals(globals_from_locals(base) @ res)
+
+
 def apply(model, b, feats, newest):
     """Merger output at frame `newest` -> body locals (B, NJ, 3, 3), log scales, fingers (B, 2, NF) and log scales."""
     out = model(history(feats, newest))
-    L = b["base"][:, newest] @ out["res"]
+    L = corrected(b["base"][:, newest], out["res"])
     fingers = torch.stack([b["hand"][s]["fingers"][:, newest] for s in "lr"], 1) + out["fingers_res"]
     return L, out["log_s"], fingers, out["fingers_log_s"]

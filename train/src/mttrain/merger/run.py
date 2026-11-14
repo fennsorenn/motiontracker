@@ -31,7 +31,7 @@ from ..hands.model import OUT_IDX
 from ..hands.skeleton import HandFK
 from ..infer import OUTPUT_BONES, Runner
 from .batch import MERGER, blend_bank, combine, unmirror_frame
-from .model import OFFSETS, Merger, frame_inputs
+from .model import OFFSETS, Merger, corrected, frame_inputs
 
 M1 = DATA / "m1" / "runs" / "m1-v10" / "best.pt"
 P3 = DATA / "m4" / "runs" / "p3" / "best.pt"
@@ -134,7 +134,7 @@ def main():
     idx = torch.tensor([[max(0, t - o) for o in OFFSETS] for t in range(T)])
     with torch.no_grad():
         out = model(feats[0, idx])  # (T, n_offsets, D) -> per frame
-    L = (b["base"][0] @ out["res"]).numpy().astype(np.float64)
+    L = corrected(b["base"][0], out["res"]).numpy().astype(np.float64)
     fingers = {}
     for k, s in enumerate("lr"):
         q = np.zeros((T, 27), np.float32)
