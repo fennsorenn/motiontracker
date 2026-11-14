@@ -435,7 +435,7 @@ Branch `feature/merger-runtime`. Merger decisions: §3.4; legs/hip/up: §3.9.
 | 6 | **v1 knob set** | Owner | Suggested: responsiveness, prediction horizon, seated/standing context. |
 | 7 | **100STYLE license** | — | Check Zenodo page if still wanted. |
 | 8 | **MakeHuman asset license**, **MediaPipe blendshape weights license** | — | Verify against official sources. |
-| 9 | **Own project license** (likely Apache 2.0 for code + weights, with NOTICE attributions for MediaPipe/MHR) | Owner | Owner wants permissive `[USER]`; exact license open. |
+| 9 | **Own project license** (likely Apache 2.0 for code + weights, with NOTICE attributions for MediaPipe/MHR) | Owner | Owner wants permissive `[USER]`; exact license open. Weights may be published: live model bundles go out as GitHub release assets (`motiontracker-models-<version>.zip`, first v0.1.0) `[USER]` (2026-11-14); the repo has no LICENSE yet. |
 | 10 | **IMU suit purchase / ARKit recording sessions** | Owner | Optional. |
 | 11 | **Native core language** (C++ vs Rust) | Owner | After POC. |
 | 12 | **Calibration UX** (when to prompt, camera-moved detection, recalibration feel) | Owner | |
