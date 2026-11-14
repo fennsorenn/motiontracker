@@ -58,7 +58,18 @@ MAX_BEND_DEG = 100.0
 P_PUSH = 0.3  # clipping correction: share of samples whose observed hands are pushed into the body near it
 PUSH_M = (0.01, 0.04)  # push depth range (m)
 NEAR_M = 0.18  # hands closer than this to the torso or a thigh axis count as near the body
-SLOW_RHO = 0.95  # face head pose: slow error drift per 10 Hz frame (time constant ~2 s)
+SLOW_RHO = 0.95
+# body model sim-to-real gap (2026-11-14, `data/merger/calib/m1_gap.json`): on real Holistic output from the
+# renders m1-v10's arm and spine globals are 2-3x as far off as on synthetic observations (forearms 31 vs 12 deg,
+# wrists 55-65 vs 25), the head matches. The merger would learn to trust the body model too much, so its outputs are
+# degraded per joint to the real error level: an extra global rotation, GAP_OFFSET of the variance as a per-sequence
+# offset, the rest drifting (AR(1), GAP_RHO per 10 Hz frame).
+GAP_JOINTS = {"root": "c_spine3", "c_spine0": "c_spine3", "c_spine1": "c_spine3", "c_spine2": "c_spine3",
+              "c_spine3": "c_spine3", "l_clavicle": "l_uparm", "r_clavicle": "r_uparm", "l_uparm": "l_uparm",
+              "r_uparm": "r_uparm", "l_lowarm": "l_lowarm", "r_lowarm": "r_lowarm", "l_wrist_twist": "l_lowarm",
+              "r_wrist_twist": "r_lowarm", "l_wrist": "l_wrist", "r_wrist": "r_wrist"}
+GAP_OFFSET, GAP_RHO = 0.7, 0.9
+MEDIAN_CHI3 = 1.538  # median rotation angle of a rotation vector with per-axis sd 1  # face head pose: slow error drift per 10 Hz frame (time constant ~2 s)
 ARKIT = None  # blendshape names, filled from the first bank file
 
 
@@ -98,6 +109,17 @@ def slerp_mat(A, B, w):
     Kx = Kx - Kx.transpose(-1, -2)
     Rw = torch.eye(3, device=D.device) + th.sin() * Kx + (1 - th.cos()) * (Kx @ Kx)
     return A @ Rw
+
+
+def rotvec_to_mat(v):
+    """Rotation vectors (..., 3) -> matrices (..., 3, 3) (Rodrigues)."""
+    a = v.norm(dim=-1, keepdim=True).clamp_min(1e-9)
+    k = v / a
+    Kx = torch.zeros(v.shape[:-1] + (3, 3), device=v.device, dtype=v.dtype)
+    Kx[..., 0, 1], Kx[..., 0, 2], Kx[..., 1, 2] = -k[..., 2], k[..., 1], -k[..., 0]
+    Kx = Kx - Kx.transpose(-1, -2)
+    a = a[..., None]
+    return torch.eye(3, device=v.device) + a.sin() * Kx + (1 - a.cos()) * (Kx @ Kx)
 
 
 def globals_from_locals(L):
@@ -261,6 +283,15 @@ class MergerBatches:
         fc = json.load(open(face_calib))
         self.face_offset = torch.tensor(fc["offset"], dtype=torch.float32, device=self.dev)
         self.face = fc["sets"]["all"]
+        gp = MERGER / "calib" / "m1_gap.json"
+        self.gap = None
+        if gp.exists():  # extra global noise per output joint: per-axis sd (deg) from the median gap
+            g = json.load(open(gp))
+            sd = torch.zeros(len(OUT_JOINTS))
+            for j, ref in GAP_JOINTS.items():
+                extra = math.sqrt(max(g[ref]["real_p50"] ** 2 - g[ref]["syn_p50"] ** 2, 0.0))
+                sd[J[j]] = extra / MEDIAN_CHI3
+            self.gap = sd.to(self.dev)
         # frozen part models
         ck = torch.load(m1, map_location="cpu", weights_only=False)
         self.m1 = Lifter().to(self.dev).eval()
@@ -362,8 +393,24 @@ class MergerBatches:
         a = a[..., None]
         return R @ (torch.eye(3, device=self.dev) + a.sin() * Kx + (1 - a.cos()) * (Kx @ Kx))
 
+    def degrade(self, rot):
+        """Body model locals (B, K, 17, 3, 3) -> with the sim-to-real gap noise on the globals (`GAP_JOINTS`)."""
+        if self.gap is None:
+            return rot
+        B, Kf = rot.shape[:2]
+        sd = torch.deg2rad(self.gap)[None, None, :, None]
+        off = self._n(B, 1, len(OUT_JOINTS), 3) * math.sqrt(GAP_OFFSET)
+        eps = self._n(B, Kf, len(OUT_JOINTS), 3) * math.sqrt((1 - GAP_OFFSET) * (1 - GAP_RHO ** 2))
+        ar = torch.empty_like(eps)
+        ar[:, 0] = self._n(B, len(OUT_JOINTS), 3) * math.sqrt(1 - GAP_OFFSET)
+        for k in range(1, Kf):
+            ar[:, k] = GAP_RHO * ar[:, k - 1] + eps[:, k]
+        v = (off + ar) * sd
+        G = globals_from_locals(rot)
+        return locals_from_globals(rotvec_to_mat(v) @ G)
+
     @torch.no_grad()
-    def sample(self, B, jitter_deg=0.0):
+    def sample(self, B, jitter_deg=0.0, gap=True):
         """`jitter_deg`: extra input jitter on the part rotations (body locals, hand wrists, face head), before the
         base combination, so base and inputs agree."""
         dev = self.dev
@@ -396,6 +443,8 @@ class MergerBatches:
 
         # body model at the K target frames
         rot, log_s = self.m1(ob["x"])  # (B, K, 17, 3, 3), (B, K, 17)
+        if gap:
+            rot = self.degrade(rot)
         rot = self.jitter(rot, jitter_deg)
         # hand model: a HISTORY window ending at each target frame (newest first)
         win = tgt[:, :, None] - torch.arange(HISTORY, device=dev)[None, None]  # (B, K, H)

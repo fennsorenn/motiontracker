@@ -113,6 +113,7 @@ def main():
     ap.add_argument("--device", default="cuda:1")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--no-gap", action="store_true", help="no body model sim-to-real gap noise (batch.degrade)")
     ap.add_argument("--pool", default=str(MERGER / "pool"), help="merger pool directory (train.npz, val.npz)")
     a = ap.parse_args()
     dev = torch.device(a.device)
@@ -121,7 +122,7 @@ def main():
     t0 = time.time()
     from pathlib import Path
     vb = MergerBatches("val", dev, seed=1000, pool=Path(a.pool))
-    val = [vb.sample(a.batch // 2, jitter_deg=0.0) for _ in range(a.val)]
+    val = [vb.sample(a.batch // 2, jitter_deg=0.0, gap=not a.no_gap) for _ in range(a.val)]
     del vb
     tb = MergerBatches("train", dev, seed=a.seed, pool=Path(a.pool))
     box = torch.load(M1_RUN, map_location="cpu", weights_only=False)["box"].to(dev)  # the body model's limit box
@@ -150,7 +151,7 @@ def main():
             fl.write(json.dumps(rec) + "\n")
     model.train()
     for step in range(start + 1, a.steps + 1):
-        b = tb.sample(a.batch, jitter_deg=a.jitter_deg)
+        b = tb.sample(a.batch, jitter_deg=a.jitter_deg, gap=not a.no_gap)
         L, ls, f, fs = run(model, b)
         loss, parts = loss_fn(b, L, ls, f, fs, box, w)
         opt.zero_grad()
