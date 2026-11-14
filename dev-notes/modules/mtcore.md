@@ -59,7 +59,7 @@ Algorithmic, causal post-processing of MediaPipe's ARKit blendshapes (owner deci
   - Squint rescaled above a resting baseline that follows drops fast (1 s) and rises slowly (20 s).
   - Squint left/right linked to their mean when they differ by < 0.15, independent above 0.35 (`LINK_START`/`LINK_FULL`; blink no longer uses this linking).
 - Glide: smoothing-free upsampling like the harness's bone glide (`mteval.upsample`): linear from the shown value to the new one, finishing one tick before the next detector frame is expected (mean of the last 10 intervals).
-- Effect on the recorded sessions (before the f9dce9a blink fix): resting blink 0.27-0.34 → 0.02-0.06, squint 0.39-0.40 → 0.12-0.13, left/right difference 0. Numbers after the fix not recorded here; the fix makes caught blinks close fully.
+- Effect on the recorded sessions (before the f9dce9a blink fix): resting blink 0.27-0.34 → 0.02-0.06, squint 0.39-0.40 → 0.12-0.13, left/right difference 0. After the fix, blinks reaching >= 0.9 closed: seated 28 of 41 events, hands 35 of 55 (before: 0); rest stays at 0. Seated blink rate ~37/min, possibly some false blinks (to watch live).
 - Status: merged into `dev` (2026-11-14), used live via `mtservice` (`modules/service.md`).
 - Tests live with the consumer: `service/tests/test_face.py`.
 
