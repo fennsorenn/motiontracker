@@ -108,13 +108,17 @@ def main():
             A = np.stack([x, np.ones_like(x)], 1)
             (slope, bias), *_ = np.linalg.lstsq(A, y, rcond=None)
             res_all = y - (slope * x + bias)
-            ls, js = [], []
+            ls, js, means, within = [], [], [], []
             for c in cs:
                 et, eo = euler(c["R_true"] @ offset)[:, i], euler(c["R_obs"])[:, i]
                 rr = eo - (slope * et + bias)
-                l1, j1 = lag1(rr, c["frame"])
+                means.append(rr.mean())
+                within.append(rr - rr.mean())
+                l1, j1 = lag1(rr - rr.mean(), c["frame"])
                 ls.append(l1); js.append(j1)
+            # residual = per-sequence offset (sd_between) + within-sequence AR(1) (sd_within, lag1 at 10 Hz)
             r[ax] = {"slope": round(float(slope), 3), "bias": round(float(bias), 2), "res_std": round(float(res_all.std()), 2),
+                     "sd_between": round(float(np.std(means)), 2), "sd_within": round(float(np.concatenate(within).std()), 2),
                      "res_lag1": round(float(np.nanmean(ls)), 3), "jitter": round(float(np.nanmean(js)), 2)}
         turn = np.abs(e_true[:, 0])
         r["geodesic_by_turn"] = {f"{lo}-{hi}": round(float(np.median(geo[(turn >= lo) & (turn < hi)])), 1)
@@ -128,7 +132,7 @@ def main():
         r["rms_p50_p95"] = np.percentile(np.concatenate([c["rms"] for c in cs]), [50, 95]).round(4).tolist()
         report["sets"][name] = r
         print(f"{name:12s} seen {r['seen']:.2f}  geo p50/90/99 {r['geodesic_deg']}  " + "  ".join(
-            f"{ax} s{r[ax]['slope']:.2f} b{r[ax]['bias']:+.1f} sd{r[ax]['res_std']:.1f} l{r[ax]['res_lag1']:.2f} j{r[ax]['jitter']:.1f}" for ax in AXES)
+            f"{ax} s{r[ax]['slope']:.2f} b{r[ax]['bias']:+.1f} sd{r[ax]['sd_between']:.1f}/{r[ax]['sd_within']:.1f} l{r[ax]['res_lag1']:.2f} j{r[ax]['jitter']:.1f}" for ax in AXES)
             + f"  by turn {r['geodesic_by_turn']}")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     json.dump(report, open(a.out, "w"), indent=1)
