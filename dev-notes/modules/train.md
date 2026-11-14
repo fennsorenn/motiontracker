@@ -4,6 +4,8 @@ Location: `train/` (uv project, package `mttrain`, CUDA PyTorch). Builds M1 trai
 
 All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) and are never committed.
 
+WIP (branch `feature/legs-root`, trained and evaluated, awaiting the owner's review): legs, hip position and up direction in the body model; current run `m1-v14` (`m1-v12`/`m1-v13` slowed the arms). See "Legs, root and up" below. Plan and numbers: `plans/legs-root.md`; decisions `PLAN.md` §3.9. The pipeline table below describes the 17-joint parts; the leg/root additions are listed in that section.
+
 ## Pipeline (in order)
 | Module | Role |
 |---|---|
@@ -24,6 +26,7 @@ All CMU-derived data and checkpoints live in gitignored `data/` (`data/m1/...`) 
 | `render` | Rendered synthetic sessions with exact ground truth (see below). |
 | `choreo` | Designed contact choreography (see Contacts). |
 | `limitcheck` | Criterion 8: `python -m mttrain.limitcheck <ckpt> <session>`. IK of MHR parameters to the predicted orientations with limits off, checked against `[Limits]` (angles wrapped). Runs on the session plus stressed copies (tracking loss, low confidence, extra noise, arms out of frame, glitches) and on synthetic ground truth for validation. |
+| `retarget_demo` | WIP prototype (`relational-retarget`, 2026-11-14): ground truth vs rotation copy vs `mtcore.relretarget` on a render set. See `modules/mtcore.md` (relretarget). |
 
 ## GPU data generator (`gpugen`, implemented 2026-11-08)
 Package `mttrain/gpugen/`: batched torch port of the synthesis pipeline; the training default. Builds whole batches on the RTX 4060 instead of CPU DataLoader workers, which crashed the machine (see ARCHITECTURE key decisions). ~4,800 samples/s, 40k steps in 36 min, ~1 CPU core.
@@ -141,12 +144,25 @@ Context: training data never passes through MediaPipe (synthetic landmarks + han
 
 Still unclear: how to model the 3D torso co-rotation (next run not yet planned), how the 3D head masking is signalled to the model at inference.
 
+## Legs, root and up (WIP, `feature/legs-root`, 2026-11-14)
+Outputs added to the body model; owner decisions `PLAN.md` §3.9, numbers in `plans/legs-root.md` (Progress).
+- `skeleton`: `OUT_JOINTS` is 23: the 17 upper-body joints first, then `{l,r}_upleg`, `{l,r}_lowleg`, `{l,r}_subtalar` (VRM UpperLeg, LowerLeg, Foot). Index helpers `N_UPPER`, `UPPER_IDX`, `LEG_IDX`, `LEG_POS_JOINTS`. `TargetExtractor.root`: root joint position in the camera frame (metres) and up = `cam_R @ +y`. Mirrored in `gpugen` (`geom.Targets.root`); both generators return `root` / `up`.
+- `model`: `Lifter(n_joints, root=True)` adds a root head: (x/z, y/z, log z around `ROOT_Z0` = 1.5 m), two log scales (image plane, depth), up (normalized 3-vector). `load_lifter(ckpt)` rebuilds old 17-joint checkpoints; `pad_joints` pads their outputs with rest legs, so old and new models share downstream code.
+- `losses`: upper-body terms on the 17 joints only (unchanged); a separate leg term (`leg`, `leg_pos`, `leg_vel`); `root_losses` (Laplace NLL image plane + depth, velocity); up as a chord loss.
+- Pattern, loss weights: leg and root weights are 0.05 (`train.py` `WEIGHTS`, overridable with `--w-*`). Confidence-weighted leg/root gradients otherwise dominate the global grad clip (1.0) and slow the arms. When adding an output head, check per-group gradient norms against the upper body before trusting the weights.
+- `train`: `--resume` (`last.pt` with optimizer, scheduler, generator and RNG state); non-finite steps are skipped.
+- `infer.Runner` uses `load_lifter`; `.aux` holds `root`, `root_log_s`, `up`. `export` refuses root models (the live runtime does not consume them yet).
+- `legeval`: per render set, global errors (head, chest, upper arm, forearm, wrist; any model) and, for root models, thigh/shin/foot local errors, knee cm, root xy/z cm, up deg; on real sessions trunk-thigh angle, standing share (> 135 deg), sit/stand switches, jitter. `--merger` evaluates merger outputs.
+- `render --events`: filters pair-clip events (body-contact sets `data/m4/renders/body1`, `body2`).
+- Known gaps: root depth on renders reads too far (apparent-size mismatch suspected in the observation simulation); framing without the head is outside the training distribution.
+
 ## Model input features
 Moved to `mtcore.features` (2026-11-12) so the live runtime shares one implementation without torch; train imports it from there. Causal shoulder-width scale, history at time offsets 0-1.6 s, plus a streaming variant. Details: `modules/mtcore.md`.
 
 ## Live export (`export`, implemented 2026-11-12)
 `uv run python -m mttrain.export data/m1/runs/<run>/best.pt [--out DIR] [--check-session sessions/<s>]` writes `data/m1/runs/<run>/live/` for `service/` (`modules/service.md`):
 - `model.onnx` (opset 17, input `x` (N, offsets, FRAME_DIM + 2) → `rot`, `log_scale`).
+- Root/leg models (m1-v12+, 2026-11-14): extra outputs `root`, `root_log_s`, `up`; the skeleton table is sized by the model's joints. The merger has its own export (`mttrain.merger.export`, `modules/merger.md`).
 - `lifter.json` (`format` `motiontracker-lifter`, `version` 1): source run/step, input layout (offsets, frame dim, scale settings), output bones, the MHR table (`LifterPose.table()`), default avatar rest positions (AvatarSample_D).
 - `--check-session`: onnxruntime vs torch on a session (3e-6 on `m1-v10`). Depends on `onnx` + `onnxruntime`.
 - CMU-derived weights: the bundle stays in gitignored `data/`. Bump `version` when the bundle layout changes (`modules/service.md`, Extending).

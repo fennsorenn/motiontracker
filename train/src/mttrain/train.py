@@ -1,13 +1,15 @@
 """Train the M1 body lifter.
 
-    uv run python -m mttrain.train --name first [--steps 40000] [--batch 256] [--device cuda:1] [--gen gpu|cpu]
+    uv run python -m mttrain.train --name first [--steps 40000] [--batch 256] [--device cuda:1] [--gen gpu|cpu] [--resume]
 
 Training data comes from the batched GPU generator (`mttrain.gpugen`) on the training device by
 default; `--gen cpu` uses the numpy generator in DataLoader worker processes (heavy on the CPU: run
 it under tools/guarded-run.sh). Validation always uses the numpy generator (fixed set).
 
 Writes data/m1/runs/<name>/: config.json, log.jsonl (train losses and validation metrics),
-best.pt / last.pt (model, limit box, config). CMU-derived: local only (license register).
+best.pt / last.pt (model, limit box, config; last.pt also optimizer, scheduler and generator states, so `--resume`
+continues an interrupted run). CMU-derived: local only (license register).
+m1-v12+: legs, root position and up (`skeleton`, `model.Lifter(root=True)`), loss weights leg/root/up.
 """
 
 import argparse
@@ -24,7 +26,11 @@ from .dataset import SampleStream, fixed_set
 from .losses import limit_box, losses, metrics
 from .model import Lifter
 
-WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 10.0, "con": 5.0}
+# leg and root are small on purpose: their confidence-weighted gradients grow as the model gets sure of the
+# barely moving feet and the root (m1-v13 at step 5000: gradient norm legs 91, root 120, upper body 8), and the
+# global clip at 1.0 then shrank the arms' updates ~150x (m1-v12/v13: arms ~5 deg behind m1-v11 at step 5000)
+WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 10.0, "con": 5.0, "leg": 0.05, "leg_pos": 1.0, "leg_vel": 0.5,
+           "root": 0.05, "up": 1.0}
 
 
 def main():
@@ -41,11 +47,18 @@ def main():
     ap.add_argument("--gen-chunk", type=int, default=4, help="GPU generator: batches generated per call")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--p-choreo", type=float, default=0.2, help="share of samples from the contact choreography pool")
+    ap.add_argument("--resume", action="store_true", help="continue from last.pt (gpu generator only)")
+    for k in ("leg", "leg_pos", "leg_vel", "root", "up"):
+        ap.add_argument(f"--w-{k.replace('_', '-')}", type=float, default=None, help=f"loss weight {k} (default {WEIGHTS[k]})")
     a = ap.parse_args()
     out = DATA / "m1" / "runs" / a.name
     out.mkdir(parents=True, exist_ok=True)
+    for k in ("leg", "leg_pos", "leg_vel", "root", "up"):
+        if getattr(a, f"w_{k}") is not None:
+            WEIGHTS[k] = getattr(a, f"w_{k}")
     cfg = vars(a) | {"weights": WEIGHTS, "fits": os.environ.get("MT_FITS", "fits")}
-    (out / "config.json").write_text(json.dumps(cfg, indent=1))
+    if not a.resume:
+        (out / "config.json").write_text(json.dumps(cfg, indent=1))
     torch.manual_seed(a.seed)
     dev = torch.device(a.device)
 
@@ -61,10 +74,20 @@ def main():
     warm = 1000
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / a.steps))))
+    start, best = 0, float("inf")
     if a.gen == "gpu":
         from .gpugen.generator import GpuGenerator
         torch.set_num_threads(2)
         gg = GpuGenerator("train", dev, seed=a.seed, p_choreo=a.p_choreo)
+        if a.resume and (out / "last.pt").exists():
+            ck = torch.load(out / "last.pt", map_location="cpu", weights_only=False)
+            model.load_state_dict(ck["model"])
+            opt.load_state_dict(ck["opt"])
+            sched.load_state_dict(ck["sched"])
+            gg.gen.set_state(ck["gen"])
+            torch.set_rng_state(ck["torch_rng"])
+            start, best = ck["step"], ck.get("best", best)
+            print(f"resumed at step {start}", flush=True)
 
         def gpu_batches():
             while True:
@@ -76,12 +99,14 @@ def main():
         loader = torch.utils.data.DataLoader(SampleStream("train", seed=a.seed, p_choreo=a.p_choreo), batch_size=a.batch,
                                              num_workers=a.workers, persistent_workers=True, prefetch_factor=4)
     log = open(out / "log.jsonl", "a")
-    best = float("inf")
     run, tl = {}, time.time()
-    for step, batch in enumerate(loader, 1):
+    for step, batch in enumerate(loader, start + 1):
         batch = {k: v.to(dev, non_blocking=True) for k, v in batch.items()}
-        rot, ls = model(batch["x"])
-        loss, parts = losses(rot, ls, batch, box, WEIGHTS)
+        rot, ls, aux = model(batch["x"])
+        loss, parts = losses(rot, ls, batch, box, WEIGHTS, aux)
+        if not torch.isfinite(loss):  # one bad batch must not poison the run (mg3 went NaN at ~4500 steps)
+            print(f"step {step}: non-finite loss, skipped", flush=True)
+            continue
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -92,13 +117,15 @@ def main():
         if step % a.eval_every == 0 or step == a.steps:
             model.eval()
             with torch.no_grad():
-                vr, vl = [], 0.0
+                vr, va, vl = [], [], 0.0
                 for i in range(0, a.val, 1024):
                     vb = {k: v[i:i + 1024] for k, v in val.items()}
-                    r, s = model(vb["x"])
-                    vl += losses(r, s, vb, box, WEIGHTS)[0].item() * len(vb["x"])
+                    r, s, ax = model(vb["x"])
+                    vl += losses(r, s, vb, box, WEIGHTS, ax)[0].item() * len(vb["x"])
                     vr.append(r)
-                m = metrics(torch.cat(vr), val, box) | {"val_loss": vl / a.val}
+                    va.append(ax)
+                vaux = {k: torch.cat([x[k] for x in va]) for k in va[0]}
+                m = metrics(torch.cat(vr), val, box, vaux) | {"val_loss": vl / a.val}
             model.train()
             rec = {"step": step, "lr": sched.get_last_lr()[0], "sec": round(time.time() - t0),
                    "samples_per_s": round(a.eval_every * a.batch / (time.time() - tl))} \
@@ -107,10 +134,15 @@ def main():
             log.flush()
             print(" ".join(f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}" for k, v in rec.items()), flush=True)
             ckpt = {"model": model.state_dict(), "box": box.cpu(), "config": cfg, "step": step, "metrics": m}
-            torch.save(ckpt, out / "last.pt")
             if m["val_loss"] < best:
                 best = m["val_loss"]
-                torch.save(ckpt, out / "best.pt")
+                torch.save(ckpt, out / "best.tmp.pt")
+                (out / "best.tmp.pt").replace(out / "best.pt")
+            if a.gen == "gpu":
+                ckpt |= {"opt": opt.state_dict(), "sched": sched.state_dict(), "gen": gg.gen.get_state(),
+                         "torch_rng": torch.get_rng_state(), "best": best}
+            torch.save(ckpt, out / "last.tmp.pt")
+            (out / "last.tmp.pt").replace(out / "last.pt")
             run, tl = {}, time.time()
         if step >= a.steps:
             break

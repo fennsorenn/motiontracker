@@ -351,8 +351,8 @@ def world_landmarks(X, R, t):
 
 
 class Targets(torch.nn.Module):
-    """skeleton.TargetExtractor, batched: states (B, K, J, 8), cam_R (B, 3, 3) -> rot (B, K, 17, 3, 3),
-    pos (B, K, 17, 3), off (B, K, 17, 3)."""
+    """skeleton.TargetExtractor, batched: states (B, K, J, 8), cam_R (B, 3, 3) -> rot (B, K, NJ, 3, 3),
+    pos (B, K, NJ, 3), off (B, K, NJ, 3)."""
 
     def __init__(self, joint_names, rest_state):
         super().__init__()
@@ -374,6 +374,12 @@ class Targets(torch.nn.Module):
             if p >= 0:
                 off[:, :, k] = torch.einsum("btji,btj->bti", Gc[:, :, p], pos[:, :, k] - pos[:, :, p])
         return rot, pos, off
+
+    def root(self, states, cam_R, cam_t):
+        """skeleton.TargetExtractor.root, batched: -> root position (B, K, 3) camera frame metres, up (B, K, 3)."""
+        p = torch.einsum("bij,btj->bti", cam_R, states[:, :, self.idx[0], :3] / 100.0 - cam_t[:, None])
+        up = cam_R[:, :, 1][:, None].expand(-1, states.shape[1], -1)
+        return p, up
 
     def contact_offsets(self, states, cam_R, landmarks):
         """skeleton.TargetExtractor.contact_offsets, batched: landmarks (B, K, 33, 3) cm -> (B, K, 3, 3)."""

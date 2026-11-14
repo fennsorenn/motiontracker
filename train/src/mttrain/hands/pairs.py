@@ -230,6 +230,7 @@ class PairChoreo:
         self.body = np.zeros(len(pn), np.float32)  # scale parameters of the current body (generate sets it)
         self.forearm, self.upper_arm = 25.0, 30.0  # cm, set from the body in set_body
         self._body = None  # (shoulders, left, up, forward) of the current key's body frame
+        self.events = None  # None: all EVENTS; else only these kinds (e.g. render.py --events)
         self.collider = Collider(ch)
         self.caps_now = None  # body capsules at the current key's pose (set_pose)
         self.thighs_now = None  # thigh capsules per side at the current key's pose (set_pose)
@@ -1032,7 +1033,8 @@ class PairChoreo:
         segs = []
         k = int(rng.uniform(0.3, 1.0) * fps)
         cur = {s: (mp[0, self.arm[s]].copy(), np.zeros(len(PARAMS))) for s in "lr"}
-        names, w = list(EVENTS), np.array(list(EVENTS.values()))
+        ev = {k: v for k, v in EVENTS.items() if self.events is None or k in self.events}
+        names, w = list(ev), np.array(list(ev.values()))
         while k < T - int(1.0 * fps):
             m = mp[min(k, T - 1)].copy()
             for s in "lr":

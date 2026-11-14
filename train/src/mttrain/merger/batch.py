@@ -40,7 +40,7 @@ from ..hands.model2 import HISTORY, PairNet, scenes
 from ..hands.motion import HandMotion
 from ..hands.observe2 import PairObserver
 from ..hands.skeleton import HandFK
-from ..model import Lifter
+from ..model import load_lifter, pad_joints
 from ..seated import HEAD_LIFE, HEAD_LIFE_TAU, HEAD_MOVES, HEAD_SHARES
 from ..skeleton import OUT_JOINTS, PARENT_IDX
 
@@ -67,13 +67,22 @@ SLOW_RHO = 0.95
 GAP_JOINTS = {"root": "c_spine3", "c_spine0": "c_spine3", "c_spine1": "c_spine3", "c_spine2": "c_spine3",
               "c_spine3": "c_spine3", "l_clavicle": "l_uparm", "r_clavicle": "r_uparm", "l_uparm": "l_uparm",
               "r_uparm": "r_uparm", "l_lowarm": "l_lowarm", "r_lowarm": "r_lowarm", "l_wrist_twist": "l_lowarm",
-              "r_wrist_twist": "r_lowarm", "l_wrist": "l_wrist", "r_wrist": "r_wrist"}
+              "r_wrist_twist": "r_lowarm", "l_wrist": "l_wrist", "r_wrist": "r_wrist",
+              # legs (m1-v12+, used when the calibration has them)
+              "l_upleg": "l_upleg", "r_upleg": "r_upleg", "l_lowleg": "l_lowleg", "r_lowleg": "r_lowleg",
+              "l_subtalar": "l_lowleg", "r_subtalar": "r_lowleg"}
 GAP_OFFSET, GAP_RHO = 0.7, 0.9
 MEDIAN_CHI3 = 1.538  # median rotation angle of a rotation vector with per-axis sd 1  # face head pose: slow error drift per 10 Hz frame (time constant ~2 s)
 ARKIT = None  # blendshape names, filled from the first bank file
 
 
 # --- rotations ----------------------------------------------------------------------------------------------
+def gap_file(m1):
+    """The sim-to-real gap calibration of a body model run: m1-v10's is m1_gap.json, others m1_gap-<run>.json."""
+    run = Path(m1).parent.name
+    return MERGER / "calib" / ("m1_gap.json" if run == "m1-v10" else f"m1_gap-{run}.json")
+
+
 def geodesic(Ra, Rb):
     c = ((Ra * Rb).sum((-1, -2)) - 1) / 2
     return torch.acos(c.clamp(-1 + 1e-6, 1 - 1e-6))
@@ -123,16 +132,18 @@ def rotvec_to_mat(v):
 
 
 def globals_from_locals(L):
-    """Body model locals (..., 17, 3, 3) -> globals (rest removed, camera frame)."""
-    G = [None] * len(OUT_JOINTS)
-    for k, p in enumerate(PARENT_IDX):
+    """Body model locals (..., n, 3, 3) -> globals (rest removed, camera frame); n: the first n OUT_JOINTS (17: the
+    upper body of older models)."""
+    n = L.shape[-3]
+    G = [None] * n
+    for k, p in enumerate(PARENT_IDX[:n]):
         G[k] = L[..., k, :, :] if p < 0 else G[p] @ L[..., k, :, :]
     return torch.stack(G, -3)
 
 
 def locals_from_globals(G):
     L = torch.empty_like(G)
-    for k, p in enumerate(PARENT_IDX):
+    for k, p in enumerate(PARENT_IDX[:G.shape[-3]]):
         L[..., k, :, :] = G[..., k, :, :] if p < 0 else G[..., p, :, :].transpose(-1, -2) @ G[..., k, :, :]
     return L
 
@@ -283,19 +294,24 @@ class MergerBatches:
         fc = json.load(open(face_calib))
         self.face_offset = torch.tensor(fc["offset"], dtype=torch.float32, device=self.dev)
         self.face = fc["sets"]["all"]
-        gp = MERGER / "calib" / "m1_gap.json"
-        self.gap = None
+        gp = gap_file(m1)
+        self.gap, self.gap_root = None, None
         if gp.exists():  # extra global noise per output joint: per-axis sd (deg) from the median gap
             g = json.load(open(gp))
             sd = torch.zeros(len(OUT_JOINTS))
+            extra = lambda k: math.sqrt(max(g[k]["real_p50"] ** 2 - g[k]["syn_p50"] ** 2, 0.0))
             for j, ref in GAP_JOINTS.items():
-                extra = math.sqrt(max(g[ref]["real_p50"] ** 2 - g[ref]["syn_p50"] ** 2, 0.0))
-                sd[J[j]] = extra / MEDIAN_CHI3
+                if ref in g:
+                    sd[J[j]] = extra(ref) / MEDIAN_CHI3
             self.gap = sd.to(self.dev)
+            if "root_logz" in g:  # root position (image plane, depth; cm) and up (deg): extra noise like the joints'
+                # depth fails as a scale (apparent size; real renders 1.1-1.5x too far): log-depth noise, with x and y
+                # moving along their viewing ray, then the image-plane error on top
+                self.gap_root = {"xy": extra("root_xy_cm") / 100 / 1.177, "logz": extra("root_logz") / 0.674,
+                                 "up": math.radians(extra("up_deg")) / 1.177}
         # frozen part models
         ck = torch.load(m1, map_location="cpu", weights_only=False)
-        self.m1 = Lifter().to(self.dev).eval()
-        self.m1.load_state_dict(ck["model"])
+        self.m1 = load_lifter(ck).to(self.dev).eval()
         sd = torch.load(p3, map_location="cpu")["model"]
         self.p3 = PairNet(frame_dim=sd["frame.0.weight"].shape[1]).to(self.dev).eval()
         self.p3.load_state_dict(sd)
@@ -409,6 +425,27 @@ class MergerBatches:
         G = globals_from_locals(rot)
         return locals_from_globals(rotvec_to_mat(v) @ G)
 
+    def degrade_root(self, root, up):
+        """Body model root (B, K, 3) and up (B, K, 3) -> with the sim-to-real gap noise (offset + AR(1) like
+        `degrade`): image-plane and depth errors on the root, a small rotation of the up direction."""
+        if self.gap_root is None:
+            return root, up
+        B, Kf = root.shape[:2]
+
+        def drift(n):
+            off = self._n(B, 1, n) * math.sqrt(GAP_OFFSET)
+            eps = self._n(B, Kf, n) * math.sqrt((1 - GAP_OFFSET) * (1 - GAP_RHO ** 2))
+            ar = torch.empty_like(eps)
+            ar[:, 0] = self._n(B, n) * math.sqrt(1 - GAP_OFFSET)
+            for k in range(1, Kf):
+                ar[:, k] = GAP_RHO * ar[:, k - 1] + eps[:, k]
+            return off + ar
+        d = drift(6)
+        root = root * torch.exp(d[..., 2:3] * self.gap_root["logz"])  # along the viewing ray
+        root = root + torch.cat([d[..., :2] * self.gap_root["xy"], torch.zeros_like(d[..., 2:3])], -1)
+        up = (rotvec_to_mat(d[..., 3:] * self.gap_root["up"]) @ up[..., None])[..., 0]
+        return root, up
+
     @torch.no_grad()
     def sample(self, B, jitter_deg=0.0, gap=True):
         """`jitter_deg`: extra input jitter on the part rotations (body locals, hand wrists, face head), before the
@@ -442,7 +479,14 @@ class MergerBatches:
         obs, truth = self.hands_obs(hands, body_lm, self.gen, camera=(R, t, fx))
 
         # body model at the K target frames
-        rot, log_s = self.m1(ob["x"])  # (B, K, 17, 3, 3), (B, K, 17)
+        m1_out = self.m1(ob["x"])
+        rot, log_s = pad_joints(*m1_out[:2])  # older body models: legs at rest, no confidence
+        body = {"rot": rot, "log_s": log_s}
+        if len(m1_out) > 2:  # m1-v12+: root position, its log scales and up
+            root, up = m1_out[2]["root"], m1_out[2]["up"]
+            if gap:
+                root, up = self.degrade_root(root, up)
+            body.update(root=root, root_log_s=m1_out[2]["root_log_s"], up=up)
         if gap:
             rot = self.degrade(rot)
         rot = self.jitter(rot, jitter_deg)
@@ -475,8 +519,10 @@ class MergerBatches:
         base = combine(rot, {s: hand[s]["G"] for s in "lr"}, {s: hand[s]["rot_log_s"] for s in "lr"},
                        head["G"], head["seen"].float() * 0.8)
         true_fingers = torch.stack([pick(mpd)[..., self.fing[s]] for s in "lr"], 2)  # (B, K, 2, 27)
-        return {"body": {"rot": rot, "log_s": log_s}, "hand": hand, "head": head, "push": amount,
+        body["rot"] = rot
+        return {"body": body, "hand": hand, "head": head, "push": amount,
                 "blend": {"values": bs, "present": bs_present}, "base": base, "src": src,
                 "target": {"rot": ob["rot"], "pos": ob["pos"], "off": ob["off"], "cof": ob["cof"], "fingers": true_fingers,
+                           "root": ob["root"], "up": ob["up"],
                            "seated": torch.ones(B, device=dev),
                            "inside": truth["inside"].gather(1, tgt[..., None].expand(B, K, 2))}}

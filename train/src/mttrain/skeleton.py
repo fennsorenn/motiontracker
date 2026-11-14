@@ -1,10 +1,14 @@
 """What the M1 model predicts, and how targets come out of MHR skeleton states.
 
-Output: 17 rotations, each relative to MHR's rest pose:
+Output: 23 rotations, each relative to MHR's rest pose (models before m1-v12: the first 17, `N_UPPER`; the legs
+are appended so the upper body's indices never change):
 - `root` (pelvis): global orientation in the camera frame (x right, y down, z forward), since the
   model only ever sees the body through the camera;
 - every other joint: local to its parent in OUT_PARENT (the MHR chain; procedural twist joints are
   leaves and not predicted).
+
+Plus (m1-v12+) the root position (MHR's `root` joint, the pelvis) in the camera frame in metres, and the up direction
+(MHR world +y, against gravity) in the camera frame: `TargetExtractor.root`.
 
 Rotations are 3x3 matrices here (numpy); the model uses 6D (first two columns).
 """
@@ -23,12 +27,22 @@ for _s in "lr":
     OUT_PARENT.update({f"{_s}_clavicle": "c_spine3", f"{_s}_uparm": f"{_s}_clavicle",
                        f"{_s}_lowarm": f"{_s}_uparm", f"{_s}_wrist_twist": f"{_s}_lowarm",
                        f"{_s}_wrist": f"{_s}_wrist_twist"})
+N_UPPER = len(OUT_JOINTS)  # 17: what models before m1-v12 predict
+# legs (m1-v12+): thigh, shin and foot (VRM UpperLeg, LowerLeg, Foot); subtalar's chain parent is the shin, the
+# foot joints between them keep their rest like the twist joints
+for _s in "lr":
+    OUT_JOINTS += [f"{_s}_upleg", f"{_s}_lowleg", f"{_s}_subtalar"]
+    OUT_PARENT.update({f"{_s}_upleg": "root", f"{_s}_lowleg": f"{_s}_upleg", f"{_s}_subtalar": f"{_s}_lowleg"})
+LEG_IDX = list(range(N_UPPER, len(OUT_JOINTS)))
+UPPER_IDX = list(range(N_UPPER))
 PARENT_IDX = [OUT_JOINTS.index(OUT_PARENT[j]) if j in OUT_PARENT else -1 for j in OUT_JOINTS]
 # joints whose positions enter the position loss / metrics (end of the chain matters most)
 POS_JOINTS = ["c_head", "l_uparm", "r_uparm", "l_lowarm", "r_lowarm", "l_wrist", "r_wrist"]
+LEG_POS_JOINTS = ["l_lowleg", "r_lowleg", "l_subtalar", "r_subtalar"]  # knees, ankles
 GROUPS = {"spine": ["root", "c_spine0", "c_spine1", "c_spine2", "c_spine3"], "head": ["c_neck", "c_head"],
           "shoulder": ["l_clavicle", "r_clavicle"], "upper_arm": ["l_uparm", "r_uparm"],
-          "forearm": ["l_lowarm", "r_lowarm", "l_wrist_twist", "r_wrist_twist"], "wrist": ["l_wrist", "r_wrist"]}
+          "forearm": ["l_lowarm", "r_lowarm", "l_wrist_twist", "r_wrist_twist"], "wrist": ["l_wrist", "r_wrist"],
+          "thigh": ["l_upleg", "r_upleg"], "shin": ["l_lowleg", "r_lowleg"], "foot": ["l_subtalar", "r_subtalar"]}
 
 # contact points (contact loss): MediaPipe landmarks carried rigidly by an output joint, as offsets in
 # that joint's rest-relative frame. Hands: the middle of the index and pinky knuckles (palm front).
@@ -47,7 +61,7 @@ class TargetExtractor:
     def __call__(self, states, cam_R):
         """states (T, J, 8) MHR skeleton states (cm), cam_R (3, 3) world -> camera.
 
-        Returns rot (T, 17, 3, 3) rest-relative rotations as defined above, pos (T, 17, 3) joint
+        Returns rot (T, J, 3, 3) rest-relative rotations as defined above, pos (T, 17, 3) joint
         positions in camera axes relative to the root, metres, and offsets (T, 17, 3): each joint's
         position in its parent's rest-relative frame (bone vectors, for FK in the loss)."""
         G = quat_to_mat(states[:, self.idx, 3:7])  # (T, 17, 3, 3) world
@@ -62,6 +76,11 @@ class TargetExtractor:
             if p >= 0:
                 off[:, k] = np.einsum("tji,tj->ti", Gc[:, p], pos[:, k] - pos[:, p])
         return rot, pos, off
+
+    def root(self, states, cam_R, cam_t):
+        """Root position (T, 3) in the camera frame (metres) and the up direction (3,) in the camera frame."""
+        p = (states[:, self.idx[0], :3] / 100.0 - cam_t) @ cam_R.T
+        return p, cam_R @ np.array([0.0, 1.0, 0.0])
 
     def contact_offsets(self, states, cam_R, landmarks):
         """Contact points' offsets (T, 3, 3) in their parent joint's rest-relative frame (camera axes,

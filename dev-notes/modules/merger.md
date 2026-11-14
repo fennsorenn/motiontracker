@@ -2,7 +2,9 @@
 
 Location: `train/src/mttrain/merger/` (part of the `train` uv project, `modules/train.md`), plus `core/src/mtcore/facepose.py` (`modules/mtcore.md`) and `tools/merger/`. Learned step that joins the part models into one pose: the body model `m1-v10` (`modules/train.md`), the pair hand model `p3` (`modules/hands.md`) and the head/face (Holistic face mesh, MediaPipe blendshapes). Replaces the hand-written combination `mttrain.hands.wrist` (`modules/hands.md`, "Combination onto the body model"). Plan, decisions and all numbers: `plans/m4-merger.md` (Decisions, Progress); owner decisions `PLAN.md` §3.4.
 
-Status (2026-11-14): first full models `mg1` and `mg2` trained and evaluated on all rendered sets; not in the live runtime (`service/`, follow-up plan once a checkpoint is accepted). Branch `feature/m4-merger`.
+Status (2026-11-14): first full models `mg1` and `mg2` trained and evaluated on all rendered sets; Branch `feature/m4-merger`. Live runtime: `mg3` exported (`export.py`) and run by `mtcore.merged` in `service/`, built and parity-checked 2026-11-14, owner's live test pending (branch `feature/merger-runtime`, not merged; `PLAN.md` §7.6; see Live export).
+
+WIP (branch `feature/legs-root`, trained and evaluated, awaiting the owner's review): legs, hip position and up direction as inputs and residual outputs; `mg3` on body model `m1-v14`. See "Legs, root and up" below. Plan and numbers: `plans/legs-root.md`; decisions `PLAN.md` §3.9.
 
 Data (gitignored): `data/merger/` (`pool/`, `calib/`, `runs/<name>/`, `eval/<run>/`); comparison videos `data/videos/<session>-<run>/`.
 
@@ -24,6 +26,7 @@ Data (gitignored): `data/merger/` (`pool/`, `calib/`, `runs/<name>/`, `eval/<run
 | `model.py` | `Merger`: frame MLP over `OFFSETS` (0, 1, 2, 4, 8 frames at 10 Hz) + differences between neighbouring offsets → per body joint a 6D residual on the base pose's **global** rotation (`G = G_base R(res)`, locals follow), log scales, per-hand finger residuals and log scales. Last layer zero-initialized (untrained = base pose). `frame_inputs`, `apply`. |
 | `train.py` | Training, resumable (see below). |
 | `run.py` | Offline runner: landmarks file (recorded or rendered) → `{merger,base,m1}.poses.jsonl` VRM tracks (fingers in merger and base). Same chain as training; at session start the first frame is repeated. |
+| `export.py` | Live bundle for the runtime (2026-11-14), see Live export. |
 | `evalsummary.py` | Summary table of a rendered-set evaluation (median global error of head, arms, hands; head onset lag; body model / base / merger). |
 | `tools/merger/eval.sh <run>` | Rendered-set evaluation through the harness with GT (`modules/eval-harness.md`), resumable per sequence; `SETS` overrides the set list. Output `data/merger/eval/<run>/` + `summary.md`. |
 | `tools/merger/video.sh <run>` | Comparison videos webcam \| combination \| merger with face blendshapes (seated-v1, hands-v1), via `tools/avatar-video`. Needs `data/videos/<session>-full/face.landmarks.jsonl` (runtime dump with face) and a vspark checkout next to the repo. |
@@ -48,6 +51,23 @@ Data (gitignored): `data/merger/` (`pool/`, `calib/`, `runs/<name>/`, `eval/<run
 - Rendered sets vs body model and base pose: lower arms better nearly everywhere, head better on most sets (slightly worse on rest1, v1), hands better on pairs3, level on hands3/rest1, worse on contact1, head1 and v1.
 - Open: on contact1 the merger overrides even confident hand-model wrists (not the contact loss, see `mg2`). Suspects: training data near the face (only from the body model's choreography source, procedural fingers) and the hand model's confidence calibration on synthetic data.
 
+## Legs, root and up (WIP, `feature/legs-root`)
+Body-model side: `modules/train.md` ("Legs, root and up").
+- `model.py`: `Merger(nj, root)` takes the body model's root/up as inputs and outputs residuals on them (`apply_root`; depth clamped >= 0.1 m). `load_merger` still loads `mg1`/`mg2` (17 joints, no root).
+- `batch.py`: body root/up inputs, root/up targets; gap noise for legs and root/up read from the per-run calibration `gap_file(m1)` (`m1_gap-<run>.json`). Depth gap is applied as log-depth (ratio) noise along the viewing ray; additive depth noise of the measured size made training diverge.
+- `gapcal.py` takes the body model checkpoint and also measures legs, root xy / z / log z and up.
+- `train.py`: `--m1` selects the body model; leg/root weights 0.05 (same reason as the body model's); non-finite steps skipped.
+- `run.py`: `infer()` returns root/up; pose files include leg bones and per-frame root/up. Videos show the legs; root/up are not applied yet.
+- Evaluation of legs/root/up: `mttrain.legeval --merger`.
+
+## Live export (`export.py`, 2026-11-14)
+`uv run python -m mttrain.merger.export data/merger/runs/<run>/best.pt [--out DIR] [--check landmarks.jsonl]` writes `data/merger/runs/<run>/live/` (gitignored, CMU-derived weights), run by `mtcore.merged.LiveMerged` (`modules/mtcore.md`) in `service/` (`modules/service.md`):
+- `body.onnx` (body model, `StreamFeatures` input; root/up outputs), `hands.onnx` (pair hand model), `merger.onnx`.
+- `merger.json`: skeleton table incl. the finger map (`LifterPose` `fingers`), output bones, default avatar (AvatarSample_D), hand constants (`F_rest`, `out_idx`, limits), combination constants (`conf_deg`, `max_bend`, head weight 0.8), canonical face Procrustes points + head offset (from `data/merger/calib/face.json` and the MHR rest head), blendshape names, merger offsets.
+- `--check`: parity against the torch runner (`run.infer`). `mg3` on hands-v1 (1281 frames) and seated-v1 (670): body bones well under 0.1 deg, fingers <= 0.18 deg (pymomentum float32; same with random finger poses), hip position 0.0001 cm, up 0.03 deg.
+- Runtime is three ONNX graphs plus numpy glue (owner decision, `PLAN.md` §7.6), not one graph for all heads (§4 idea, left as is).
+- Anything changed in `batch.combine`, `apply_root`, `hands.model2.frame_features` or `evaluate2.LearnedPair` must be mirrored in `mtcore.merged`; re-run `--check`.
+
 ## Shared-code changes made for the merger
 - `gpugen.GpuGenerator.sample` split into `crop` / `observe` (m1 batches bit-identical), optional landmark `push` hook; `gpugen.motion.Seater` `smooth_life` (`modules/train.md`).
 - `hands`: `observe2.PairObserver` optional camera; `HandMotion` tremor flag; `pool2 --full` (full MHR sequences) / `--no-tremor`; `evaluate2.LearnedPair` exposes raw outputs (`raw`, `lost`, `score`) (`modules/hands.md`).
@@ -59,4 +79,5 @@ Data (gitignored): `data/merger/` (`pool/`, `calib/`, `runs/<name>/`, `eval/<run
 
 ## Open
 - The contact1 wrist override (above); hands behind the base pose on head1 and v1.
-- Runtime integration (`service`), internal features as inputs, joint fine-tuning, gaze, a learned face model: out of scope for this plan.
+- `mg3`: regression vs `mg1` on pairs3 (hands, lower arms) and thighs worse than the body model alone; root/up sent live as `/MT/Root`, `/MT/Up` but not applied in vspark or the videos.
+- Owner's live test of the runtime (`service`); internal features as inputs, joint fine-tuning, gaze, a learned face model: out of scope for this plan.

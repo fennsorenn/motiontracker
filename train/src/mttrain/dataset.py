@@ -103,6 +103,7 @@ class Generator:
             tgt = np.arange(T - self.K, T)
             rot, pos, off = self.te(s["states"][tgt], s["camera"].R)
             cof = self.te.contact_offsets(s["states"][tgt], s["camera"].R, self.lm(s["states"][tgt]))
+            root, up = self.te.root(s["states"][tgt], s["camera"].R, s["camera"].t)
             times = s["t"]
             feats = frame_features(times, s["world"], s["image"], s["vis"], s["present"], s["head3d"])
             idx, age = history_indices(times, tgt)
@@ -111,7 +112,8 @@ class Generator:
                 idx = np.where(times[np.maximum(idx, 0)] < cut, -1, idx)
             x = model_input(feats, idx, age)
             return dict(x=x, rot=rot.astype(np.float32), pos=pos.astype(np.float32), off=off.astype(np.float32),
-                        cof=cof.astype(np.float32),
+                        cof=cof.astype(np.float32), root=root.astype(np.float32),
+                        up=np.repeat(up[None], self.K, 0).astype(np.float32),
                         dt=np.diff(times[tgt], prepend=times[tgt[0] - 1]).astype(np.float32),
                         seated=np.float32(seated))
 

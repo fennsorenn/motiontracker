@@ -76,3 +76,17 @@ def test_finger_bones_use_unity_names_and_rest_offsets():
                                                      or "Little" in n) for n in UNITY_NAMES) == 30
     off = rest_offsets({"leftHand": np.array([0.5, 1.4, 0]), "leftIndexProximal": np.array([0.6, 1.4, 0.02])})
     np.testing.assert_allclose(off["leftIndexProximal"], [0.1, 0, 0.02])
+
+
+def test_legs_root_and_up_go_out():
+    s = VmcSender()
+    s.set_rest({"hips": np.array([0, 1.0, 0]), "leftUpperLeg": np.array([0.1, 0.9, 0])})
+    msgs = parse(s.packet(0.1, {"leftUpperLeg": np.array([0, 0, 0, 1.0])}, root=np.array([0.05, 0.2, 1.4]),
+                          up=np.array([0.0, -1.0, 0.0])))
+    s.close()
+    bone = [a for addr, a in msgs if addr == "/VMC/Ext/Bone/Pos"][0]
+    assert bone[0] == "LeftUpperLeg"
+    np.testing.assert_allclose(bone[1:4], [-0.1, -0.1, 0], atol=1e-6)
+    np.testing.assert_allclose([a for addr, a in msgs if addr == "/MT/Root"][0], [0.05, 0.2, 1.4], atol=1e-6)
+    np.testing.assert_allclose([a for addr, a in msgs if addr == "/MT/Up"][0], [0, -1, 0])
+    assert "/MT/Root" not in [addr for addr, _ in parse(VmcSender().packet(0.1, {}))]

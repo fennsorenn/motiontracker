@@ -18,38 +18,42 @@ import time
 import torch
 
 from ..hands.model import OUT_IDX
-from ..losses import POS_IDX, losses as body_losses, metrics as body_metrics
+from ..losses import POS_IDX, losses as body_losses, metrics as body_metrics, root_losses
 from ..skeleton import OUT_JOINTS, fk
 from .batch import MERGER, MergerBatches, geodesic
 from .model import Merger, apply, frame_inputs
 
 RUNS = MERGER / "runs"
 GLOBAL_J = [OUT_JOINTS.index(j) for j in ("l_wrist", "r_wrist", "c_head")]
-WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 1.0, "con": 2.0}
+# leg/root small like the body model's (`mttrain.train`: their confidence-weighted gradients swamp the rest under
+# the global clip)
+WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 1.0, "con": 2.0, "leg": 0.05, "leg_pos": 1.0, "leg_vel": 0.5,
+           "root": 0.05, "up": 1.0}
 NEWEST = (-1, -2, -3)
 SCORE = ("glob_l_wrist", "glob_r_wrist", "glob_c_head", "deg_forearm", "deg_head", "fing_deg_in")  # best.pt: lowest sum
 M1_RUN = MERGER.parent / "m1" / "runs" / "m1-v10" / "best.pt"
 
 
 def run(model, b):
-    feats = frame_inputs(b)
+    feats = frame_inputs(b, model.nj, model.root)
     K = feats.shape[1]
     outs = [apply(model, b, feats, K + n) for n in NEWEST]  # newest, then one and two frames earlier
     L = torch.stack([o[0] for o in outs[::-1]], 1)  # (B, 3, NJ, 3, 3) oldest first
     ls = torch.stack([o[1] for o in outs[::-1]], 1)
     f = torch.stack([o[2] for o in outs[::-1]], 1)  # (B, 3, 2, NF)
     fs = torch.stack([o[3] for o in outs[::-1]], 1)
-    return L, ls, f, fs
+    aux = {k: torch.stack([o[4][k] for o in outs[::-1]], 1) for k in outs[0][4]} if model.root else None
+    return L, ls, f, fs, aux
 
 
 def last3(x):
     return x[:, -3:]
 
 
-def loss_fn(b, L, ls, f, fs, box, w):
+def loss_fn(b, L, ls, f, fs, box, w, aux=None):
     tg = {k: last3(v) for k, v in b["target"].items() if k not in ("seated",)}
     tg["seated"] = b["target"]["seated"]
-    total, parts = body_losses(L, ls, tg, box, {**WEIGHTS, "con": w.get("con", WEIGHTS["con"])})
+    total, parts = body_losses(L, ls, tg, box, {**WEIGHTS, "con": w.get("con", WEIGHTS["con"])}, aux)
     G, P = fk(L, tg["off"])
     Gt, Pt = fk(tg["rot"], tg["off"])
     l_glob = torch.rad2deg(geodesic(G[..., GLOBAL_J, :, :], Gt[..., GLOBAL_J, :, :])).mean() / 10.0
@@ -69,15 +73,22 @@ def evaluate(model, val, box):
     acc = {}
     n = 0
     for b in val:
-        L, ls, f, fs = run(model, b)
+        L, ls, f, fs, aux = run(model, b)
         tg = {k: last3(v) for k, v in b["target"].items() if k != "seated"}
         tg["seated"] = b["target"]["seated"]
         rows = {"mg": (L, f), "base": (last3(b["base"]), torch.stack([last3(b["hand"][s]["fingers"]) for s in "lr"], 2)),
                 "m1": (last3(b["body"]["rot"]), None)}
+        if aux is not None:  # root and up: merger vs body model
+            for name, (p, u) in {"mg": (aux["root"], aux["up"]),
+                                 "m1": (last3(b["body"]["root"]), last3(b["body"]["up"]))}.items():
+                d = (p - tg["root"]) * 100
+                for k, v in {"cm_root_xy": d[..., :2].norm(dim=-1).mean(), "cm_root_z": d[..., 2].abs().mean(),
+                             "deg_up": torch.rad2deg(torch.acos((u * tg["up"]).sum(-1).clamp(-1, 1))).mean()}.items():
+                    acc[f"{name}_{k}"] = acc.get(f"{name}_{k}", 0.0) + v.item()
         G_t, P_t = fk(tg["rot"], tg["off"])
         ins = tg["inside"]  # (B, 3, 2)
         for name, (R, fing) in rows.items():
-            m = body_metrics(R, tg, box)
+            m = body_metrics(R[..., :L.shape[-3], :, :], tg, box)
             G, P = fk(R, tg["off"])
             ang = torch.rad2deg(geodesic(G, G_t))
             for j in ("l_wrist", "r_wrist", "c_head", "l_lowarm"):
@@ -116,19 +127,25 @@ def main():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--no-gap", action="store_true", help="no body model sim-to-real gap noise (batch.degrade)")
     ap.add_argument("--pool", default=str(MERGER / "pool"), help="merger pool directory (train.npz, val.npz)")
+    ap.add_argument("--m1", default=str(M1_RUN), help="body model checkpoint (m1-v12+: legs, root and up)")
     a = ap.parse_args()
     dev = torch.device(a.device)
     out = RUNS / a.name
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     from pathlib import Path
-    vb = MergerBatches("val", dev, seed=1000, pool=Path(a.pool))
+    vb = MergerBatches("val", dev, seed=1000, pool=Path(a.pool), m1=Path(a.m1))
     val = [vb.sample(a.batch // 2, jitter_deg=0.0, gap=not a.no_gap) for _ in range(a.val)]
+    vb_keys = set(val[0]["body"])
     del vb
-    tb = MergerBatches("train", dev, seed=a.seed, pool=Path(a.pool))
-    box = torch.load(M1_RUN, map_location="cpu", weights_only=False)["box"].to(dev)  # the body model's limit box
+    tb = MergerBatches("train", dev, seed=a.seed, pool=Path(a.pool), m1=Path(a.m1))
+    box = torch.load(a.m1, map_location="cpu", weights_only=False)["box"].to(dev)  # the body model's limit box
+    if box.shape[1] < len(OUT_JOINTS):  # older body models' box: legs unbounded
+        pad = torch.tensor([-10.0, 10.0], device=dev)[:, None, None].expand(2, len(OUT_JOINTS) - box.shape[1], 3)
+        box = torch.cat([box, pad], 1)
     print(f"validation and batches ready in {time.time() - t0:.0f}s", flush=True)
-    model = Merger().to(dev)
+    root = "root" in vb_keys
+    model = Merger(root=root).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     warm = 500
     sched = torch.optim.lr_scheduler.LambdaLR(
@@ -138,7 +155,7 @@ def main():
     start, best = 0, float("inf")
     if a.resume and (out / "last.pt").exists():
         ck = torch.load(out / "last.pt", map_location="cpu", weights_only=False)
-        model.load_state_dict(ck["model"])
+        model.load_state_dict(ck["model"])  # same shape: same --m1
         opt.load_state_dict(ck["opt"])
         sched.load_state_dict(ck["sched"])
         tb.gen.set_state(ck["gen"].to(tb.gen.device) if ck["gen"].device.type != "cpu" else ck["gen"])
@@ -153,8 +170,11 @@ def main():
     model.train()
     for step in range(start + 1, a.steps + 1):
         b = tb.sample(a.batch, jitter_deg=a.jitter_deg, gap=not a.no_gap)
-        L, ls, f, fs = run(model, b)
-        loss, parts = loss_fn(b, L, ls, f, fs, box, w)
+        L, ls, f, fs, aux = run(model, b)
+        loss, parts = loss_fn(b, L, ls, f, fs, box, w, aux)
+        if not torch.isfinite(loss):  # one bad batch must not poison the run (mg3 went NaN at ~4500 steps)
+            print(f"step {step}: non-finite loss, skipped", flush=True)
+            continue
         opt.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
