@@ -1,0 +1,24 @@
+[project]
+name = "mtservice"
+version = "0.0.0"
+description = "Live runtime: camera -> MediaPipe Holistic -> M1 lifter (ONNX) -> VRM bones as VMC; driven over stdio by vspark"
+requires-python = ">=3.12,<3.13"
+# mediapipe 0.10.18: the Python release closest to the tasks-vision 0.10.17 the models were calibrated on
+# (spikes/mp-python-parity). It brings opencv-contrib-python, which provides cv2 here.
+dependencies = ["mtcore", "mediapipe==0.10.18", "onnxruntime", "numpy", "opencv-contrib-python"]
+
+[project.scripts]
+mtservice = "mtservice.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["uv_build>=0.10.11,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+mtcore = { path = "../core", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

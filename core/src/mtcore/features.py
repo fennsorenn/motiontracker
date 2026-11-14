@@ -12,6 +12,8 @@ History: for a target frame at time t, the latest frame at or before t - offset 
 OFFSETS, with its actual age (webcams drop frames; parts may run at other rates later).
 """
 
+from collections import deque
+
 import numpy as np
 
 OFFSETS = np.array([0.0, 0.1, 0.2, 0.4, 0.8, 1.6])  # seconds
@@ -39,10 +41,15 @@ def causal_scale(times, world, vis, present):
 
 def frame_features(times, world, image, vis, present, head3d=True):
     """Observations (T, ...) -> (T, FRAME_DIM) float32. head3d=False: 3D head points zeroed."""
-    s = causal_scale(times, world, vis, present)
+    return scaled_features(world, image, vis, present, causal_scale(times, world, vis, present), head3d)
+
+
+def scaled_features(world, image, vis, present, s, head3d=True):
+    """frame_features given the per-frame scale s (T,)."""
+    T = len(s)
     f = np.concatenate([
-        (world / s[:, None, None]).reshape(len(times), -1),
-        np.concatenate([image[..., :2] - 0.5, image[..., 2:3]], -1).reshape(len(times), -1),
+        (world / s[:, None, None]).reshape(T, -1),
+        np.concatenate([image[..., :2] - 0.5, image[..., 2:3]], -1).reshape(T, -1),
         vis,
         present[:, None].astype(float),
     ], 1)
@@ -67,3 +74,42 @@ def model_input(feats, idx, age):
     missing = idx < 0
     x[missing] = 0.0
     return np.concatenate([x, age[..., None], missing[..., None].astype(np.float32)], -1)
+
+
+class StreamFeatures:
+    """One frame at a time (live use): push(t, ...) returns model_input for that frame, (O, FRAME_DIM + 2),
+    identical to frame_features + history_indices + model_input over the whole sequence so far. Keeps
+    only the frames the scale window and the oldest offset still need."""
+
+    def __init__(self, head3d=True):
+        self.head3d = head3d
+        self.widths = deque()  # (t, shoulder width) of frames that pass the scale check
+        self.scale = None
+        self.frames = deque()  # (t, features)
+
+    def push(self, t, world, image, vis, present):
+        """t: seconds; world (33, 3), image (33, 3), vis (33,), present: bool."""
+        w = float(np.linalg.norm(world[L_SH] - world[R_SH]))
+        if present and vis[L_SH] > 0.5 and vis[R_SH] > 0.5 and 0.1 < w < 0.8:
+            self.widths.append((t, w))
+        while self.widths and self.widths[0][0] < t - SCALE_WINDOW:
+            self.widths.popleft()
+        if self.widths:
+            self.scale = float(np.median([v for _, v in self.widths]))
+        elif self.scale is None:
+            self.scale = DEFAULT_SCALE
+        f = scaled_features(world[None], image[None], vis[None], np.array([present]), np.array([self.scale]), self.head3d)[0]
+        self.frames.append((t, f))
+        oldest = t - OFFSETS[-1] + 0.02
+        while len(self.frames) > 1 and self.frames[1][0] <= oldest:
+            self.frames.popleft()
+        out = np.zeros((len(OFFSETS), FRAME_DIM + 2), np.float32)
+        times = [ft for ft, _ in self.frames]
+        for o, off in enumerate(OFFSETS):
+            k = int(np.searchsorted(times, t - off + 0.02, side="right")) - 1
+            if k < 0:
+                out[o, -1] = 1.0
+            else:
+                out[o, :FRAME_DIM] = self.frames[k][1]
+                out[o, FRAME_DIM] = np.float32(t - times[k])
+        return out

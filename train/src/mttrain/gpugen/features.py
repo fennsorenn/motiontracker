@@ -1,10 +1,10 @@
-"""Model input features on padded batches (torch). Mirrors mttrain.features exactly.
+"""Model input features on padded batches (torch). Mirrors mtcore.features exactly.
 
 Padded frames have time +inf (so searches never land on them) and valid=False."""
 
 import torch
 
-from .. import features as F
+from mtcore import features as F
 
 
 def causal_scale(times, world, vis, present, valid):

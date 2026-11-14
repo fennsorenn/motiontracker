@@ -19,6 +19,11 @@ const src = path.join(dir, 'compare.mp4');
 const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-count_packets', '-show_entries',
   'stream=nb_read_packets', '-of', 'csv=p=0', src], { encoding: 'utf8' });
 const n = Number(probe.stdout.trim());
+// the frame rate compare.mp4 was rendered at (render.mjs --fps)
+const fpsProbe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate',
+  '-of', 'csv=p=0', src], { encoding: 'utf8' });
+const [fn, fd] = fpsProbe.stdout.trim().split('/').map(Number);
+const fps = fn / (fd || 1);
 if (!n) { console.error('cannot read', src); process.exit(1); }
 // webcam panel: the session video scaled to the panel height (render.mjs: scale=-2:size)
 const meta = JSON.parse(fs.readFileSync(path.join(sessionDir, 'session.json'), 'utf8'));
@@ -26,14 +31,22 @@ const camW = meta.processing?.width || 4, camH = meta.processing?.height || 3;
 const W = 2 * Math.round((size * camW / camH) / 2), H = size;
 
 const www = path.join(dir, 'www-overlay'), frames = path.join(dir, 'overlay-frames');
-for (const d of [www, frames]) { fs.rmSync(d, { recursive: true, force: true }); fs.mkdirSync(d, { recursive: true }); }
+fs.rmSync(www, { recursive: true, force: true });
+fs.mkdirSync(www, { recursive: true });
+// resumable: frames of an interrupted run are kept when its inputs are the same (overlay-frames/key.json)
+const srcStat = fs.statSync(src);
+const key = JSON.stringify({ src: [srcStat.size, srcStat.mtimeMs], sessionDir, size, from });
+const keyFile = path.join(frames, 'key.json');
+if (!fs.existsSync(keyFile) || fs.readFileSync(keyFile, 'utf8') !== key) fs.rmSync(frames, { recursive: true, force: true });
+fs.mkdirSync(frames, { recursive: true });
+fs.writeFileSync(keyFile, key);
 fs.copyFileSync(path.join(here, 'overlay.html'), path.join(www, 'overlay.html'));
 fs.symlinkSync(path.join(sessionDir, 'landmarks.jsonl'), path.join(www, 'landmarks.jsonl'));
 
 const port = 8890 + Math.floor(Math.random() * 100), dbg = port + 1000;
 const server = spawn('python3', ['-m', 'http.server', String(port), '-d', www], { stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new', `--remote-debugging-port=${dbg}`, '--no-first-run',
-  `--user-data-dir=${dir}/chrome-profile-overlay`, 'about:blank'], { stdio: 'ignore' });
+  `--user-data-dir=${dir}/chrome-profile-overlay-${process.pid}`, 'about:blank'], { stdio: 'ignore' });
 const cleanup = () => { try { chrome.kill(); server.kill(); } catch {} };
 process.on('exit', cleanup);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,16 +69,19 @@ if (!ready) { console.error('overlay page not ready'); process.exit(1); }
 console.log('landmarks:', JSON.stringify(await ev('window.__info')), `panel ${W}x${H}, ${n} frames`);
 const t0 = from * 1000, start = Date.now();
 for (let k = 0; k < n; k++) {
-  const b64 = await ev(`window.drawAt(${t0 + (k * 1000) / 60})`);
-  fs.writeFileSync(path.join(frames, `${String(k).padStart(5, '0')}.png`), Buffer.from(b64, 'base64'));
+  const file = path.join(frames, `${String(k).padStart(5, '0')}.png`);
+  if (fs.existsSync(file)) continue;  // drawn before an interruption
+  const b64 = await ev(`window.drawAt(${t0 + (k * 1000) / fps})`);
+  fs.writeFileSync(file + '.tmp', Buffer.from(b64, 'base64'));
+  fs.renameSync(file + '.tmp', file);
   if (k % 600 === 0) console.log(`frame ${k}/${n}, ${((Date.now() - start) / 1000).toFixed(0)} s`);
 }
 ws.close(); cleanup();
 
-const r = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-framerate', '60', '-i', path.join(frames, '%05d.png'),
+const r = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-framerate', String(fps), '-i', path.join(frames, '%05d.png'),
   '-filter_complex', '[0:v][1:v]overlay=0:0:format=auto,format=yuv420p[v]', '-map', '[v]', '-frames:v', String(n),
   '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-threads', '4', path.join(dir, 'compare-landmarks.mp4')],
   { stdio: 'inherit' });
 console.log(r.status === 0 ? `wrote ${path.join(dir, 'compare-landmarks.mp4')}` : 'ffmpeg failed');
-for (const d of [www, frames, path.join(dir, 'chrome-profile-overlay')]) fs.rmSync(d, { recursive: true, force: true });
+for (const d of [www, frames, path.join(dir, `chrome-profile-overlay-${process.pid}`)]) fs.rmSync(d, { recursive: true, force: true });
 process.exit(r.status === 0 ? 0 : 1);

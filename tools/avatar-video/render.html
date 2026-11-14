@@ -36,9 +36,42 @@ loader.register((p) => new VRMLoaderPlugin(p));
 async function loadVrm() {
   const gltf = await loader.loadAsync('avatar.vrm');
   const vrm = gltf.userData.vrm;
+  // Morph names: three.js reads only mesh-level `extras.targetNames`; VRM 0.x exports (VRoid) keep them per
+  // primitive, so their morphs load as "0", "1", ... Take the names from the primitive's extras instead.
+  const json = gltf.parser.json;
+  gltf.scene.traverse((o) => {
+    const a = o.morphTargetInfluences && gltf.parser.associations.get(o);
+    if (!a || a.meshes === undefined) return;
+    const m = json.meshes[a.meshes];
+    const names = m.extras?.targetNames ?? m.primitives[a.primitives ?? 0]?.extras?.targetNames;
+    if (names) o.userData.morphNames = names;
+  });
   VRMUtils.removeUnnecessaryVertices(gltf.scene);
   VRMUtils.rotateVRM0(vrm); // VRM 0.x faces -Z; turn it to face the camera like 1.0
   return vrm;
+}
+
+// Face: ARKit -> Fcl_* morph weights like vspark's arkit_vrm_mapper in 'fcl' mode (sum of weight x
+// scale per target, clamped to 0..1), written to the morph targets after vrm.update() like vspark's
+// viewport does, so expression presets bound to the same morphs don't overwrite them.
+const arkitMap = data.panels.some((p) => p.arkit) ? await (await fetch('arkit_map.json')).json() : null;
+const mapTargets = arkitMap ? [...new Set(Object.values(arkitMap).flat().map(([n]) => n))] : [];
+function morphTargets(vrm) {
+  const m = new Map();
+  vrm.scene.traverse((o) => {
+    if (!o.morphTargetDictionary || !o.morphTargetInfluences) return;
+    for (const [raw, idx] of Object.entries(o.morphTargetDictionary)) {
+      const name = o.userData.morphNames?.[idx] ?? raw;
+      // Some VRoid exports prefix the morph names with mesh and material (`Face.M_F00_000_00_Fcl_MTH_A`):
+      // they are found under their `Fcl_*` part too.
+      const k = name.indexOf('Fcl_');
+      for (const key of k > 0 ? [name, name.slice(k)] : [name]) {
+        if (!m.has(key)) m.set(key, []);
+        m.get(key).push([o, idx]);
+      }
+    }
+  });
+  return m;
 }
 
 const panels = [];
@@ -51,7 +84,7 @@ for (const p of data.panels) {
   sun.position.set(0.5, 1.5, 2.0);
   scene.add(sun);
   scene.add(vrm.scene);
-  panels.push({ ...p, vrm, scene, vrm0: vrm.meta?.metaVersion === '0', i: 0 });
+  panels.push({ ...p, vrm, scene, vrm0: vrm.meta?.metaVersion === '0', i: 0, j: 0, morphs: p.arkit ? morphTargets(vrm) : null });
 }
 
 // Camera: in front, at upper-chest height, framing hips to above the head and a full arm reach.
@@ -85,21 +118,73 @@ function poseAt(p, t) {
   p.vrm.humanoid.resetNormalizedPose();
   p.vrm.humanoid.setNormalizedPose(pose);
   p.vrm.update(1 / 60);
+  if (p.arkit) faceAt(p, t);
+}
+
+function faceAt(p, t) {
+  const a = p.arkit;
+  while (p.j + 1 < a.t.length && a.t[p.j + 1] <= t) p.j++;
+  const v = a.t[p.j] <= t ? a.values[p.j] : null;
+  const w = {};
+  if (v)
+    for (const [shape, x] of Object.entries(v))
+      for (const [target, s] of arkitMap[shape] ?? []) w[target] = (w[target] ?? 0) + x * s;
+  // Every morph the mapper can drive is written each frame (0 when not driven), as vspark releases them.
+  for (const target of mapTargets)
+    for (const [mesh, idx] of p.morphs.get(target) ?? [])
+      mesh.morphTargetInfluences[idx] = Math.min(1, Math.max(0, w[target] ?? 0));
 }
 
 function segmentAt(t) {
   return data.segments.find((s) => s.t0 <= t && t < s.t1);
 }
 
+// Hand close-ups (data.handInsets): the avatar's right hand bottom left, its left hand bottom right (it
+// faces the viewer), each camera in front of the hand, aimed between the wrist and the middle knuckle.
+const handCam = new THREE.PerspectiveCamera(30, 1, 0.05, 20);
+const handPos = new THREE.Vector3(), knuckle = new THREE.Vector3();
+const HI = Math.round(S * 0.3);
+function renderHand(p, k, bone, x0) {
+  const side = bone.startsWith('left') ? 'left' : 'right';
+  p.vrm.humanoid.getRawBoneNode(bone).getWorldPosition(handPos);
+  p.vrm.humanoid.getRawBoneNode(`${side}MiddleProximal`).getWorldPosition(knuckle);
+  const c = handPos.clone().lerp(knuckle, 0.7);
+  handCam.position.set(c.x, c.y + 0.03, c.z + 0.34);
+  handCam.lookAt(c);
+  renderer.setViewport(k * S + x0, S / 16 + 6, HI, HI);
+  renderer.setScissor(k * S + x0, S / 16 + 6, HI, HI);
+  renderer.render(p.scene, handCam);
+}
+
+// Face close-up inset for panels with blendshapes: follows the head. Bottom right, or top left when the
+// hand close-ups take the bottom corners.
+const faceCam = new THREE.PerspectiveCamera(30, 1, 0.05, 20);
+const headPos = new THREE.Vector3();
+
 window.renderAt = (t) => {
   panels.forEach((p, k) => {
     poseAt(p, t);
+    if (p.arkit) {
+      p.vrm.humanoid.getRawBoneNode('head').getWorldPosition(headPos);
+      faceCam.position.set(headPos.x, headPos.y + 0.07, headPos.z + 0.62);
+      faceCam.lookAt(headPos.x, headPos.y + 0.07, headPos.z);
+    }
     renderer.setViewport(k * S, 0, S, S);
     renderer.setScissor(k * S, 0, S, S);
     renderer.render(p.scene, camera);
     renderer.setViewport(k * S + S - I - 6, S - I - S / 15 - 6, I, I);
     renderer.setScissor(k * S + S - I - 6, S - I - S / 15 - 6, I, I);
     renderer.render(p.scene, side);
+    if (data.handInsets) {
+      renderHand(p, k, 'rightHand', 6);
+      renderHand(p, k, 'leftHand', S - HI - 6);
+    }
+    if (p.arkit) {
+      const [fx, fy] = data.handInsets ? [6, S - I - S / 15 - 6] : [S - I - 6, S / 16 + 6];
+      renderer.setViewport(k * S + fx, fy, I, I);
+      renderer.setScissor(k * S + fx, fy, I, I);
+      renderer.render(p.scene, faceCam);
+    }
   });
   ctx.drawImage(renderer.domElement, 0, 0);
   ctx.font = `bold ${Math.round(S / 26)}px sans-serif`;
@@ -115,6 +200,17 @@ window.renderAt = (t) => {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.font = `${Math.round(S / 40)}px sans-serif`;
     ctx.fillText('side view (webcam to the right)', k * S + S - I - 2, S / 15 + 10);
+    if (data.handInsets) {
+      for (const [x0, label] of [[6, 'right hand'], [S - HI - 6, 'left hand']]) {
+        ctx.strokeRect(k * S + x0, S - S / 16 - 6 - HI, HI, HI);
+        ctx.fillText(label, k * S + x0 + 4, S - S / 16 - 2 - HI);
+      }
+    }
+    if (p.arkit) {
+      const [fx, fy] = data.handInsets ? [6, S / 15 + 6] : [S - I - 6, S - S / 16 - 6 - I];
+      ctx.strokeRect(k * S + fx, fy, I, I);
+      ctx.fillText('face', k * S + fx + 4, fy + 4);
+    }
     ctx.font = `bold ${Math.round(S / 26)}px sans-serif`;
   });
   const seg = segmentAt(t);

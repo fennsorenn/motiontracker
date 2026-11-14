@@ -99,7 +99,7 @@ def test_geometry_matches_numpy():
 
 
 def test_features_match_numpy():
-    from mttrain import features as F
+    from mtcore import features as F
     from mttrain.gpugen import features as G
     rng = np.random.default_rng(2)
     B, Tmax, K = 3, 40, 8
@@ -163,7 +163,7 @@ def test_generator_matches_numpy_statistically():
 def test_head_lock_matches_numpy():
     from mttrain import mpstyle as ms
     from mttrain.gpugen import geom
-    from mttrain.features import frame_features
+    from mtcore.features import frame_features
     from mttrain.gpugen.features import frame_features as gpu_features
     ch, pn, rest, lm = _setup()
     jn = list(ch.skeleton.joint_names)

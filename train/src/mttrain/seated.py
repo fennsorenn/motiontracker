@@ -112,13 +112,15 @@ def rest_weights(rng, n, fps, p_rest=0.6, max_cover=0.6):
     return w, names
 
 
-def seat(rng, pn, mp, fps=30.0, limits=None, force_rest=None, moves=True):
+def seat(rng, pn, mp, fps=30.0, limits=None, force_rest=None, moves=True, p_rest=0.6):
     """Model parameters (N, P) of a standing clip -> seated version (N, P).
 
     `force_rest` (left template name, right template name): both arms rest in these postures for
     the whole clip instead of random rest stretches (rendered rest test sessions).
 
     `moves`: False never adds head moves (rendered rest and head test sessions).
+
+    `p_rest`: chance per arm of resting stretches (0 for the rendered hand sessions: hands stay in use).
 
     `limits` (name -> (lo, hi), from mtcore.mhr.limits) clamps pose parameters afterwards, so
     targets never contain impossible poses (fits and random rest variations can stray past them)."""
@@ -167,7 +169,7 @@ def seat(rng, pn, mp, fps=30.0, limits=None, force_rest=None, moves=True):
         if force_rest:
             w, names = np.ones(n), np.array([force_rest[k]] * n, dtype=object)
         else:
-            w, names = rest_weights(rng, n, fps)
+            w, names = rest_weights(rng, n, fps, p_rest=p_rest)
         if not w.any():
             continue
         for name in set(names[w > 0]):

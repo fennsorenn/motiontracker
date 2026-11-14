@@ -15,6 +15,13 @@ D(b) depends on the bone:
   j's direction in MHR's A-pose rest (the rests differ, so their offset must not be copied). Each
   bone's global rotation is computed independently, so arms point where MHR's do whatever the torso
   and shoulders do; those only move where the arm is attached.
+- Hands: D also turns the palm: after the minimal rotation of the finger direction, a rotation about it
+  takes the avatar's across-the-knuckles direction (little -> index proximal) onto MHR's (pinky1 ->
+  index1). With the minimal rotation alone the avatar's palm sat 25 deg rolled against MHR's (found
+  2026-11-12 with rendered hands), and every finger with it.
+- Bones without a VRM child (finger and thumb distal): the avatar's direction is taken as the
+  continuation of the parent bone (no fingertip bone in VRM). With D = identity they inherited the
+  difference between MHR's A-pose and the avatar's T-pose, about 45 deg (found 2026-11-12).
 Joints MHR has but VRM lacks (spine0, twist joints, wrist_twist, thumb0, pinky0, extra foot joints)
 fold in automatically through the globals.
 """
@@ -52,6 +59,10 @@ for s, m in (("left", "l"), ("right", "r")):
             f"{s}{vf}Intermediate": (f"{m}_{mf}2", f"{m}_{mf}3"),
             f"{s}{vf}Distal": (f"{m}_{mf}3", f"{m}_{mf}_null"),
         })
+
+# hands: (avatar bones, MHR joints) across the knuckles, index side minus little side; see the docstring
+HAND_ACROSS = {f"{s}Hand": ((f"{s}IndexProximal", f"{s}LittleProximal"), (f"{m}_index1", f"{m}_pinky1"))
+               for s, m in (("left", "l"), ("right", "r"))}
 
 # bones whose MHR rest maps onto the avatar's rest (D = identity); see the module docstring
 REST_ALIGNED = {"hips", "spine", "chest", "upperChest", "neck", "head", "leftShoulder", "rightShoulder"}
@@ -131,12 +142,26 @@ class MhrToVrm:
             jp = MAP[b][2] if len(MAP[b]) > 2 else j  # joint where the VRM bone sits
             self.q_rest_inv[b] = qinv(Q[self.jn.index(j)])
             vc = VRM_CHILD.get(b)
-            if b in REST_ALIGNED or jd is None or vc not in vrm_rest_positions:
+            vp = VRM_PARENT.get(b)
+            if vc in vrm_rest_positions:
+                d_vrm = vrm_rest_positions[vc] - vrm_rest_positions[b]
+            elif vc is None and vp in vrm_rest_positions and jd is not None and b not in REST_ALIGNED:
+                d_vrm = vrm_rest_positions[b] - vrm_rest_positions[vp]  # distal: continue the parent
+            else:
+                d_vrm = None
+            if b in REST_ALIGNED or jd is None or d_vrm is None:
                 self.D[b] = np.array([0, 0, 0, 1.0])
                 continue
             d_mhr = P[self.jn.index(jd)] - P[self.jn.index(jp)]
-            d_vrm = vrm_rest_positions[vc] - vrm_rest_positions[b]
             self.D[b] = q_between(d_vrm, d_mhr)
+            if b in HAND_ACROSS and all(v in vrm_rest_positions for v in HAND_ACROSS[b][0]):
+                (vi, vl), (mi, ml) = HAND_ACROSS[b]
+                a_vrm = qrot(self.D[b], vrm_rest_positions[vi] - vrm_rest_positions[vl])
+                a_mhr = P[self.jn.index(mi)] - P[self.jn.index(ml)]
+                n = d_mhr / np.linalg.norm(d_mhr)
+                a_vrm, a_mhr = a_vrm - (a_vrm @ n) * n, a_mhr - (a_mhr @ n) * n
+                ang = np.arctan2(np.cross(a_vrm, a_mhr) @ n, a_vrm @ a_mhr)
+                self.D[b] = qmul(np.append(n * np.sin(ang / 2), np.cos(ang / 2)), self.D[b])
 
     def globals(self, state):
         Q = state[..., 3:7]

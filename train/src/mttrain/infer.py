@@ -17,34 +17,18 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from mtcore.convert import MhrToVrm
+from mtcore.features import frame_features, history_indices, model_input
+from mtcore.lifter_pose import LifterPose
 from mtcore.mhr import load, skeleton_state
 from mtcore.paths import AVATARS
 from mtcore.vrm import load_vrm
 
-from .features import frame_features, history_indices, model_input
 from .model import Lifter
-from .skeleton import OUT_JOINTS, PARENT_IDX, quat_to_mat
+from .skeleton import OUT_JOINTS, PARENT_IDX
 
 # VRM bones the model drives; legs, feet, eyes and fingers would only be the rest pose
 OUTPUT_BONES = ["hips", "spine", "chest", "upperChest", "neck", "head", "leftShoulder", "rightShoulder",
                 "leftUpperArm", "rightUpperArm", "leftLowerArm", "rightLowerArm", "leftHand", "rightHand"]
-# camera axes (x right, y down, z forward) -> MHR world for a performer facing the camera
-R0 = np.diag([1.0, -1.0, -1.0])
-
-
-def mat_to_quat(R):
-    """Rotation matrices (..., 3, 3) -> quaternions (..., 4) xyzw."""
-    m = R
-    w = np.sqrt(np.maximum(0, 1 + m[..., 0, 0] + m[..., 1, 1] + m[..., 2, 2])) / 2
-    x = np.sqrt(np.maximum(0, 1 + m[..., 0, 0] - m[..., 1, 1] - m[..., 2, 2])) / 2
-    y = np.sqrt(np.maximum(0, 1 - m[..., 0, 0] + m[..., 1, 1] - m[..., 2, 2])) / 2
-    z = np.sqrt(np.maximum(0, 1 - m[..., 0, 0] - m[..., 1, 1] + m[..., 2, 2])) / 2
-    x = np.copysign(x, m[..., 2, 1] - m[..., 1, 2])
-    y = np.copysign(y, m[..., 0, 2] - m[..., 2, 0])
-    z = np.copysign(z, m[..., 1, 0] - m[..., 0, 1])
-    q = np.stack([x, y, z, w], -1)
-    return q / np.linalg.norm(q, axis=-1, keepdims=True)
 
 
 def read_session(path):
@@ -68,12 +52,10 @@ class Runner:
         self.model.load_state_dict(ck["model"])
         self.model.eval()
         self.ch = load()
-        self.jn = list(self.ch.skeleton.joint_names)
-        self.parents = list(self.ch.skeleton.joint_parents)
         rest = skeleton_state(self.ch, np.zeros(len(self.ch.parameter_transform.names)))
-        self.rest_g = quat_to_mat(rest[:, 3:7])  # (J, 3, 3)
-        self.out_idx = [self.jn.index(j) for j in OUT_JOINTS]
-        self.conv = MhrToVrm(self.jn, rest, load_vrm(AVATARS / f"{avatar}.vrm")[2])
+        self.pose = LifterPose(OUT_JOINTS, PARENT_IDX, self.ch.skeleton.joint_names, self.ch.skeleton.joint_parents,
+                               rest, load_vrm(AVATARS / f"{avatar}.vrm")[2])
+        self.jn = self.pose.jn
 
     def predict(self, times, world, image, vis, present, head3d=True):
         feats = frame_features(times, world, image, vis, present, head3d)
@@ -84,28 +66,10 @@ class Runner:
         return rot.numpy().astype(np.float64), torch.exp(-ls).numpy()
 
     def mhr_globals(self, rot):
-        """Rest-relative predictions (T, 17, 3, 3) -> MHR world joint rotations (T, J, 3, 3); joints the
-        model doesn't predict keep their rest pose relative to their parent."""
-        T = len(rot)
-        Gc = [None] * len(OUT_JOINTS)
-        for k, p in enumerate(PARENT_IDX):
-            Gc[k] = rot[:, k] if p < 0 else Gc[p] @ rot[:, k]
-        G = np.empty((T, len(self.jn), 3, 3))
-        pred = dict(zip(self.out_idx, range(len(OUT_JOINTS))))
-        for j, p in enumerate(self.parents):
-            if j in pred:
-                G[:, j] = R0.T @ Gc[pred[j]] @ self.rest_g[j]
-            elif p < 0:
-                G[:, j] = self.rest_g[j]
-            else:
-                G[:, j] = G[:, p] @ (self.rest_g[p].T @ self.rest_g[j])
-        return G
+        return self.pose.mhr_globals(rot)
 
     def vrm(self, rot):
-        state = np.zeros(rot.shape[:1] + (len(self.jn), 8))
-        state[..., 3:7] = mat_to_quat(self.mhr_globals(rot))
-        state[..., 7] = 1.0
-        return self.conv.locals(state)
+        return self.pose.vrm(rot)
 
     def step_cost_ms(self, x, n=300):
         """Single-frame latency on one CPU thread (the live use case)."""

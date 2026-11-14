@@ -223,6 +223,7 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
   - Start the face head as a **temporal refiner on top of MediaPipe's blendshape model** (fine-tune from Google's weights rather than train from scratch).
   - Labels: **rendered Perfect Sync VRoid avatars** with random blendshape sequences (exact labels); and **ARKit-as-teacher self-recordings** (iPhone + webcam simultaneously → ARKit blendshape + head-pose labels for webcam frames, no license issue).
   - Expression-as-context: add blendshapes to the shared context channel **now, with masking**, so architecture supports it; learn the correlation later from real paired recordings (ARKit+webcam sessions naturally contain face–body co-occurrence). Synthetic data with independent expressions would teach "unrelated" (harmless, useless).
+- **First slice (2026-11-12): MediaPipe's own blendshape model on Holistic's face landmarks** in the runtime, no learned face head yet. `[USER]` Revisit later: the merger may want blendshapes (or the face model's features) as input. `[USER]` See §7.5.
 - **MediaPipe face cost**: owner remembered the blendshape variant as much heavier. Claude's explanation: blendshape stage is <1 ms; heaviness was likely plumbing: running legacy Face Mesh *and* Face Landmarker (double detection), IMAGE running mode (no tracking), or GPU delegate overhead on a tiny model. `[CLAUDE]` → worth re-checking in baseline.
 
 ### 3.12 Out of scope
@@ -276,8 +277,23 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
 ### 5.5 Synthetic noise model `[CLAUDE]`
 Frequency-shaped jitter; depth noise ≫ 2D noise; dropouts; confidence-correlated error; occasional left/right hand swaps; sudden glitches. Calibrate against real MediaPipe output (§5.4). Realistic noise matters more than which anti-hedging loss is chosen.
 
-### 5.6 Hands `[CLAUDE]`
-Hands have the least permissively licensed mocap → **procedural finger poses** within anatomical joint limits, smooth random trajectories between them.
+### 5.6 Hands `[CLAUDE]` → `[USER]` (2026-11-12)
+Hands have the least permissively licensed mocap → **procedural finger poses** within anatomical joint limits, smooth random trajectories between them. `[USER]` (2026-11-12)
+- Hand model v2 (owner, 2026-11-12, after the h2 comparison video): `[USER]` unless marked
+  - The hand model also outputs the hand's **absolute rotation and position** (camera frame), so it stays independent of the body; the wrist bend is computed downstream from the body's forearm (merger later, a simple combination step first). `[USER]`
+  - **Position and rotation history as input** (helps tell MediaPipe's palm/back flips from real turns); remaining ambiguity to the merger. `[USER]`
+  - **Hands as a pair**: shared per-hand encoder (left mirrored) plus a joint layer seeing both hands, so swaps, occlusion and hand-to-hand contact can be learned; each hand still works alone. `[USER]` Cross-part relations (hand-face, retargeting) stay with the merger (§3.10a). `[CLAUDE]`
+  - **Explicit hand interactions, temporary flips and hand swaps in the training data**: interactions as real two-hand motion (IK choreography), flips and swaps as detector failures calibrated on renders of those interactions through real MediaPipe. `[USER]`
+  - Combination step puts the hand's twist about the forearm onto the lower arm (overriding the body model's), only the bend onto the wrist, with wrist limits and flip rejection. `[CORRECTED]` (2026-11-13): the rendered truth carries the forearm twist on the hand bone, and moving it onto the lower arm put the lower arm 129 deg off; the combination step now puts the whole rotation on the hand, rejecting implausible bends. `[CLAUDE]`
+- Hand model v3 (owner, 2026-11-13, after the p2 comparison video: counting still weak although the landmarks follow; lost hands keep their last pose instead of relaxing; hands near the body clip a little): attack it in the training data. `[USER]`
+  - **More independent finger poses** (fingers extended/curled independently, counting in more styles). `[USER]`
+  - **Explicit off-screen sections**: hands leave the frame and settle into a varied relaxed rest (fingers and wrist). The model learns the probable pose and orientation while unseen (a hand leaving at the bottom probably hangs) for fingers **and** rotation, and **emits confidence**; the merger prefers the body's pose input when the hand's confidence is low. `[USER]`
+  - The model also **ingests a detector confidence**: one generic per-hand score slot (Holistic: the pose model's visibility of the wrist/hand points; Hand Landmarker: its handedness score), synthesized from each detector's calibrated distribution, so training stays flag-free. `[USER]`
+  - **Body contact poses** (hands in the lap, on thighs/belly/chest, crossed arms), targets collision-free where the landmarks would clip. Data only; body landmarks as input may come with the merger later. `[USER]`
+  - Correction data (observed hand landmarks clipping into the body, target pose corrected outward) belongs to the merger, which sees body and hands; the hand model doesn't see the body. `[USER]` (2026-11-13)
+  - **Hand detector** (2026-11-12): MediaPipe's standalone Hand Landmarker (own palm detector) finds hands without the head in view, where Holistic finds almost none (owner's first hands-v1 take: Holistic 0-19%, Hand Landmarker 80-100%). On renders (head in view): fewer hands detected (52% vs 76% of visible hands; small hands) but far fewer palm/back flips (0.6% vs 9.7%) and fewer swaps with the hands close (6.9% vs 19%); same shape error. Owner leans toward offering it (hands-only users with headless framing), possibly as the default. `[USER-LEAN]` Runtime setting holistic / hands / both. `[CLAUDE]` The hand model is trained on a mix of both detectors' error patterns, with no detector flag, so it stays detector-agnostic while it only reads landmarks; once it reads a detector's internal features (latents) it is tied to that detector. `[USER]` (2026-11-12) A flag with dropout can be added later if specializing helps. `[CLAUDE]` What drives the arms in hands-only mode (no body): decide later. `[USER]`
+  - Order: wrist first, then the finger improvements (independent fingers and counting, bend axis) from the owner's feedback on h2. `[USER]`
+- First learned hand model (plan `dev-notes/plans/m4-hand-model.md`): synthetic MediaPipe hand landmarks from MHR FK plus a noise model calibrated on rendered hands `[USER]`; input = the hand's own landmarks only for now, deferring full-pose context (§3) `[USER]`; judged on rendered hands with exact ground truth against the ported solve `[USER]` (all 2026-11-12).
 
 ### 5.7 Optional real paired data `[CLAUDE]` → `[OPEN]`
 - **Consumer IMU suit** (e.g. Sony mocopi, a few hundred dollars): record yourself with suit + webcam simultaneously → paired real data with rotation labels in the exact target domain. IMU drift is manageable over short clips. Possibly the highest-value purchase in the project.
@@ -313,7 +329,7 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 
 ### 7.1 Shape
 - **Standalone service first**, connected via WebSocket/UDP/etc; **language-specific libraries later** for lower latency. `[USER]`
-- **Service owns the camera** and sends only poses (a few hundred bytes/frame) by default; shipping frames between processes is where cost goes. `[CLAUDE]`
+- **Service owns the camera** and sends only poses (a few hundred bytes/frame) by default; shipping frames between processes is where cost goes. `[USER]` (2026-11-12: camera, MediaPipe and the pose model in one runtime, since feature taps need direct access to the MediaPipe models)
 - **Also support an incoming media stream** (owner's idea), e.g. a **browser client** for testing the service without the full consumer app. `[USER]`
   - Frame-source abstraction: local camera, video file (repeatable tests), remote stream. `[CLAUDE]`
   - Remote stream options: **JPEG over WebSocket** (simplest, fine for test client) → **WebRTC** later (proper real-time; enables phone-as-camera). `[CLAUDE]`
@@ -334,9 +350,31 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 - Local transport latency is sub-millisecond; camera exposure/buffering and inference dominate. `[CLAUDE]`
 
 ### 7.3 Implementation language
-- **POC service in Python** (ONNX Runtime, MediaPipe), with an interface matching what the native core will expose. `[CLAUDE]`
+- **POC service in Python** (ONNX Runtime, MediaPipe), with an interface matching what the native core will expose. `[USER]` (2026-11-12)
 - Later: **native core library (C++ or Rust)**, service as thin wrapper; language libs = bindings (N-API for Node, Python, C# for Unity). `[CLAUDE]` → language choice `[OPEN]`
 - Feature taps require **leaving the MediaPipe Tasks API** (it doesn't expose intermediate tensors): run the models directly and **reimplement detect-then-track plumbing** (pose ROI from previous frame's auxiliary landmarks 33/34, etc). Real engineering work; plan the keypoint-only lifter as a complete milestone first. `[CLAUDE]`
+
+### 7.4 vspark integration (2026-11-12)
+Pulled forward from M2 so the model can be tried live. Plan: `dev-notes/plans/m2-vspark-runtime.md`.
+- **vspark gets its own behavior** (kind `learned_tracker`, label "Learned Tracking") so the runtime feels native. `[USER]`
+- **Runtime loaded lazily from this repo, not bundled into vspark**: vspark starts it through `uv` from a local checkout now, from the public git URL later. `[USER]`
+- **Output: VMC** (OSC over localhost UDP); confidence and presence under an own OSC namespace. `[USER]` ("VMC if that's the most suitable format")
+- **Control over the child process's stdin/stdout** (JSON lines: start/stop, camera, avatar; status and camera list back). WebSocket deferred to the browser viewer. `[USER]` (deviates for now from §7.2's WebSocket-first shape)
+- **Avatar rest pose passed by vspark at start** (limb rest directions for MHR → VRM), VRoid rest as the default. `[USER]` All CC0 VRoid samples share the same rest offsets from an ideal T-pose (upper arm 2.7, forearm 4.7, hand ~8.3 deg).
+- **The model drives every bone it predicts**, head included; vspark's mixer combines it with other sources. `[USER]`
+- **First model: m1-v10.** `[USER]`
+- Weights stay in this repo's gitignored `data/`; vspark never holds them. `[CLAUDE]`
+- Repo made public 2026-11-12 without a license yet (all rights reserved). Weights to be published separately later (release asset with model card), never CMU-derived data. `[USER]`
+
+### 7.5 Face and hands in the runtime (2026-11-12)
+Plan: `dev-notes/plans/m2-face-hands.md`. Model stays m1-v10 for the body. `[USER]`
+- **Face:** MediaPipe's blendshape model (from the Face Landmarker bundle) run on the face landmarks Holistic already produces, 52 ARKit values out over VMC; no second face detector (vspark runs Holistic + Face Landmarker today, detecting the face twice). `[USER]` To revisit when the merger is built (blendshapes as merger input). `[USER]`
+  - `[CORRECTED]` (2026-11-12) The Holistic bundle ships the same blendshape model (byte-identical) and Holistic's Python API outputs it (`output_face_blendshapes`); vspark's note that it is a no-op holds for WASM at most. So no extra interpreter is needed.
+  - Face mesh: Holistic ships the *lite* Face Mesh V2, Face Landmarker the *full* one (same 478 points). Swapping the full mesh into the Holistic bundle raises blendshape agreement with Face Landmarker from median correlation 0.72 to 0.87 on the session (runtime, 662 frames) for about 0.2 ms/frame; body output bit-identical. Runtime flag `--face-mesh full|lite`, default `full`; built locally from the two pinned Google downloads, not redistributed. Flag only, no vspark setting for now. `[USER]` (2026-11-12)
+  - When face-model features (latents, M7) feed learned parts, lite and full stop being interchangeable: their internal features differ. `full` is then the reference the learned parts train on; `lite` remains a cheaper mode without learned face features (merger trained with features dropped out, §5). `[CLAUDE]`
+  - Left/right: the avatar mirrors the person. On the mirrored frames MediaPipe's pose "left" is the person's right, and its *Left blendshapes follow the image's right side as well (measured), so face and body agree when the blendshapes are passed on unswapped, as vspark's MediaPipe Tracking does. `[CLAUDE]` `[CORRECTED]` (2026-11-12): a first version swapped them to the person's own left, which put winks on the opposite side from the arms. Note: vspark's VMC "mirror" option swaps bones only, not ARKit shapes.
+- **Hands:** port vspark's algorithmic finger solve into the runtime first so fingers work end to end, then replace it with a learned hand model (procedural finger poses, §5.6). `[USER]`
+- Same runtime, same VMC stream (blendshapes as `/VMC/Ext/Blend/Val` with ARKit names, fingers as bones). `[CLAUDE]` vspark's VMC receiver reads ARKit only from RhyLive's `/Face` today, so it gets standard `Blend/Val` support. `[CLAUDE]`
 
 ---
 
@@ -366,6 +404,7 @@ Hands have the least permissively licensed mocap → **procedural finger poses**
 | **Training amplitude exaggeration / gains / deadzones as knobs** | `[DISCARDED]` `[CLAUDE]` | Simple post-processing; no need to learn. |
 | **100STYLE** | Deprioritized | License unconfirmed; locomotion-only. |
 | **CMU FBX conversion on 4TU.ResearchData** | `[DISCARDED]` | Relicensed CC BY-NC. Use original/cgspeed BVH. |
+| **Synthetic MediaPipe body co-rotation with the head** (m1-v11) | `[DISCARDED]` by `[USER]` (2026-11-12) | Better on renders, but on the real session the avatar slumped and looked down, and head turns looked better coming from the head in v10; nothing visibly improved. A follow-up with wider torso-tilt randomness was not trained: the session's MediaPipe torso pitch (median -14 deg) already sits mid-distribution of the synthetic data (median -16 deg). Plan: `dev-notes/plans/m1-v11-body-corot.md` (branch `feature/m1-v11-body-corot`). |
 
 ---
 

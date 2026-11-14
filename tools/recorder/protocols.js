@@ -34,6 +34,37 @@ export const PROTOCOLS = {
       { label: 'still', variant: 'hands-on-desk', duration: 10, prompt: 'Rest your hands on the desk where the camera can see them. Hold still.' },
     ],
   },
+  // Hands and two-hand interactions for the hand model (dev-notes/plans/m4-hand-model.md, owner
+  // 2026-11-12): individual fingers and counting (weak in h2), wrist bends, real palm turns (vs
+  // MediaPipe's palm/back flips), contacts between the hands, crossings and one hand in front of the
+  // other (MediaPipe's hand swaps and losses). Segments with a known finger state or a true contact are
+  // usable as weak labels. "Left" and "right" are your own hands.
+  'hands-v1': {
+    // Framing: head and shoulders must be in view. Holistic finds the hands from the body (face and pose
+    // first, hands next to the pose's wrists); a first take framed on torso and hands only got the face
+    // in 0% and the hands in 0-19% of frames (2026-11-12). With the face in view the desk is out of frame
+    // for the owner's setup, so the rest steps hold the hands low in front of the body instead.
+    description: 'Fingers, wrists and two-hand interactions. Keep your head and shoulders in view. About 2 min.',
+    leadIn: 3,
+    steps: [
+      { label: 'still', variant: 'hands-low', duration: 6, prompt: 'Head, shoulders and hands in view. Rest your hands low in front of you where the camera can still see them. Hold still.' },
+      { label: 'count', variant: 'left-index-first', duration: 8, prompt: 'Left hand up, palm to the camera. Count 1 to 5: index, middle, ring, little finger, thumb. About one per second.' },
+      { label: 'count', variant: 'right-index-first', duration: 8, prompt: 'Now the right hand: count 1 to 5 starting with the index finger.' },
+      { label: 'count', variant: 'both-thumb-first', duration: 8, prompt: 'Both hands: count 1 to 5 starting with the thumb, then back down to a fist.' },
+      { label: 'fingers', variant: 'single', duration: 10, prompt: 'Both hands open, palms to the camera. Bend each finger down and up on its own: index, middle, ring, little, then thumb.' },
+      { label: 'wrist', duration: 8, prompt: 'Keep your forearms still. Bend your wrists up and down, then side to side.' },
+      { label: 'turn', duration: 8, prompt: 'Turn your palms toward the camera and away again: slowly first, then quickly.' },
+      { label: 'contact', variant: 'palms-together', duration: 5, prompt: 'Press your palms together in front of your chest. Hold.' },
+      { label: 'pair', variant: 'fingertips', duration: 8, prompt: 'Touch the fingertips of both hands together, then tap your two index fingers against each other.' },
+      { label: 'pair', variant: 'count-on-hand', duration: 10, prompt: 'Left hand open. With your right index finger, touch each finger of your left hand, thumb to little finger.' },
+      { label: 'pair', variant: 'rub-clap', duration: 8, prompt: 'Rub your hands together, then clap a few times.' },
+      { label: 'pair', variant: 'cross', duration: 8, prompt: 'Cross your hands in front of your chest and uncross them, a few times. Switch which hand is in front.' },
+      { label: 'pair', variant: 'occlude', duration: 8, prompt: 'Hold one hand in front of the other, palms to the camera, and slide it slowly across.' },
+      { label: 'pair', variant: 'approach', duration: 8, prompt: 'Point both index fingers at each other and bring them slowly together until they almost touch, then apart.' },
+      { label: 'dropout', duration: 8, prompt: 'Drop your hands out of view and bring them back, a few times.' },
+      { label: 'still', variant: 'hands-low', duration: 6, prompt: 'Rest your hands low in front of you again, in view. Hold still.' },
+    ],
+  },
   free: {
     description: 'No prompts. Press S to start/stop a "still" segment.',
     leadIn: 0,

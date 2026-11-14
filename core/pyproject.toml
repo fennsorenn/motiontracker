@@ -1,14 +1,19 @@
 [project]
 name = "mtcore"
 version = "0.0.0"
-description = "Shared motiontracker code: MHR loading, CMU reader + fit, MHR -> VRM 1.0 conversion"
+description = "Shared motiontracker code: MHR loading, CMU reader + fit, MHR -> VRM 1.0 conversion, model input features"
 requires-python = ">=3.12,<3.13"
-# torch comes in through pymomentum-cpu; consumers pick the build (CPU for spikes, CUDA for train/).
-# The CPU pin below only applies when developing core on its own.
-dependencies = ["pymomentum-cpu", "numpy"]
+# torch comes in through pymomentum-cpu (extra "mhr"); consumers pick the build (CPU for spikes, CUDA
+# for train/). The CPU pin below only applies when developing core on its own.
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+# MHR loading and CMU fitting (mtcore.mhr, mtcore.cmu_fit). The runtime (service/) uses only the
+# numpy-only modules (features, convert, vrm) and does not install it.
+mhr = ["pymomentum-cpu"]
 
 [dependency-groups]
-dev = ["pytest", "torch>=2.8,<2.9"]
+dev = ["pytest", "torch>=2.8,<2.9", "pymomentum-cpu"]
 
 [build-system]
 requires = ["uv_build>=0.10.11,<0.11.0"]
