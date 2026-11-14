@@ -89,3 +89,24 @@ against the chest (which `m1` under-reads, head-vs-chest slope ~0.2 against a ta
 ## Output
 
 Merge into `dev` when the owner accepts the evaluation.
+
+## Progress (2026-11-14)
+
+- Step 1 done: `mtcore.facepose` (canonical face fit, metadata read from the Face Landmarker bundle without
+  protobuf) and `mttrain.merger.facecal` (calibration on 9 rendered sets, `data/merger/calib/face.json`). Face-mesh
+  head pose against the truth: median 6.8 deg over all sets (p90 14), slopes turn 1.10 / nod 0.93 / tilt 0.90, face
+  seen in 81% of render frames; error mostly a per-sequence offset (nod 6.3 deg between sequences, 2.5 within) plus
+  ~1 deg jitter per 10 Hz sample. `m1-v10`'s head on the same renders: 14-19 deg.
+- Step 2 running: merger pool `data/merger/pool` (`hands.pool2 --full --no-tremor`, 4 x 380 train draws + 110 val,
+  resumable).
+- Step 3 done: `mttrain.merger.batch` (`GpuGenerator` split into `crop`/`observe`, body model batches verified
+  bit-identical; shared camera for body and hands; frozen `m1-v10` and `p3`; simulated face head pose as slow drift
+  plus white jitter; real blendshapes from `data/videos/*-full/face.landmarks.jsonl`, 30% dropout; base pose =
+  hand-written combination in the body model's frame; clipping correction: 30% of samples with observed hands near
+  the torso/thighs pushed 1-4 cm into the body). On a small test pool the base pose already halves the body model's
+  head error (12.4 -> 7.5 deg) and cuts wrists 30 -> 23-25 deg.
+- Input jitter calibration: synthetic part outputs already jitter about as much as real ones at rest (body head 0.7
+  vs 0.6-0.9 deg, body hands 2.4 vs 1.7-2.9 deg per 10 Hz frame; hand model 3.9 synthetic vs ~2 real), so the extra
+  input jitter is small (default 0.75 deg).
+- Step 4 done: `mttrain.merger.model` (residuals over offsets 0, 1, 2, 4, 8 frames) and `mttrain.merger.train`
+  (resumable; validation compares merger, base pose and body model).
