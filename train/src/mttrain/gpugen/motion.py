@@ -92,6 +92,9 @@ def rest_weights(gen, B, n, fps, device, p_rest=0.6, max_cover=0.6, slots=3):
     return w, names
 
 
+LIFE_SMOOTH_S = 0.3  # merger: moving-average window over the seater's idle signals
+
+
 class Seater(torch.nn.Module):
     def __init__(self, pn, limits):
         super().__init__()
@@ -117,8 +120,9 @@ class Seater(torch.nn.Module):
     def clamp(self, mp):
         return torch.maximum(torch.minimum(mp, self.hi), self.lo)
 
-    def forward(self, gen, mp, seated, fps=30.0):
-        """mp (B, N, P), seated (B,) bool -> seated where requested, then clamped to the limits."""
+    def forward(self, gen, mp, seated, fps=30.0, smooth_life=False):
+        """mp (B, N, P), seated (B,) bool -> seated where requested, then clamped to the limits. `smooth_life`: the
+        idle signals (AR(1), rough frame to frame) low-passed over LIFE_SMOOTH_S (merger targets without jitter)."""
         B, n, _ = mp.shape
         dev = mp.device
         P = self.P
@@ -129,6 +133,8 @@ class Seater(torch.nn.Module):
         tau = [3.0, 3.0, 3.0] * 2 + [2.0, 2.0, 4.0, 3.0, 3.0, 3.0] + [2.5, 2.5] + [1.5] * 20 \
             + [HEAD_LIFE_TAU] * len(HEAD_LIFE)
         S = slow_signals(gen, B, n, fps, sig, tau, dev)
+        if smooth_life:
+            S = smooth(S.reshape(-1, n), fps, LIFE_SMOOTH_S).reshape(S.shape)
         out = mp.clone()
         for k, s in enumerate("lr"):
             for key in LEG_ZERO:

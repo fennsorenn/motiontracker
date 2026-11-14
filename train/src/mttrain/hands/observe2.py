@@ -97,14 +97,15 @@ class PairObserver:
         # renders rarely take a hand far out of view; real hands dropped below the frame read ~0.1 (Holistic)
         return torch.where(state == STATES.index("out"), sc * torch.exp(-excess / OUT_FADE), sc)
 
-    def __call__(self, hands, body, gen):
-        """hands (B, F, 2, 21, 3) MHR metres, slots l, r, frames oldest first; body (B, T, 33, 3) for the camera.
+    def __call__(self, hands, body, gen, camera=None):
+        """hands (B, F, 2, 21, 3) MHR metres, slots l, r, frames oldest first; body (B, T, 33, 3) for the camera
+        (or `camera` = (R, t, fx) given, e.g. the merger's shared camera).
         Returns obs dict (slot-major tensors (B, F, 2, ...)) and truth dict (camera-frame quantities)."""
         dev = self.device
         B, F = hands.shape[:2]
         u = lambda *s: torch.rand(*s, device=dev, generator=gen)
         n = lambda *s: torch.randn(*s, device=dev, generator=gen)
-        R, t, fx = sample_desk_camera(body, gen)
+        R, t, fx = sample_desk_camera(body, gen) if camera is None else camera
         C = torch.einsum("bij,bfskj->bfski", R, hands - t[:, None, None, None])
         img = image_t(C, fx[:, None, None])  # (B, F, 2, 21, 3)
         _, size = palm_frame_t(img)  # (B, F, 2) palm length in frame widths

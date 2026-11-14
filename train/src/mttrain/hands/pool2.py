@@ -11,7 +11,9 @@ hands (N, T, 2, 21, 3) MediaPipe's hand points per side (l, r) in MHR world metr
 MediaPipe-style body landmarks (camera placement), q (N, T, 2, 27) finger parameters, kind (N,) 0 = stage,
 1 = pairs. Every sequence is collision-relaxed (`relax`); ones whose hands still overlap more than
 FINAL_OVERLAP_CM, or with hands or forearms inside the body mesh in more than MAX_CLIP_FRAMES of the frames,
-are drawn again (5 tries, then skipped). Resumable: every CHECKPOINT_EVERY draws a partial file
+are drawn again (5 tries, then skipped). With --full (merger pool, `mttrain.merger`): the full MHR parameter
+sequences instead, mp (N, T, P) float32 at 30 fps, plus kind; --no-tremor leaves the finger tremor out (jitter-free
+targets). Resumable: every CHECKPOINT_EVERY draws a partial file
 (<name>.partial.npz, with the generator state) is written; rerunning the same command resumes from it. CMU-derived (body proportions): local only. CPU (pymomentum IK): run under tools/guarded-run.sh.
 """
 
@@ -41,11 +43,12 @@ FPS, OUT_FPS = 30.0, 10.0
 CHECKPOINT_EVERY = 10  # sequences between partial saves (a run resumes from the last one)
 
 
-def save_partial(path, H, Bd, Q, K, next_i, skipped, rng):
+def save_partial(path, H, Bd, Q, K, next_i, skipped, rng, M=None):
     """Partial pool (kept sequences, next draw index, skip count, generator state), written atomically."""
     tmp = path.with_name(path.stem + ".tmp.npz")
-    np.savez(tmp, hands=np.stack(H), body=np.stack(Bd), q=np.stack(Q), kind=np.array(K, np.int8),
-             next=next_i, skipped=skipped, rng=json.dumps(rng.bit_generator.state))
+    arrays = dict(mp=np.stack(M)) if M is not None else dict(hands=np.stack(H), body=np.stack(Bd), q=np.stack(Q))
+    np.savez(tmp, **arrays, kind=np.array(K, np.int8), next=next_i, skipped=skipped,
+             rng=json.dumps(rng.bit_generator.state))
     tmp.replace(path)
 
 
@@ -74,13 +77,16 @@ def main():
     ap.add_argument("--merge", nargs="+", help="merge these stems' files into --name (no generation)")
     ap.add_argument("--dir", default=str(POOL2), help="pool directory (default data/m4/pool2)")
     ap.add_argument("--fresh", action="store_true", help="ignore a partial run of the same name (default: resume it)")
+    ap.add_argument("--full", action="store_true", help="save full MHR parameter sequences at 30 fps (merger pool)")
+    ap.add_argument("--no-tremor", action="store_true", help="no finger tremor (jitter-free targets)")
     a = ap.parse_args()
     from pathlib import Path
     pool = Path(a.dir)
     if a.merge:
         parts = [np.load(pool / f"{m}.npz") for m in a.merge]
-        np.savez_compressed(pool / f"{a.name}.npz", **{k: np.concatenate([p[k] for p in parts]) for k in ("hands", "body", "q", "kind")},
-                            fps=OUT_FPS)
+        keys = ("mp", "kind") if "mp" in parts[0] else ("hands", "body", "q", "kind")
+        np.savez_compressed(pool / f"{a.name}.npz", **{k: np.concatenate([p[k] for p in parts]) for k in keys},
+                            fps=float(parts[0]["fps"]))
         print(f"merged {a.merge} -> {a.name}: {sum(len(p['kind']) for p in parts)} sequences")
         return
     rng = np.random.default_rng(a.seed)
@@ -89,7 +95,7 @@ def main():
     lim = limits()
     lm = LandmarkModel(ch, skeleton_state(ch, np.zeros(len(pn))))
     fk = HandFK(ch)
-    hm = HandMotion(fk)
+    hm = HandMotion(fk, tremor=not a.no_tremor)
     pc = PairChoreo(ch, lm, pn, lim, hm)
     rows = clip_table(a.split)
     keys = [k for k, _ in rows]
@@ -97,6 +103,7 @@ def main():
     T = int(a.seconds * FPS)
     step = int(FPS / OUT_FPS)
     H, Bd, Q, K = [], [], [], []
+    M = [] if a.full else None
     skipped, start = 0, 0
     t0 = time.time()
     pool.mkdir(parents=True, exist_ok=True)
@@ -104,10 +111,13 @@ def main():
     partial = pool / f"{name}.partial.npz"
     if partial.exists() and not a.fresh:  # resume an interrupted run (same arguments) where it stopped
         z = np.load(partial, allow_pickle=False)
-        H, Bd, Q, K = list(z["hands"]), list(z["body"]), list(z["q"]), list(z["kind"])
+        if a.full:
+            M, K = list(z["mp"]), list(z["kind"])
+        else:
+            H, Bd, Q, K = list(z["hands"]), list(z["body"]), list(z["q"]), list(z["kind"])
         start, skipped = int(z["next"]), int(z["skipped"])
         rng.bit_generator.state = json.loads(str(z["rng"]))
-        print(f"resuming {name} at {start}/{a.n} ({len(H)} kept, {skipped} skipped)", flush=True)
+        print(f"resuming {name} at {start}/{a.n} ({len(K)} kept, {skipped} skipped)", flush=True)
     for i in range(start, a.n):
         key = keys[rng.choice(len(keys), p=w / w.sum())]
         clip = np.load(FITS / f"{key}.npz")["mp"]
@@ -127,8 +137,16 @@ def main():
                 break
         else:
             skipped += 1
-            if (i + 1) % CHECKPOINT_EVERY == 0 and H:
-                save_partial(partial, H, Bd, Q, K, i + 1, skipped, rng)
+            if (i + 1) % CHECKPOINT_EVERY == 0 and K:
+                save_partial(partial, H, Bd, Q, K, i + 1, skipped, rng, M)
+            continue
+        if a.full:
+            M.append(mp.astype(np.float32))
+            K.append(kind)
+            if (i + 1) % 50 == 0:
+                print(f"{i + 1}/{a.n} sequences, {time.time() - t0:.0f} s", flush=True)
+            if (i + 1) % CHECKPOINT_EVERY == 0:
+                save_partial(partial, H, Bd, Q, K, i + 1, skipped, rng, M)
             continue
         mp = mp[::step]
         pos = positions(ch, mp.astype(np.float32)) / 100.0
@@ -140,10 +158,13 @@ def main():
             print(f"{i + 1}/{a.n} sequences, {time.time() - t0:.0f} s", flush=True)
         if (i + 1) % CHECKPOINT_EVERY == 0 and H:
             save_partial(partial, H, Bd, Q, K, i + 1, skipped, rng)
-    np.savez_compressed(pool / f"{name}.npz", hands=np.stack(H), body=np.stack(Bd), q=np.stack(Q),
-                        kind=np.array(K, np.int8), fps=OUT_FPS)
+    if a.full:
+        np.savez_compressed(pool / f"{name}.npz", mp=np.stack(M), kind=np.array(K, np.int8), fps=FPS)
+    else:
+        np.savez_compressed(pool / f"{name}.npz", hands=np.stack(H), body=np.stack(Bd), q=np.stack(Q),
+                            kind=np.array(K, np.int8), fps=OUT_FPS)
     partial.unlink(missing_ok=True)
-    print(f"{name}: {len(H)} sequences ({skipped} skipped: hands overlapping or inside the body) in {time.time() - t0:.0f} s"
+    print(f"{name}: {len(K)} sequences ({skipped} skipped: hands overlapping or inside the body) in {time.time() - t0:.0f} s"
           f" -> {pool / f'{name}.npz'}")
 
 

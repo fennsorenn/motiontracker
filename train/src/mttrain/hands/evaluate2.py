@@ -63,6 +63,9 @@ class LearnedPair:
         other = torch.stack([ff(1, False), ff(0, True)])
         with torch.no_grad():
             out = self.model(own, other)
+        self.raw = out  # all outputs, rows own = left, right (scene convention): the merger's inputs
+        self.lost = Lo[0].numpy().copy()
+        self.score = Sc[0].numpy().copy()
         res = {}
         self.conf = {}  # side -> (rotation scale deg, mean finger scale rad): the model's own uncertainty
         for k, side in enumerate("lr"):

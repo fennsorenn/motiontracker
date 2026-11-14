@@ -81,8 +81,9 @@ def min_jerk(s):
 
 
 class HandMotion:
-    def __init__(self, fk=None):
+    def __init__(self, fk=None, tremor=True):
         self.fk = fk if fk is not None else HandFK()
+        self.tremor = tremor  # False: no 8-12 Hz tremor (jitter-free targets for the merger; same random draws)
         self.lo, self.hi = self.fk.lo, self.fk.hi
         P0 = self.fk.points(np.zeros(len(PARAMS)))
         self.origin, self.R = hand_frame(P0)  # rest hand frame (the wrist does not move)
@@ -271,6 +272,7 @@ class HandMotion:
         drift *= rng.uniform(0.005, 0.03) * span
         f_tr = rng.uniform(8, 12)
         tremor = np.sin(2 * np.pi * f_tr * t[:, None] + rng.uniform(0, 2 * np.pi, n)) * rng.uniform(0, 0.006) * span
+        tremor = tremor * self.tremor
         taps = np.zeros((T, n))
         for _ in range(rng.poisson((t[-1] - t[0]) / 4.0)):  # about one tap every 4 s
             f = FINGERS[rng.integers(4)]

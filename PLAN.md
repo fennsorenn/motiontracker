@@ -126,7 +126,11 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
 - **Asynchronous update rates** per part (e.g. hands at lower rate when compute-tight): each head receives time since its last update. `[CLAUDE]`
 
 ### 3.4 Head ↔ merger interface
-- Heads output **rotations + per-bone confidence**, optionally a small latent. Merger predicts **residual corrections** to head rotations. `[CLAUDE]`
+- Heads output **rotations + per-bone confidence**, optionally a small latent. Merger predicts **residual corrections** to head rotations. `[USER]` (2026-11-14: corrections on top of the combined head outputs, `mttrain.hands.wrist`'s combination as the starting point)
+- **First merger (M4, 2026-11-14): body + hands + head/face.** Joins the body model (`m1`) and the pair hand model (`p3`): forearm twist, wrist, body pose preferred where hand confidence is low, hands/arms kept out of the body (the correction data of §5.6); plus neck/head and the face (blendshapes as input). `[USER]`
+- **Merger design (2026-11-14):** head seen as a head pose fitted to Holistic's face mesh (canonical face model), simulated in training with an error model calibrated on renders; blendshape input trained on real, unpaired recorded sequences with dropout (passed through unchanged); short history of part outputs; trained on a new combined pool (body sources + hand events, full MHR sequences) with clipping-correction samples. `[USER]` Plan: `dev-notes/plans/m4-merger.md`.
+- **Merger smoothing through training (2026-11-14):** extra jitter on the merger's inputs (calibrated on real part-model noise), jitter-free targets (smooth idle, no finger tremor, sharp motion kept). `[USER]` (idea); calibration and details `[CLAUDE]`.
+- **Merger inputs, first version: head outputs only** (rotations, confidences, the hand model's image position and size); internal features follow as a second step with feature dropout. `[USER]` (2026-11-14)
   - Reasons: swappable sources (e.g. ARKit can plug in as an alternative head module), staged training, graceful degradation if merger is off, confidence-weighted fusion at shared joints.
   - Owner noted swapped-in sources could still get a trained **adapter** even with a latent interface; accepted the point. `[USER]`
 - **Merger taps heads' internal layers** (pooled penultimate features) in addition to rotations. Owner's idea `[USER]`; Claude agreed.
@@ -143,7 +147,7 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
   - **Copying** ("repeat last frame" = smooth-but-late): randomly drop feedback during training; velocity loss.
 
 ### 3.6 Temporal design
-- **Temporal state lives in the per-part heads**; merger is thin and mostly per-frame (may read heads' hidden states). Parts move at different speeds and need different smoothing. `[CLAUDE]` (owner asked whether temporal data goes into heads or merger)
+- **Temporal state lives in the per-part heads**; merger is thin (may read heads' hidden states); `[USER]` (2026-11-14): the merger gets a short history of the part outputs. Parts move at different speeds and need different smoothing. `[CLAUDE]` (owner asked whether temporal data goes into heads or merger)
 - **Multiple, spaced-out history frames** rather than only t−1. Owner's idea `[USER]`: helps understand movement, not just pose.
   - Detail: **exponential spacing** (≈ t−1, t−2, t−4, t−8, t−16), like dilated causal convolutions. **Space by time, not frame count** (timestamped ring buffer, sample/interpolate at fixed time offsets) since webcams drop frames and parts may run async. Feed **explicit differences** between samples, not only raw poses. `[CLAUDE]`
 - **Lag discussion** (important nuance):
