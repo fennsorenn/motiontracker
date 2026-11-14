@@ -2,6 +2,7 @@
 
     uv run python -m mttrain.legeval data/m1/runs/m1-v12/best.pt --renders m1/v1 m1/rest1 m1/contact1 m4/pairs3 \
         [--sessions 2026-11-01T15-29-11-session ...]
+    uv run python -m mttrain.legeval data/merger/runs/mg3/best.pt --merger --renders ...   # the merger's output
 
 Rendered sets (truth from seq.npz: MHR parameters and the camera): per set the median global angle error of the
 head, chest, upper arms, forearms and wrists (any body model, so older ones compare), and (m1-v12+) the median
@@ -37,12 +38,33 @@ def angle(Ra, Rb):
     return np.degrees(np.arccos(np.clip(c, -1, 1)))
 
 
+class MergerAsRunner:
+    """The merger behind the Runner interface legeval uses: predict -> locals, aux root/up."""
+
+    def __init__(self, ckpt):
+        self.ckpt = ckpt
+        self.aux = None
+        self.model = type("M", (), {"root": True})()
+
+    def predict_session(self, d):
+        from .merger.run import infer
+        rows = [json.loads(line) for line in open(Path(d) / "landmarks.jsonl") if line.strip()]
+        r = infer(self.ckpt, rows)
+        self.runner = r["runner"]
+        self.ch, self.jn = r["ch"], r["runner"].jn
+        self.aux = {"root": r["root"], "up": r["up"]} if r["root"] is not None else None
+        return r["L"]
+
+    def mhr_globals(self, rot):
+        return self.runner.mhr_globals(rot)
+
+
 def render_set(r, te, ch, d):
     z = np.load(d / "seq.npz")
     st = skeleton_state(ch, z["mp"].astype(np.float64))
     fps = float(z["fps"])
     times, world, image, vis, present = read_session(d)
-    rot, _ = r.predict(times, world, image, vis, present)
+    rot = r.predict_session(d) if isinstance(r, MergerAsRunner) else r.predict(times, world, image, vis, present)[0]
     k = np.clip(np.round(times * fps).astype(int), 0, len(st) - 1)
     rt, pos_t, off_t = te(st[k], z["R"])
     G, _ = fk(rot, off_t)
@@ -84,7 +106,15 @@ def trunk_thigh(r, rot):
 
 def session(r, path):
     times, world, image, vis, present = read_session(path)
-    rot, _ = r.predict(times, world, image, vis, present)
+    if isinstance(r, MergerAsRunner):
+        rows = [json.loads(line) for line in open(Path(path) / "landmarks.jsonl") if line.strip()]
+        from .merger.run import infer
+        res = infer(r.ckpt, rows)
+        r.runner, r.ch, r.jn = res["runner"], res["ch"], res["runner"].jn
+        r.aux = {"root": res["root"], "up": res["up"]}
+        rot = res["L"]
+    else:
+        rot, _ = r.predict(times, world, image, vis, present)
     ang, thigh = trunk_thigh(r, rot)
     standing = ang > 135
     switches = int(np.sum(standing[1:] != standing[:-1]))
@@ -102,9 +132,15 @@ def main():
     ap.add_argument("ckpt", type=Path)
     ap.add_argument("--renders", nargs="*", default=[])
     ap.add_argument("--sessions", nargs="*", default=[])
+    ap.add_argument("--merger", action="store_true", help="ckpt is a merger: evaluate its output")
     a = ap.parse_args()
-    r = Runner(a.ckpt)
-    ch = r.ch
+    if a.merger:
+        from mtcore.mhr import load
+        r = MergerAsRunner(a.ckpt)
+        ch = load()
+    else:
+        r = Runner(a.ckpt)
+        ch = r.ch
     te = TargetExtractor(list(ch.skeleton.joint_names), skeleton_state(ch, np.zeros(len(ch.parameter_transform.names))))
     rows = {}
     for s in a.renders:
