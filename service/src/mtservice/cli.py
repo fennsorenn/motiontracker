@@ -1,12 +1,16 @@
 """mtservice: camera or video -> MediaPipe Holistic -> M1 lifter -> VMC.
 
     mtservice [--camera N | --video FILE [--realtime]] [--vmc HOST:PORT] [--bundle DIR] [--task FILE]
-              [--avatar-vrm FILE] [--face-mesh full|lite] [--no-face] [--no-fingers] [--stdio] [--dump-poses FILE]
+              [--avatar-vrm FILE] [--face-mesh full|lite] [--no-face] [--face-rate HZ] [--no-eye-filter]
+              [--no-fingers] [--stdio] [--dump-poses FILE]
               [--dump-landmarks FILE] [--no-head3d] [--list-cameras]
 
 --face-mesh: MediaPipe face mesh for the blendshapes: "full" (default, Face Landmarker's mesh in the
 Holistic bundle) or "lite" (stock Holistic, slightly cheaper, less accurate blendshapes; detector.py).
 --no-face: no blendshapes. --no-fingers: no finger bones (hands.py, a port of vspark's finger solve).
+--face-rate: blendshapes go out on their own at this rate (default 60 Hz), glided between detector frames (face.py);
+0 sends them with each detector frame (for receivers that interpolate themselves). --no-eye-filter: raw eye shapes
+(no resting-level, look-down and left/right correction, mtcore.face_filter). --dump-landmarks keeps the raw values.
 
 Standalone: runs until Ctrl+C or the end of the video; log lines go to stderr.
 
@@ -36,6 +40,7 @@ from pathlib import Path
 from mtcore.paths import DATA
 
 from .detector import Detector, model_path, prepare
+from .face import EyeFilter, FaceStream
 from .hands import solve_hands
 from .lifter import LiveLifter
 from .sources import CameraSource, VideoSource, list_cameras
@@ -88,6 +93,9 @@ def main(argv=None):
     ap.add_argument("--face-mesh", choices=["full", "lite"], default="full",
                     help="face mesh for the blendshapes (default full; ignored with --task)")
     ap.add_argument("--no-face", action="store_true", help="don't compute or send face blendshapes")
+    ap.add_argument("--face-rate", type=float, default=60.0,
+                    help="send blendshapes on their own at this rate, glided (default 60; 0: with each detector frame)")
+    ap.add_argument("--no-eye-filter", action="store_true", help="raw eye blendshapes (no resting/look-down/symmetry fix)")
     ap.add_argument("--no-fingers", action="store_true", help="don't compute or send finger bones")
     ap.add_argument("--no-head3d", action="store_true")
     ap.add_argument("--list-cameras", action="store_true")
@@ -130,6 +138,9 @@ def run(a, emit):
         vmc.set_rest(lifter.rest)
     camera = a.camera if a.camera is not None else 0
     source = open_source(a, camera)
+    eyes = None if a.no_face or a.no_eye_filter else EyeFilter()
+    paced = not a.video or a.realtime  # the face stream glides on the wall clock
+    face = FaceStream(vmc, a.face_rate) if vmc and not a.no_face and a.face_rate > 0 and paced else None
     dump_p = open(a.dump_poses, "w") if a.dump_poses else None
     dump_l = open(a.dump_landmarks, "w") if a.dump_landmarks else None
     emit("ready", model=lifter.meta["source"], bones=lifter.bones, face=None if a.no_face else a.face_mesh,
@@ -172,6 +183,10 @@ def run(a, emit):
                 source = open_source(a, camera)
                 it = iter(source)
                 lifter.reset()
+                if eyes:
+                    eyes.reset()
+                if face:
+                    face.reset()
             try:
                 t, frame = next(it)
             except StopIteration:
@@ -182,9 +197,14 @@ def run(a, emit):
             bones, conf, present = lifter.step(t, obs)
             if not a.no_fingers:
                 bones.update(solve_hands(obs))  # only hands seen this frame; receivers keep the last value
+            shapes = obs.get("blendshapes")
+            if shapes and eyes:
+                shapes = eyes.step(t, shapes)
             wall2 = time.monotonic()
+            if face:
+                face.push(shapes)
             if vmc:
-                vmc.send(t, bones, conf, present, obs.get("blendshapes"))
+                vmc.send(t, bones, conf, present, None if face else shapes)
             if dump_p:
                 dump_p.write(json.dumps({"t": round(t * 1000, 1), "bones": {b: [round(float(v), 6) for v in q] for b, q in bones.items()},
                                          "conf": {j: round(c, 3) for j, c in conf.items()}}) + "\n")
@@ -211,6 +231,8 @@ def run(a, emit):
                 stats = {"n": 0, "det": 0.0, "mod": 0.0, "lat": 0.0, "present": 0}
                 last_status = now
     finally:
+        if face:
+            face.close()
         source.close()
         detector.close()
         if vmc:
