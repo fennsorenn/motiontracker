@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>landmark overlay</title>
+<style>html,body{margin:0;background:transparent}canvas{display:block}</style></head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// Transparent landmark overlay for the webcam panel: MediaPipe pose (what the learned models see),
+// face mesh and hands, from the session's landmarks.jsonl (image coordinates of the mirrored frame,
+// which is what the webcam panel shows). window.drawAt(t ms) -> base64 PNG.
+const q = new URLSearchParams(location.search);
+const W = Number(q.get('w') || 800), H = Number(q.get('h') || 600);
+const c = document.getElementById('c');
+c.width = W; c.height = H;
+const g = c.getContext('2d');
+const POSE = [[0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],[11,12],[11,13],[13,15],[15,17],[15,19],
+  [15,21],[17,19],[12,14],[14,16],[16,18],[16,20],[16,22],[18,20],[11,23],[12,24],[23,24],[23,25],[24,26],
+  [25,27],[26,28],[27,29],[28,30],[29,31],[30,32],[27,31],[28,32]];
+const HAND = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],
+  [14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+// MediaPipe's left/right are the person's (in the mirrored image: left side of the person = screen right)
+const LEFT = new Set([1,2,3,7,9,11,13,15,17,19,21,23,25,27,29,31]);
+const RIGHT = new Set([4,5,6,8,10,12,14,16,18,20,22,24,26,28,30,32]);
+let frames = [], idx = 0;
+const px = (p) => [p[0] * W, p[1] * H];
+
+function lines(pts, pairs, style, width) {
+  g.strokeStyle = style; g.lineWidth = width; g.beginPath();
+  for (const [a, b] of pairs) {
+    if (!pts[a] || !pts[b]) continue;
+    const [x0, y0] = px(pts[a]), [x1, y1] = px(pts[b]);
+    g.moveTo(x0, y0); g.lineTo(x1, y1);
+  }
+  g.stroke();
+}
+function dots(pts, r, styleOf) {
+  pts.forEach((p, i) => {
+    const s = styleOf(i);
+    if (!s) return;
+    const [x, y] = px(p);
+    g.fillStyle = s; g.beginPath(); g.arc(x, y, r, 0, 2 * Math.PI); g.fill();
+  });
+}
+
+window.drawAt = (t) => {
+  while (idx + 1 < frames.length && frames[idx + 1].t <= t) idx++;
+  while (idx > 0 && frames[idx].t > t) idx--;
+  g.clearRect(0, 0, W, H);
+  const f = frames[idx];
+  if (f && f.t <= t) {
+    const age = t - f.t;  // the detector runs at ~10 fps; fade a frame that is getting stale
+    g.globalAlpha = age > 300 ? 0.35 : 1.0;
+    if (f.face) dots(f.face, 1.3, () => 'rgba(120,255,160,0.5)');
+    for (const h of ['leftHand2d', 'rightHand2d']) {
+      if (!f[h]) continue;
+      lines(f[h], HAND, 'rgba(255,220,80,0.55)', 1.5);
+      dots(f[h], 2, () => 'rgba(255,220,80,0.7)');
+    }
+    if (f.pose2d) {
+      const vis = (i) => (f.pose && f.pose[i] && f.pose[i].length > 3 ? f.pose[i][3] : 1);
+      lines(f.pose2d, POSE.filter(([a, b]) => vis(a) > 0.5 && vis(b) > 0.5), 'rgba(255,255,255,0.55)', 2.5);
+      dots(f.pose2d, 4, (i) => {
+        const a = Math.max(0.15, Math.min(1, vis(i))) * 0.8;
+        return LEFT.has(i) ? `rgba(255,150,40,${a})` : RIGHT.has(i) ? `rgba(60,170,255,${a})` : `rgba(255,80,200,${a})`;
+      });
+    }
+    g.globalAlpha = 1.0;
+  }
+  return c.toDataURL('image/png').split(',')[1];
+};
+
+fetch('landmarks.jsonl').then((r) => r.text()).then((txt) => {
+  frames = txt.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l)).sort((a, b) => a.t - b.t);
+  window.__info = { frames: frames.length, end: frames.length ? frames[frames.length - 1].t : 0 };
+  window.__ready = true;
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+[project]
+name = "mp-python-parity"
+version = "0.0.0"
+description = "Spike: does Python MediaPipe reproduce the recorder's (tasks-vision WASM) Holistic landmarks? (see README.md)"
+requires-python = ">=3.12,<3.13"
+dependencies = ["mediapipe==0.10.18", "numpy", "opencv-python-headless"]

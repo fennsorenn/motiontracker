@@ -1,0 +1,8 @@
+node_modules/
+.venv/
+__pycache__/
+sessions/
+reports/
+
+# Third-party datasets: never commit (redistribution terms, size)
+data/

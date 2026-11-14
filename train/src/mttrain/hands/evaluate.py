@@ -1,0 +1,192 @@
+"""Finger accuracy on rendered hand sessions (render --hands), against exact ground truth.
+
+    uv run --with-editable ../service python -m mttrain.hands.evaluate data/m4/renders/<set> [--system ported]
+
+Metric: the direction of each finger segment (thumb CMC-MCP, MCP-IP, IP-tip; each finger MCP-PIP,
+PIP-DIP, DIP-tip: 15 per hand) in a palm frame built from the hand's own points (`skeleton.hand_frame`:
+wrist -> middle knuckle, little -> index knuckle), angle between system and truth, degrees. Built the
+same way on both sides, so it ignores where the wrist joint's own axes sit and finger roll (invisible),
+and compares what the avatar shows: where the fingers point relative to the palm. Ground truth: MHR's
+hand points from the stored finger parameters. Systems that output VRM finger rotations (the ported
+solve) are played on the avatar's hand (VRM FK on the avatar's rest positions) to get their points.
+Frames where MediaPipe found no hand are reported as a detection rate, not scored.
+"""
+
+import argparse
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+from mtcore.convert import VRM_PARENT, qmul, qrot
+from mtcore.paths import AVATARS
+from mtcore.vrm import load_vrm
+
+from .skeleton import FINGERS, HandFK, hand_frame
+
+# segments as (from, to) MediaPipe point indices
+SEGMENTS = [(1, 2), (2, 3), (3, 4)] + [(b + k, b + k + 1) for b in (5, 9, 13, 17) for k in range(3)]
+VRM_FINGERS = {"index": "Index", "middle": "Middle", "ring": "Ring", "pinky": "Little"}
+
+
+def vrm_points(local, side, rest):
+    """VRM finger rotations (bone -> xyzw, relative to the hand) -> the 21 hand points on the avatar.
+    Fingertips: the distal bone's rest direction and length (as its parent's) rotated by its global."""
+    S = "left" if side == "l" else "right"
+    hand = f"{S}Hand"
+    names = [hand, f"{S}ThumbMetacarpal", f"{S}ThumbProximal", f"{S}ThumbDistal", None]
+    for f in FINGERS:
+        v = VRM_FINGERS[f]
+        names += [f"{S}{v}Proximal", f"{S}{v}Intermediate", f"{S}{v}Distal", None]
+    G = {hand: np.array([0, 0, 0, 1.0])}
+    pos = {hand: np.asarray(rest[hand], float)}
+
+    def solve(b):
+        if b in pos:
+            return
+        p = VRM_PARENT[b]
+        solve(p)
+        G[b] = qmul(G[p], np.asarray(local.get(b, [0, 0, 0, 1.0]), float))
+        pos[b] = pos[p] + qrot(G[p], np.asarray(rest[b], float) - np.asarray(rest[p], float))
+
+    out = []
+    for k, b in enumerate(names):
+        if b is None:  # fingertip
+            d, p = names[k - 1], names[k - 2]
+            solve(d)
+            seg = np.asarray(rest[d], float) - np.asarray(rest[p], float)
+            out.append(pos[d] + qrot(G[d], seg))
+        else:
+            solve(b)
+            out.append(pos[b])
+    return np.array(out)
+
+
+def segment_dirs(P):
+    """21 points (..., 21, 3) -> unit segment directions in the palm frame (..., 15, 3)."""
+    _, R = hand_frame(P)
+    v = np.stack([P[..., j, :] - P[..., i, :] for i, j in SEGMENTS], -2)
+    v = v / np.linalg.norm(v, axis=-1, keepdims=True)
+    return np.einsum("...ij,...sj->...si", R, v)
+
+
+def angle_errors(Pa, Pb):
+    """Per-segment direction angles (degrees) between two point sets in their own palm frames."""
+    c = np.clip((segment_dirs(Pa) * segment_dirs(Pb)).sum(-1), -1, 1)
+    return np.degrees(np.arccos(c))
+
+
+def mirror(P):
+    return P * np.array([-1.0, 1.0, 1.0])
+
+
+class Truth:
+    def __init__(self, seq_dir, fk):
+        d = Path(seq_dir)
+        z = np.load(d / "fingers.npz")
+        seq = np.load(d / "seq.npz")
+        self.fps = float(seq["fps"])
+        self.mp = seq["mp"]
+        self.q = {s: z[s] for s in "lr"}
+        self.fk = fk
+        self.cache = {}
+
+    def frame(self, t_ms):
+        return min(len(self.q["l"]) - 1, max(0, int(round(t_ms / 1000 * self.fps))))
+
+    def points(self, side, t_ms):
+        """The hand's shape: finger pose on MHR's rest body (orientation meaningless; shape metrics only)."""
+        k = self.frame(t_ms)
+        if (side, k) not in self.cache:
+            self.cache[side, k] = self.fk.points(self.q[side][k], side)
+        return self.cache[side, k]
+
+    def posed_points(self, side, t_ms):
+        """The hand as rendered (posed body), MHR world metres."""
+        from mtcore.mhr import positions
+        k = self.frame(t_ms)
+        if ("posed", side, k) not in self.cache:
+            self.cache["posed", side, k] = positions(self.fk.ch, self.mp[k])[self.fk.mp21[side]] / 100.0
+        return self.cache["posed", side, k]
+
+
+def ported(rest):
+    from mtservice.hands import solve_hand
+
+    def run(frame):
+        out = {}
+        for side, S in (("l", "left"), ("r", "right")):
+            pts = frame.get(f"{S}Hand")
+            if pts:
+                out[side] = vrm_points(solve_hand(np.asarray(pts), S), side, rest)
+        return out
+    return run
+
+
+def evaluate(set_dir, system, avatar="AvatarSample_D"):
+    fk = HandFK()
+    rest = load_vrm(AVATARS / f"{avatar}.vrm")[2]
+    if system == "ported":
+        run = ported(rest)
+    elif system in ("mean", "rest"):  # references: the training pool's average hand, or MHR's rest hand
+        from .pool import POOL
+        q = np.load(POOL / "train.npz")["q"].reshape(-1, 27).mean(0) if system == "mean" else np.zeros(27)
+        pts = {s: fk.points(q, s) for s in "lr"}
+        run = lambda f: {s: pts[s] for s, S in (("l", "left"), ("r", "right")) if f.get(f"{S}Hand")}
+    elif isinstance(system, (str, Path)):  # a hand model checkpoint
+        from .infer import LearnedHands
+        run = LearnedHands(system, fk)
+    else:
+        run = system
+    errs, seen, total, motion = [], 0, 0, []
+    for d in sorted(Path(set_dir).glob("seq*")):
+        if hasattr(run, "reset"):
+            run.reset()
+        truth = Truth(d, fk)
+        prev = {}
+        for line in open(d / "landmarks.jsonl"):
+            f = json.loads(line)
+            out = run(f)
+            for side in "lr":
+                total += 1
+                if side not in out:
+                    prev.pop(side, None)
+                    continue
+                seen += 1
+                T = truth.points(side, f["t"])
+                errs.append(angle_errors(out[side], T))
+                cur = (f["t"], segment_dirs(out[side]), segment_dirs(T))
+                if side in prev and cur[0] - prev[side][0] < 150:  # consecutive detected frames (10 Hz)
+                    ang = lambda a, b: np.degrees(np.arccos(np.clip((a * b).sum(-1), -1, 1)))
+                    motion.append((ang(prev[side][1], cur[1]), ang(prev[side][2], cur[2])))
+                prev[side] = cur
+    E = np.array(errs)  # (n, 15)
+    evaluate.motion = np.array(motion)  # (m, 2, 15): system, truth segment motion per frame (deg)
+    return E, seen / max(total, 1)
+
+
+def report(E, rate, name):
+    print(f"{name}: hands scored in {100 * rate:.0f}% of hand-frames; segment direction error median "
+          f"{np.median(E):.1f} deg, mean {E.mean():.1f}, p90 {np.percentile(E, 90):.1f}")
+    for i, f in enumerate(("thumb", *FINGERS)):
+        v = E[:, 3 * i:3 * i + 3]
+        print(f"  {f:7s} median {np.median(v):5.1f}  p90 {np.percentile(v, 90):5.1f}")
+    M = getattr(evaluate, "motion", None)
+    if M is not None and len(M):
+        sys_m, true_m = M[:, 0].mean(), M[:, 1].mean()
+        print(f"  frame-to-frame segment motion: system {sys_m:.1f} deg, truth {true_m:.1f} deg "
+              f"(x{sys_m / max(true_m, 1e-9):.2f}; above 1 = jitter)")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("set", type=Path)
+    ap.add_argument("--system", default="ported", help="'ported', 'mean' / 'rest' (constant hand), or a hand model checkpoint (.pt)")
+    a = ap.parse_args()
+    E, rate = evaluate(a.set, a.system)
+    report(E, rate, a.system)
+
+
+if __name__ == "__main__":
+    main()

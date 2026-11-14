@@ -1,0 +1,6 @@
+[project]
+name = "mp-depth-probe"
+version = "0.0.0"
+description = "Spike: where MediaPipe's pose landmark model represents hand-vs-face depth (see README.md)"
+requires-python = ">=3.12,<3.13"
+dependencies = ["ai-edge-litert", "numpy", "pillow"]
