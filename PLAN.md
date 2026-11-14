@@ -186,6 +186,7 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
 ### 3.9 Root translation and camera framing
 - **Camera framing is not consistent** (angle, FOV, distance); training data must account for it. `[USER]`
 - **Hip/root position must be model input and output** to capture translation; owner proposed normalizing to a null vector at t−1 (i.e. predicting deltas) to keep values bounded. `[USER]`
+- **Hip position output now, with legs** `[USER]` (2026-11-14, pulled forward from M5; plan `dev-notes/plans/legs-root.md`): the body model and the merger output leg rotations (thigh, shin, foot) and the hip position in the **camera frame, metres, absolute per frame** (supersedes the delta idea above for now), plus an **up direction** (gravity in the camera frame) so the floor frame is one rotation of the whole pose away. Sitting vs standing is learned from the input, not a context switch; desk use is primary but other movement must keep working; the consumer may mask the lower body if it is unstable at the desk.
 - Claude's refinements `[CLAUDE]`:
   - Deltas drift when integrated (random walk). Pair with a **slowly corrected absolute anchor**, complementary-filter style.
   - Express lateral/vertical translation in **body units** (shoulder width / torso length), not meters.
