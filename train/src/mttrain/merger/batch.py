@@ -55,6 +55,9 @@ J = {n: i for i, n in enumerate(OUT_JOINTS)}
 BLEND_FILES = sorted((DATA / "videos").glob("*-full/face.landmarks.jsonl"))
 CONF_DEG = (15.0, 50.0)  # hand model rotation scale -> weight of its wrist (as `hands.wrist`)
 MAX_BEND_DEG = 100.0
+P_PUSH = 0.3  # clipping correction: share of samples whose observed hands are pushed into the body near it
+PUSH_M = (0.01, 0.04)  # push depth range (m)
+NEAR_M = 0.18  # hands closer than this to the torso or a thigh axis count as near the body
 SLOW_RHO = 0.95  # face head pose: slow error drift per 10 Hz frame (time constant ~2 s)
 ARKIT = None  # blendshape names, filled from the first bank file
 
@@ -188,6 +191,39 @@ def blend_bank():
         ARKIT = names
         seqs.append(np.array([[r.get(k, 0.0) for k in names] if r else [np.nan] * len(names) for r in rows], np.float32))
     return seqs
+
+
+# --- clipping correction ------------------------------------------------------------------------------------
+L_SH, R_SH, NOSE, L_HIP, R_HIP, L_KNEE, R_KNEE = 11, 12, 0, 23, 24, 25, 26
+HAND_LM = {"l": [15, 17, 19, 21], "r": [16, 18, 20, 22]}
+
+
+def seg_dist(p, a, b):
+    """Distance of points p (..., 3) to segments a-b (..., 3)."""
+    d = b - a
+    t = (((p - a) * d).sum(-1) / (d * d).sum(-1).clamp_min(1e-9)).clamp(0, 1)
+    return (a + t[..., None] * d - p).norm(dim=-1)
+
+
+def push_shift(X, amount):
+    """3D landmarks (B, T, 33, 3) metres (MHR world, y up), push depth (B,) -> per hand shift (B, T, 2, 3): backwards
+    along the body's facing direction (into the body for a camera in front), for hands near the torso or a thigh
+    (full below NEAR_M / 2, fading to none at NEAR_M). (owner, 2026-11-13/14: observed hands clip, the target
+    stays outside.)"""
+    sh = 0.5 * (X[..., L_SH, :] + X[..., R_SH, :])
+    hip = 0.5 * (X[..., L_HIP, :] + X[..., R_HIP, :])
+    up = torch.tensor([0.0, 1.0, 0.0], device=X.device)
+    f = torch.cross(X[..., L_SH, :] - X[..., R_SH, :], up.expand_as(sh), dim=-1)
+    f = f / f.norm(dim=-1, keepdim=True).clamp_min(1e-9)
+    f = f * torch.sign(((X[..., NOSE, :] - sh) * f).sum(-1, keepdim=True) + 1e-9)  # forward: toward the nose
+    out = []
+    for s in "lr":
+        c = X[..., HAND_LM[s], :].mean(-2)
+        d = torch.minimum(seg_dist(c, hip, sh), torch.minimum(seg_dist(c, X[..., L_HIP, :], X[..., L_KNEE, :]),
+                                                              seg_dist(c, X[..., R_HIP, :], X[..., R_KNEE, :])))
+        near = ((NEAR_M - d) / (NEAR_M / 2)).clamp(0, 1)
+        out.append(-f * (near * amount[:, None])[..., None])
+    return torch.stack(out, 2)
 
 
 # --- batches ------------------------------------------------------------------------------------------------
@@ -333,7 +369,20 @@ class MergerBatches:
         dev = self.dev
         mp, src = self.sources(B)
         fps = torch.full((B,), FPS, device=dev)
-        ob = self.body.observe(mp, fps, drop_rate=0.0)
+        # clipping correction: for P_PUSH of the samples, the observed hands (body landmarks and hand points) near the
+        # body are pushed into it; the targets stay as they are (outside)
+        amount = torch.where(self._u(B) < P_PUSH, self._u(B, lo=PUSH_M[0], hi=PUSH_M[1]), torch.zeros(B, device=dev))
+        shift = {}
+
+        def push(X):
+            sh = push_shift(X, amount)
+            shift["v"] = sh
+            X = X.clone()
+            for i, s in enumerate("lr"):
+                X[..., HAND_LM[s], :] += sh[:, :, i, None]
+            return X
+
+        ob = self.body.observe(mp, fps, drop_rate=0.0, push=push)
         tgt, R, t, fx = ob["tgt"], ob["R"], ob["t"], ob["fx"]
         Tv = int(ob["valid"].sum(1).max())
         times = torch.where(ob["valid"], ob["times"], torch.zeros_like(ob["times"]))[:, :Tv]
@@ -341,6 +390,7 @@ class MergerBatches:
         mpd = mp.gather(1, idx[..., None].expand(B, Tv, mp.shape[-1]))  # parameters at the detector frames
         st = self.fk(mpd.reshape(B * Tv, -1)).reshape(B, Tv, -1, 8)
         hands = torch.stack([st[:, :, self.mp21[s], :3] for s in "lr"], 2) / 100.0  # (B, Tv, 2, 21, 3)
+        hands = hands + shift["v"][:, :Tv, :, None]
         body_lm = self.body.lm(ob["states"][:, :Tv]) / 100.0
         obs, truth = self.hands_obs(hands, body_lm, self.gen, camera=(R, t, fx))
 
@@ -376,7 +426,7 @@ class MergerBatches:
         base = combine(rot, {s: hand[s]["G"] for s in "lr"}, {s: hand[s]["rot_log_s"] for s in "lr"},
                        head["G"], head["seen"].float() * 0.8)
         true_fingers = torch.stack([pick(mpd)[..., self.fing[s]] for s in "lr"], 2)  # (B, K, 2, 27)
-        return {"body": {"rot": rot, "log_s": log_s}, "hand": hand, "head": head,
+        return {"body": {"rot": rot, "log_s": log_s}, "hand": hand, "head": head, "push": amount,
                 "blend": {"values": bs, "present": bs_present}, "base": base, "src": src,
                 "target": {"rot": ob["rot"], "pos": ob["pos"], "off": ob["off"], "cof": ob["cof"], "fingers": true_fingers,
                            "seated": torch.ones(B, device=dev),

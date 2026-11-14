@@ -99,10 +99,11 @@ class GpuGenerator:
         return fps, mp, seated | choreo
 
     @torch.no_grad()
-    def observe(self, mp, fps, drop_rate=0.03):
+    def observe(self, mp, fps, drop_rate=0.03, push=None):
         """Source crops (B, N, P) at SRC_FPS, detector rates (B,) -> model input x (B, K, ...) for the last K
         detector frames, their targets, and the detector frames (times, valid, states, target frame indices) and
-        camera (R, t, fx) for other observers (merger)."""
+        camera (R, t, fx) for other observers (merger). `push`: optional function on the 3D landmarks (B, T, 33, 3)
+        metres before they are observed (merger: observed hands pushed into the body)."""
         dev, K = self.dev, self.K
         B = mp.shape[0]
         dur = OFFSETS[-1] + K / fps + 0.6
@@ -111,6 +112,8 @@ class GpuGenerator:
         src = torch.round(tz * SRC_FPS).long().clamp(max=self.N - 1)
         states = self.fk(mp.gather(1, src[..., None].expand(B, self.Tmax, mp.shape[-1])))  # (B, T, J, 8)
         X = self.lm(states) / 100.0
+        if push is not None:
+            X = push(X)
         style = Style.sample(B, self.gen, dev)
         dt = torch.diff(tz, dim=1, prepend=(tz[:, :1] - 1.0 / fps[:, None]))
         dt = torch.where(valid, dt, (1.0 / fps)[:, None].expand_as(dt))
