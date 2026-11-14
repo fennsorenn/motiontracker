@@ -6,13 +6,15 @@ a VMC rotation (x, y, z, w) to its pose space as (x, -y, -z, w) (rhylive_bone_ma
 lifter's VRM output is already in, so the sender applies the same (self-inverse) map. Positions are
 the avatar's rest offsets from the parent bone, mapped the same way (x, y, z) -> (-x, y, z).
 Face blendshapes go out as /VMC/Ext/Blend/Val <ARKit name> <0..1> per shape, then one /VMC/Ext/Blend/Apply
-(the VMC "perfect sync" naming; left/right mirrored like the bones, see detector.detect).
+(the VMC "perfect sync" naming; left/right mirrored like the bones, see detector.detect). With the face stream
+(`face.FaceStream`, default) they go out separately at 60 Hz instead, glided between detector frames.
 Extensions (receivers ignore unknown addresses): /MT/Present, /MT/Conf <joint> <0..1>. The namespace
 name is provisional (PLAN.md §7.2, [OPEN]).
 """
 
 import socket
 import struct
+import threading
 
 UNITY_NAMES = {
     "hips": "Hips", "spine": "Spine", "chest": "Chest", "upperChest": "UpperChest", "neck": "Neck", "head": "Head",
@@ -84,6 +86,7 @@ class VmcSender:
         self.addr = (host, port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.offsets = {}
+        self.lock = threading.Lock()  # the face stream sends from its own thread (face.FaceStream)
 
     def set_rest(self, rest_positions):
         self.offsets = rest_offsets(rest_positions)
@@ -106,7 +109,18 @@ class VmcSender:
         return bundle(msgs)
 
     def send(self, t, bones, conf=None, present=True, blendshapes=None):
-        self.sock.sendto(self.packet(t, bones, conf, present, blendshapes), self.addr)
+        p = self.packet(t, bones, conf, present, blendshapes)
+        with self.lock:
+            self.sock.sendto(p, self.addr)
+
+    def send_blend(self, blendshapes):
+        """Blendshapes alone (Blend/Val per shape, then Blend/Apply), e.g. the face stream's 60 Hz output."""
+        if not blendshapes:
+            return
+        p = bundle([message("/VMC/Ext/Blend/Val", n, v) for n, v in blendshapes.items()]
+                   + [message("/VMC/Ext/Blend/Apply")])
+        with self.lock:
+            self.sock.sendto(p, self.addr)
 
     def close(self):
         self.sock.close()

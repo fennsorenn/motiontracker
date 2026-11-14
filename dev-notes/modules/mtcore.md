@@ -5,7 +5,7 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 ## Using it
 - Consumers add it as an editable path dependency: `mtcore = { path = "../core", editable = true }`.
 - Consumers choose their own torch build (CPU in the spike, CUDA in `train/`). Core's own CPU torch is a dev-only dependency for its tests.
-- The base install depends on numpy only. pymomentum (imported by `mhr` and `cmu_fit`) is the optional extra `mtcore[mhr]`, installed by `train/` and the M3 spike; `service/` installs mtcore without it and uses only the numpy-only modules (`features`, `lifter_pose`, `convert`, `vrm`, `paths`).
+- The base install depends on numpy only. pymomentum (imported by `mhr` and `cmu_fit`) is the optional extra `mtcore[mhr]`, installed by `train/` and the M3 spike; `service/` installs mtcore without it and uses only the numpy-only modules (`features`, `lifter_pose`, `convert`, `vrm`, `paths`, `face_filter`).
 - Data paths come from `paths.py`; `MT_DATA` overrides the gitignored `data/`.
 
 ## Modules
@@ -20,6 +20,7 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 | `landmarks.py` | `LandmarkModel`: MediaPipe's 33 pose landmarks from an MHR pose. See below. |
 | `features.py` | M1 model input (moved from `mttrain.features`, 2026-11-12), numpy only. See below. |
 | `lifter_pose.py` | M1 lifter output → MHR globals → VRM locals, numpy only. See below. |
+| `face_filter.py` | Causal blendshape post-processing (eye correction, glide), plain Python. See below. |
 | `facepose.py` | Head pose from Holistic's face mesh: weighted similarity fit of MediaPipe's canonical face model (33 Procrustes points); metadata read from the cached Face Landmarker bundle with a minimal protobuf wire decoder; numpy only. Used by the merger (`modules/merger.md`). |
 | `relretarget.py` | WIP prototype (2026-11-14, branch `feature/relational-retarget`; not a decision). See below. |
 
@@ -60,6 +61,19 @@ Relation-preserving retargeting onto a VRM avatar ("option A", `dev-notes/ARCHIT
 - **Solve**: two-bone arm IK keeping the copy's elbow plane and the hand's global rotation, 6 rounds; relations to moving targets (other hand, other arm) take half steps (full steps oscillated).
 - **Demo**: `uv run python -m mttrain.retarget_demo <render dir> --out-dir <dir> [--avatar AvatarSample_F] [--tips]` (in `train/`): true MHR pose and identity mesh from `seq.npz` -> `relational.poses.jsonl`; prints per segment palm-palm distance, signed left-right separation, palm gap to head surface and closest hand-hand pair for true body / rotation copy / relational. Results are in the ARCHITECTURE retargeting section; videos (gitignored) in `data/videos/retarget-*`.
 - **Open**: weights hand-tuned; only arms move (no torso lean when out of reach); legs not anchors (the ground truth has no legs); the source body here is the true identity, live use would need a mean or estimated body; runtime cost not measured; not connected to the merger output; whether it stays in `mtcore` if adopted (vs "option B", retargeting inside the merger, `modules/merger.md`).
+
+## face_filter
+Algorithmic, causal post-processing of MediaPipe's ARKit blendshapes (owner decision 2026-11-14, `PLAN.md` §3.11/§7.5; learned face head in reserve). Used by `mtservice.face` (live) and `mtservice.faceproc` (offline), `modules/service.md`.
+- `EyeFilter`, per eye:
+  - Open-eye blink level fitted online as a linear function of that eye's `eyeLookDown` (exponential forgetting, tau 60 s; prior a=0.18, k=0.4); frames above fit + 0.12 are treated as blinks and excluded from the fit.
+  - Blink as an event (fix f9dce9a: MediaPipe at ~10 Hz catches blinks part-way and unevenly): the excursion above the fitted open level is measured against the open-eye noise (residual sd, tracked online, prior 0.06). Below 2 sd (`BLINK_DEADZONE_SD`) the eye reads open; it reaches fully closed at 3.5 sd (`BLINK_EVENT_SD`), smoothstep in between.
+  - Both eyes blink from their mean excursion (noise sd / sqrt 2), unless it is a wink: one eye closed while the other stays below 0.5 sd (`BLINK_WINK_SD`) above its open level.
+  - Squint rescaled above a resting baseline that follows drops fast (1 s) and rises slowly (20 s).
+  - Squint left/right linked to their mean when they differ by < 0.15, independent above 0.35 (`LINK_START`/`LINK_FULL`; blink no longer uses this linking).
+- Glide: smoothing-free upsampling like the harness's bone glide (`mteval.upsample`): linear from the shown value to the new one, finishing one tick before the next detector frame is expected (mean of the last 10 intervals).
+- Effect on the recorded sessions (before the f9dce9a blink fix): resting blink 0.27-0.34 → 0.02-0.06, squint 0.39-0.40 → 0.12-0.13, left/right difference 0. After the fix, blinks reaching >= 0.9 closed: seated 28 of 41 events, hands 35 of 55 (before: 0); rest stays at 0. Seated blink rate ~37/min, possibly some false blinks (to watch live).
+- Status: merged into `dev` (2026-11-14), used live via `mtservice` (`modules/service.md`).
+- Tests live with the consumer: `service/tests/test_face.py`.
 
 ## Tests
 `core/tests/` (`uv run pytest`): streaming vs batch features, conversion round trip (direction match for non-`REST_ALIGNED` bones; MHR rest → identity locals and torso following MHR world rotation for `REST_ALIGNED`; arm world rotations equal to all-direction matching), CMU fit, landmarks, quaternions. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
