@@ -36,6 +36,16 @@ loader.register((p) => new VRMLoaderPlugin(p));
 async function loadVrm() {
   const gltf = await loader.loadAsync('avatar.vrm');
   const vrm = gltf.userData.vrm;
+  // Morph names: three.js reads only mesh-level `extras.targetNames`; VRM 0.x exports (VRoid) keep them per
+  // primitive, so their morphs load as "0", "1", ... Take the names from the primitive's extras instead.
+  const json = gltf.parser.json;
+  gltf.scene.traverse((o) => {
+    const a = o.morphTargetInfluences && gltf.parser.associations.get(o);
+    if (!a || a.meshes === undefined) return;
+    const m = json.meshes[a.meshes];
+    const names = m.extras?.targetNames ?? m.primitives[a.primitives ?? 0]?.extras?.targetNames;
+    if (names) o.userData.morphNames = names;
+  });
   VRMUtils.removeUnnecessaryVertices(gltf.scene);
   VRMUtils.rotateVRM0(vrm); // VRM 0.x faces -Z; turn it to face the camera like 1.0
   return vrm;
@@ -50,9 +60,15 @@ function morphTargets(vrm) {
   const m = new Map();
   vrm.scene.traverse((o) => {
     if (!o.morphTargetDictionary || !o.morphTargetInfluences) return;
-    for (const [name, idx] of Object.entries(o.morphTargetDictionary)) {
-      if (!m.has(name)) m.set(name, []);
-      m.get(name).push([o, idx]);
+    for (const [raw, idx] of Object.entries(o.morphTargetDictionary)) {
+      const name = o.userData.morphNames?.[idx] ?? raw;
+      // Some VRoid exports prefix the morph names with mesh and material (`Face.M_F00_000_00_Fcl_MTH_A`):
+      // they are found under their `Fcl_*` part too.
+      const k = name.indexOf('Fcl_');
+      for (const key of k > 0 ? [name, name.slice(k)] : [name]) {
+        if (!m.has(key)) m.set(key, []);
+        m.get(key).push([o, idx]);
+      }
     }
   });
   return m;
