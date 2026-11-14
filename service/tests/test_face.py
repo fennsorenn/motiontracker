@@ -33,7 +33,7 @@ def test_looking_down_does_not_close_the_eyes():
 
 
 def test_small_asymmetry_linked_wink_kept():
-    out = run([frame(0.27, 0.20)] * 200 + [frame(0.70, 0.27)])
+    out = run([frame(0.27, 0.20)] * 200 + [frame(0.70, 0.20)])  # wink: the other eye stays at its resting level
     assert abs(out[199]["eyeBlinkLeft"] - out[199]["eyeBlinkRight"]) < 0.02
     assert out[-1]["eyeBlinkLeft"] > 0.7 and out[-1]["eyeBlinkRight"] < 0.2
 
@@ -64,3 +64,9 @@ def test_face_stream_sends_at_its_rate():
     vmc.close()
     rx.close()
     assert 20 <= n <= 35  # ~30 packets in 0.5 s at 60 Hz
+
+
+def test_blink_seen_unevenly_closes_both_eyes():
+    # one eye clearly closed, the other only raised a little (as MediaPipe often reads blinks at ~10 Hz)
+    out = run([frame(0.27, 0.27)] * 200 + [frame(0.60, 0.37)])
+    assert out[-1]["eyeBlinkLeft"] > 0.9 and out[-1]["eyeBlinkRight"] > 0.9

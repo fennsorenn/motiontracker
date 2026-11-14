@@ -10,9 +10,11 @@ So the avatar's eyes sat ~40% closed and lopsided, and the face stepped at 10 Hz
 `EyeFilter` (per frame, causal):
 - blink: per eye, the open-eye level is tracked as a linear function of that eye's lookDown, fitted online with
   exponential forgetting (BLINK_TAU_S) on frames that don't look like a blink; blink is rescaled from that level
-  (0) to BLINK_CLOSED (1);
+  (0, with a dead zone of twice the open-eye noise) to fully closed at 3.5 times the noise (a clear blink; see the
+  BLINK_* comment);
 - squint: per eye, a resting baseline that follows drops quickly and rises slowly; squint is rescaled above it;
-- linking: when the two eyes' processed values are close, both get their mean (a wink, a clear difference, passes).
+- linking: blink comes from both eyes' mean excursion, applied to both, unless one eye is closed while the other
+  stays at its open level (a wink); squint: when the two eyes' values are close, both get their mean.
 Other shapes pass through unchanged.
 
 `Glide`: fills the frames between detector frames without smoothing, like the harness's bone glide
@@ -28,8 +30,26 @@ BLINK_TAU_S = 60.0  # forgetting time constant of the open-eye fit
 BLINK_PRIOR = (0.18, 0.4)  # open-eye level = a + k * lookDown before data (owner's sessions: 0.15-0.22, 0.31-0.46)
 BLINK_PRIOR_S = 5.0  # weight of the prior, in seconds of data
 BLINK_GATE = 0.12  # frames more than this above the fitted open level are not used for the fit (blinks)
-BLINK_CLOSED = 0.7  # raw blink of a closed eye (MediaPipe peaks ~0.6-0.75)
-BLINK_SPAN_MIN = 0.25  # closed level at least this far above the open level
+# blink as an event: at ~10 Hz most blinks are caught in one frame part-way closed (owner's sessions: raw peaks
+# mostly 0.5-0.6 seated, 0.4-0.6 in the hands session, i.e. only 0.2-0.3 above the open level there; a fixed
+# closed level of 0.7 left most blinks at 0.3-0.6 of a closure). So the excursion e above the open level is
+# measured against the open-eye noise (sd of the residual around the fitted open level, tracked online, ~0.06):
+# below BLINK_DEADZONE_SD x noise the eye reads open (no flutter), above BLINK_EVENT_SD x noise it reads fully
+# closed, smoothstep in between (half-closed eyes still show partly).
+BLINK_NOISE_PRIOR = 0.06
+BLINK_EVENT_SD, BLINK_DEADZONE_SD = 3.5, 2.0
+# the eyes blink together: MediaPipe often catches a blink strongly in one eye and only partly in the other (hands
+# session: 41 frames with one eye closed and the other below its dead zone, though raised 0.1-0.2; 0 frames with
+# both closed). So both eyes get the blink of their mean excursion (noise sd of a mean of two: /sqrt 2), unless it
+# is a wink: one eye closed while the other is below BLINK_WINK_SD x its noise above its open level.
+BLINK_WINK_SD = 0.5
+
+
+def _blink_curve(e, sd):
+    """Excursion above the open level -> 0 (open) .. 1 (closed): dead zone, then smoothstep to the event level."""
+    lo, hi = BLINK_DEADZONE_SD * sd, max(BLINK_EVENT_SD * sd, BLINK_DEADZONE_SD * sd + 0.05)
+    u = _clamp((e - lo) / (hi - lo))
+    return u * u * (3 - 2 * u)
 SQUINT_DOWN_S, SQUINT_UP_S = 1.0, 20.0  # baseline time constants: follow drops fast, rises slowly
 LINK_START, LINK_FULL = 0.15, 0.35  # |left - right| below LINK_START: fully linked; above LINK_FULL: independent
 GLIDE_WINDOW = 10
@@ -75,6 +95,7 @@ class EyeFilter:
 
     def reset(self):
         self.fit = {s: _OpenFit() for s in SIDES}
+        self.noise_var = {s: BLINK_NOISE_PRIOR ** 2 for s in SIDES}
         self.squint_base = {s: None for s in SIDES}
         self.t = None
 
@@ -85,16 +106,20 @@ class EyeFilter:
         dt = 0.1 if self.t is None else _clamp(t - self.t, 0.0, 1.0)
         self.t = t
         out = dict(shapes)
-        blink, squint = {}, {}
+        blink, squint, exc = {}, {}, {}
         for s in SIDES:
             b, ld, q = shapes.get(f"eyeBlink{s}"), shapes.get(f"eyeLookDown{s}", 0.0), shapes.get(f"eyeSquint{s}")
             if b is not None:
                 fit = self.fit[s]
                 o = _clamp(fit.level(ld), 0.0, 0.6)
-                c = max(BLINK_CLOSED, o + BLINK_SPAN_MIN)
-                blink[s] = _clamp((b - o) / (c - o))
+                e = b - o
+                sd = self.noise_var[s] ** 0.5
+                exc[s] = (e, sd)
+                blink[s] = _blink_curve(e, sd)
                 if b < o + BLINK_GATE:
                     fit.update(ld, b, dt)
+                    f = 1 - pow(2.718281828, -dt / BLINK_TAU_S)
+                    self.noise_var[s] += (e * e - self.noise_var[s]) * f
             if q is not None:
                 base = self.squint_base[s]
                 if base is None:
@@ -103,8 +128,15 @@ class EyeFilter:
                 base += (q - base) * (1 - pow(2.718281828, -dt / tau))
                 self.squint_base[s] = base
                 squint[s] = _clamp((q - base) / max(1.0 - base, 1e-3))
+        if len(exc) == 2:  # blink from both eyes together (see BLINK_WINK_SD)
+            (el, sl), (er, sr) = exc["Left"], exc["Right"]
+            both = _blink_curve(0.5 * (el + er), 0.5 * (sl * sl + sr * sr) ** 0.5)
+            wl = blink["Left"] >= 0.9 and er < BLINK_WINK_SD * sr
+            wr = blink["Right"] >= 0.9 and el < BLINK_WINK_SD * sl
+            if not (wl or wr):
+                blink = {"Left": both, "Right": both}
         for name, vals in (("eyeBlink", blink), ("eyeSquint", squint)):
-            if len(vals) == 2:
+            if len(vals) == 2 and name == "eyeSquint":
                 l, r = vals["Left"], vals["Right"]
                 w = _clamp((abs(l - r) - LINK_START) / (LINK_FULL - LINK_START))
                 m = 0.5 * (l + r)
