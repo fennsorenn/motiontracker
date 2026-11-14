@@ -88,4 +88,7 @@ never a decision (the body model's 17 joints came from the M1 plan's scope).
   - Body-contact render sets `data/m4/renders/body1`, `body2` (`render.py --events`): the generator accepted only
     belly and chest events, never thighs/lap.
   - Open: pairs3 regression, merger thigh regression, root depth bias in the simulation, framing without the head,
-    live runtime / VMC output of legs/root/up, combining with relational retargeting (`feature/relational-retarget`).
+    combining with relational retargeting (`feature/relational-retarget`).
+- 2026-11-14: live runtime / VMC output done on branch `feature/merger-runtime` (`PLAN.md` §7.6, `modules/service.md`):
+  `mg3` + `m1-v14` run in `service/` via `mtcore.merged`; leg bones on by default (`--no-legs`), hip position and up as
+  `/MT/Root`, `/MT/Up` in the camera frame (vspark ignores them for now). Owner's live test pending.

@@ -388,6 +388,8 @@ Plan: `dev-notes/plans/m2-face-hands.md`. Model stays m1-v10 for the body. `[USE
 Branch `feature/merger-runtime`. Merger decisions: §3.4; legs/hip/up: §3.9.
 - **Merger `mg3` goes live first** (legs, hip position as root in the camera frame, up direction; body model `m1-v14`). `[USER]` (2026-11-14)
 - **ONNX + numpy runtime, no torch or pymomentum in the runtime.** `[USER]` (2026-11-14) Separate ONNX exports of `m1-v14` (root model), the `p3` pair hand model and the merger; numpy ports of the code in between (hand model frame features, face-mesh head pose already numpy in `mtcore.facepose`, the base combination `mttrain.merger.batch.combine`, finger parameters → VRM finger locals via an exported table). Note: three ONNX graphs plus numpy glue, not §4's single-graph idea (`[CLAUDE]`, unchanged).
+- **Leg bones on by default**: vspark's mixer can zero the leg influence; `--no-legs` drops them for other consumers. `[USER]` (2026-11-14)
+- Hip position and up direction go out as VMC extensions `/MT/Root x y z` (m) and `/MT/Up x y z` (unit), in the body model's camera frame (x right in the mirrored image, y down, z away), not vspark's pose space; `Root/Pos` stays zero; vspark ignores both for now. `[CLAUDE]` (2026-11-14, following the owner's answer)
 
 ---
 

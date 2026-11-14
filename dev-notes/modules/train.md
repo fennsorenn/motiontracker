@@ -162,6 +162,7 @@ Moved to `mtcore.features` (2026-11-12) so the live runtime shares one implement
 ## Live export (`export`, implemented 2026-11-12)
 `uv run python -m mttrain.export data/m1/runs/<run>/best.pt [--out DIR] [--check-session sessions/<s>]` writes `data/m1/runs/<run>/live/` for `service/` (`modules/service.md`):
 - `model.onnx` (opset 17, input `x` (N, offsets, FRAME_DIM + 2) → `rot`, `log_scale`).
+- Root/leg models (m1-v12+, 2026-11-14): extra outputs `root`, `root_log_s`, `up`; the skeleton table is sized by the model's joints. The merger has its own export (`mttrain.merger.export`, `modules/merger.md`).
 - `lifter.json` (`format` `motiontracker-lifter`, `version` 1): source run/step, input layout (offsets, frame dim, scale settings), output bones, the MHR table (`LifterPose.table()`), default avatar rest positions (AvatarSample_D).
 - `--check-session`: onnxruntime vs torch on a session (3e-6 on `m1-v10`). Depends on `onnx` + `onnxruntime`.
 - CMU-derived weights: the bundle stays in gitignored `data/`. Bump `version` when the bundle layout changes (`modules/service.md`, Extending).
