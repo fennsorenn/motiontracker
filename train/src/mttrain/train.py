@@ -26,8 +26,11 @@ from .dataset import SampleStream, fixed_set
 from .losses import limit_box, losses, metrics
 from .model import Lifter
 
-WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 10.0, "con": 5.0, "leg": 1.0, "leg_pos": 1.0, "leg_vel": 0.5,
-           "root": 1.0, "up": 1.0}  # m1-v12 had leg_pos 5, leg_vel 2, up 2: arms ~5 deg behind m1-v11 at step 5000
+# leg and root are small on purpose: their confidence-weighted gradients grow as the model gets sure of the
+# barely moving feet and the root (m1-v13 at step 5000: gradient norm legs 91, root 120, upper body 8), and the
+# global clip at 1.0 then shrank the arms' updates ~150x (m1-v12/v13: arms ~5 deg behind m1-v11 at step 5000)
+WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 10.0, "con": 5.0, "leg": 0.05, "leg_pos": 1.0, "leg_vel": 0.5,
+           "root": 0.05, "up": 1.0}
 
 
 def main():
