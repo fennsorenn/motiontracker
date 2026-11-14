@@ -54,7 +54,9 @@ def limit_box(rot, lo_q=0.001, hi_q=0.999, margin=0.05):
 def losses(rot, log_scale, batch, box, w, aux=None):
     """rot (B, K, J, 3, 3), log_scale (B, K, J); batch from the dataset; w: loss weights dict. The upper body's terms
     average over its 17 joints only, so they weigh as before the legs; legs (when predicted), root position and up
-    (`aux`, m1-v12+) are separate terms: w["leg"], w["root"], w["up"]."""
+    (`aux`, m1-v12+) are separate terms: w["leg"], w["root"], w["up"]; the legs' position and velocity parts weigh
+    w["leg_pos"], w["leg_vel"] (default: the arms' w["pos"], w["vel"]; m1-v12 showed that at full weight these
+    mostly unobservable seated legs slow the arms down)."""
     rt, off = batch["rot"], batch["off"]
     e = rot_error(rot, rt)
     nll = torch.exp(-log_scale) * e + log_scale  # Laplace NLL: confidence = exp(-log_scale)
@@ -75,9 +77,9 @@ def losses(rot, log_scale, batch, box, w, aux=None):
     parts = dict(rot=l_rot.item(), pos=l_pos.item(), vel=l_vel.item(), lim=l_lim.item(), con=l_con.item())
     if rot.shape[-3] > len(UPPER_IDX):  # legs: the same terms with the arms' weights, as one term
         l_leg = (w["rot"] * nll[..., LEG_IDX].mean()
-                 + w["pos"] * (P[..., LEG_POS_IDX, :] - Pt[..., LEG_POS_IDX, :]).norm(dim=-1).mean()
-                 + w["vel"] * ((dP[..., LEG_POS_IDX, :] - dPt[..., LEG_POS_IDX, :]).norm(dim=-1).mean()
-                               + dRe[..., LEG_IDX].mean()))
+                 + w.get("leg_pos", w["pos"]) * (P[..., LEG_POS_IDX, :] - Pt[..., LEG_POS_IDX, :]).norm(dim=-1).mean()
+                 + w.get("leg_vel", w["vel"]) * ((dP[..., LEG_POS_IDX, :] - dPt[..., LEG_POS_IDX, :]).norm(dim=-1).mean()
+                                                 + dRe[..., LEG_IDX].mean()))
         total = total + w.get("leg", 1.0) * l_leg
         parts["leg"] = l_leg.item()
     if aux is not None:

@@ -26,7 +26,8 @@ from .dataset import SampleStream, fixed_set
 from .losses import limit_box, losses, metrics
 from .model import Lifter
 
-WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 10.0, "con": 5.0, "leg": 1.0, "root": 1.0, "up": 2.0}
+WEIGHTS = {"rot": 1.0, "pos": 5.0, "vel": 2.0, "lim": 10.0, "con": 5.0, "leg": 1.0, "leg_pos": 1.0, "leg_vel": 0.5,
+           "root": 1.0, "up": 1.0}  # m1-v12 had leg_pos 5, leg_vel 2, up 2: arms ~5 deg behind m1-v11 at step 5000
 
 
 def main():
@@ -44,9 +45,14 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--p-choreo", type=float, default=0.2, help="share of samples from the contact choreography pool")
     ap.add_argument("--resume", action="store_true", help="continue from last.pt (gpu generator only)")
+    for k in ("leg", "leg_pos", "leg_vel", "root", "up"):
+        ap.add_argument(f"--w-{k.replace('_', '-')}", type=float, default=None, help=f"loss weight {k} (default {WEIGHTS[k]})")
     a = ap.parse_args()
     out = DATA / "m1" / "runs" / a.name
     out.mkdir(parents=True, exist_ok=True)
+    for k in ("leg", "leg_pos", "leg_vel", "root", "up"):
+        if getattr(a, f"w_{k}") is not None:
+            WEIGHTS[k] = getattr(a, f"w_{k}")
     cfg = vars(a) | {"weights": WEIGHTS, "fits": os.environ.get("MT_FITS", "fits")}
     if not a.resume:
         (out / "config.json").write_text(json.dumps(cfg, indent=1))
