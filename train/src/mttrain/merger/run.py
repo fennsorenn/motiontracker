@@ -101,17 +101,13 @@ def finger_locals(conv, fk, ch, q):
     return {n: v for n, v in loc.items() if any(k in n for k in FINGER_WORDS)}
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("ckpt", type=Path)
-    ap.add_argument("landmarks", type=Path)
-    ap.add_argument("--out-dir", type=Path, required=True)
-    ap.add_argument("--avatar", default="AvatarSample_D")
-    a = ap.parse_args()
+def infer(ckpt, rows, avatar="AvatarSample_D"):
+    """Recorder-format frames -> dict: times (T,) s, base batch `b`, merger body locals L (T, NJ, 3, 3), finger
+    parameters {side: (T, 27)} of the merger and of the base (hand model), and the runner, hand FK and character."""
     ch = load()
     pn = list(ch.parameter_transform.names)
     jn = list(ch.skeleton.joint_names)
-    runner = Runner(M1, a.avatar)
+    runner = Runner(M1, avatar)
     fk = HandFK(ch)
     pair = LearnedPair(P3, fk)
     canon = CanonicalFace()
@@ -123,9 +119,8 @@ def main():
     blend_bank()
     from . import batch
     names = batch.ARKIT
-    rows = [json.loads(line) for line in open(a.landmarks) if line.strip()]
     times, b = part_outputs(rows, runner, pair, canon, np.array(fc["offset"]), rest_head, F_rest, names)
-    ck = torch.load(a.ckpt, map_location="cpu", weights_only=False)
+    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     model = Merger()
     model.load_state_dict(ck["model"])
     model.eval()
@@ -135,16 +130,28 @@ def main():
     with torch.no_grad():
         out = model(feats[0, idx])  # (T, n_offsets, D) -> per frame
     L = corrected(b["base"][0], out["res"]).numpy().astype(np.float64)
-    fingers = {}
+    fingers, base_f = {}, {}
     for k, s in enumerate("lr"):
-        q = np.zeros((T, 27), np.float32)
-        q[:, OUT_IDX] = (b["hand"][s]["fingers"][0] + out["fingers_res"][:, k]).numpy()
-        fingers[s] = np.clip(q, fk.lo, fk.hi)
-    base_f = {}
-    for s in "lr":
-        q = np.zeros((T, 27), np.float32)
-        q[:, OUT_IDX] = b["hand"][s]["fingers"][0].numpy()
-        base_f[s] = np.clip(q, fk.lo, fk.hi)
+        for dst, f in ((fingers, b["hand"][s]["fingers"][0] + out["fingers_res"][:, k]), (base_f, b["hand"][s]["fingers"][0])):
+            q = np.zeros((T, 27), np.float32)
+            q[:, OUT_IDX] = f.numpy()
+            dst[s] = np.clip(q, fk.lo, fk.hi)
+    return {"times": times, "b": b, "L": L, "fingers": fingers, "base_fingers": base_f, "runner": runner, "fk": fk,
+            "ch": ch}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("ckpt", type=Path)
+    ap.add_argument("landmarks", type=Path)
+    ap.add_argument("--out-dir", type=Path, required=True)
+    ap.add_argument("--avatar", default="AvatarSample_D")
+    a = ap.parse_args()
+    rows = [json.loads(line) for line in open(a.landmarks) if line.strip()]
+    r = infer(a.ckpt, rows, a.avatar)
+    times, b, L, fingers, base_f, runner, fk, ch = (r[k] for k in ("times", "b", "L", "fingers", "base_fingers", "runner",
+                                                                    "fk", "ch"))
+    T = len(times)
     conv = runner.pose.conv
     a.out_dir.mkdir(parents=True, exist_ok=True)
     tracks = {"merger": (L, fingers), "base": (b["base"][0].numpy().astype(np.float64), base_f),

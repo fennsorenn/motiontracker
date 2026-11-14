@@ -6,6 +6,7 @@
                                            [--contact]            # designed contact choreography
                                            [--hands]              # procedural finger motion, hands in view
                                            [--pairs]              # two-hand interactions (mttrain.hands.pairs)
+                                           [--events thighs,belly] # --pairs: only these event kinds
     uv run python -m mttrain.render video   --out data/m1/renders/v1      # Blender + ffmpeg
     uv run python -m mttrain.render replay  --out data/m1/renders/v1      # headless recorder -> landmarks
                                            [--mode image]         # IMAGE running mode -> landmarks-image.jsonl
@@ -103,7 +104,7 @@ def head_choreography(rng, pn, mp, fps, limits):
 
 
 def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fovs=None, contact_mode=False,
-            head_mode=False, hands_mode=False, pairs_mode=False):
+            head_mode=False, hands_mode=False, pairs_mode=False, events=None):
     """`rest_mode`: a held CMU posture with both arms in rest postures (lap, desk, hanging; random per arm)
     plus the seated idle motion (breathing, sway): nearly still ground truth, for noise at rest.
     `head_mode`: as rest_mode, but the head runs the HEAD_POSES choreography relative to the still torso
@@ -116,7 +117,8 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
     and face, palms any way) with procedural finger motion (mttrain.hands.motion), on held-out bodies;
     camera field of view 60-95 deg (the owner's cameras: about 70 and 90), drawn again until at least one
     hand is in the frame for 70% of the frames. Ground truth gains the finger bones.
-    `pairs_mode`: like hands_mode, with two-hand interactions, palm turns and wrist bends
+    `pairs_mode`: like hands_mode, with two-hand interactions, palm turns and wrist bends (`events`: only these
+    event kinds, e.g. the body contacts)
     (mttrain.hands.pairs); the events go to session.json as segments (via contacts.json)."""
     rng = np.random.default_rng(seed)
     ch = load()
@@ -138,7 +140,7 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
     # resumable: after every sequence the generator state is saved; a rerun with the same arguments continues there
     state_file = Path(out) / "prepare.state.json"
     run_args = {"n": n, "seconds": seconds, "seed": seed, "fovs": fovs, "rest": rest_mode, "contact": contact_mode,
-                "hands": hands_mode, "pairs": pairs_mode, "head": head_mode}
+                "hands": hands_mode, "pairs": pairs_mode, "head": head_mode, "events": events}
     start = 0
     if state_file.exists():
         st = json.loads(state_file.read_text())
@@ -163,7 +165,8 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
             if head_mode:
                 mp = head_choreography(rng, pn, mp, FPS, lim)
         elif hands_mode or pairs_mode:
-            mp, cam, cam_state, key, s0, fingers = _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, pairs=pairs_mode)
+            mp, cam, cam_state, key, s0, fingers = _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, pairs=pairs_mode,
+                                                               events=events)
             if pairs_mode:
                 contacts = fingers.pop("segments")
         else:
@@ -196,7 +199,7 @@ def prepare(out, n, seconds, seed, avatar="AvatarSample_D", rest_mode=False, fov
         tmp.replace(state_file)
 
 
-def _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, tries=40, pairs=False):
+def _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, tries=40, pairs=False, events=None):
     """Hands-in-use arms with fingers moving and a camera that sees at least one hand 70% of the time.
     pairs: two-hand interaction choreography (fingers come with it; its events in fingers["segments"])."""
     from .hands import stage
@@ -220,6 +223,7 @@ def _hands_take(rng, ch, lm, pn, lim, mps, keys, w, T, tries=40, pairs=False):
         if "_PAIRS" not in globals():
             _PAIRS = PairChoreo(ch, lm, pn, lim, hm)
         pc = _PAIRS
+        pc.events = events
         if pairs:
             mp, segs = pc.generate(rng, mps[key][s0].astype(np.float64), T, FPS)
             left = pc.last_overlap
@@ -358,6 +362,8 @@ def main():
     ap.add_argument("--contact", action="store_true", help="designed contact choreography (mttrain.choreo)")
     ap.add_argument("--hands", action="store_true", help="procedural finger motion, hands kept in view")
     ap.add_argument("--pairs", action="store_true", help="two-hand interactions (mttrain.hands.pairs)")
+    ap.add_argument("--events", type=lambda v: v.split(","), default=None,
+                    help="--pairs: only these event kinds (comma-separated, e.g. thighs,lap_folded,belly,chest)")
     ap.add_argument("--mode", choices=("video", "image"), default="video",
                     help="replay: detector running mode (image: frame-stepped; still smoothed in 0.10.17)")
     ap.add_argument("--fovs", type=lambda v: [float(x) for x in v.split(",")], default=None,
@@ -365,7 +371,7 @@ def main():
     a = ap.parse_args()
     if a.step == "prepare":
         prepare(a.out, a.n, a.seconds, a.seed, rest_mode=a.rest, fovs=a.fovs, contact_mode=a.contact, head_mode=a.head,
-                hands_mode=a.hands, pairs_mode=a.pairs)
+                hands_mode=a.hands, pairs_mode=a.pairs, events=a.events)
     elif a.step == "video":
         video(a.out, a.threads)
     elif a.step == "gt":
