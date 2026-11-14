@@ -53,11 +53,14 @@ Shared by training (`mttrain.dataset`, `model`, `infer`, mirrored by `gpugen/fea
 ## face_filter
 Algorithmic, causal post-processing of MediaPipe's ARKit blendshapes (owner decision 2026-11-14, `PLAN.md` §3.11/§7.5; learned face head in reserve). Used by `mtservice.face` (live) and `mtservice.faceproc` (offline), `modules/service.md`.
 - `EyeFilter`, per eye:
-  - Open-eye blink level fitted online as a linear function of that eye's `eyeLookDown` (exponential forgetting, tau 60 s; prior a=0.18, k=0.4); frames above fit + 0.12 are treated as blinks and excluded from the fit. Blink is rescaled from that level to 0.7 = closed.
+  - Open-eye blink level fitted online as a linear function of that eye's `eyeLookDown` (exponential forgetting, tau 60 s; prior a=0.18, k=0.4); frames above fit + 0.12 are treated as blinks and excluded from the fit.
+  - Blink as an event (fix f9dce9a: MediaPipe at ~10 Hz catches blinks part-way and unevenly): the excursion above the fitted open level is measured against the open-eye noise (residual sd, tracked online, prior 0.06). Below 2 sd (`BLINK_DEADZONE_SD`) the eye reads open; it reaches fully closed at 3.5 sd (`BLINK_EVENT_SD`), smoothstep in between.
+  - Both eyes blink from their mean excursion (noise sd / sqrt 2), unless it is a wink: one eye closed while the other stays below 0.5 sd (`BLINK_WINK_SD`) above its open level.
   - Squint rescaled above a resting baseline that follows drops fast (1 s) and rises slowly (20 s).
-  - Left/right linked to their mean when the processed values differ by < 0.15, independent above 0.35, so winks pass.
+  - Squint left/right linked to their mean when they differ by < 0.15, independent above 0.35 (`LINK_START`/`LINK_FULL`; blink no longer uses this linking).
 - Glide: smoothing-free upsampling like the harness's bone glide (`mteval.upsample`): linear from the shown value to the new one, finishing one tick before the next detector frame is expected (mean of the last 10 intervals).
-- Effect on the recorded sessions: resting blink 0.27-0.34 → 0.02-0.06, squint 0.39-0.40 → 0.12-0.13, left/right difference 0; blinks still reach 1.0 on seated-v1 (hands session peaks ~0.6, as do its raw peaks).
+- Effect on the recorded sessions (before the f9dce9a blink fix): resting blink 0.27-0.34 → 0.02-0.06, squint 0.39-0.40 → 0.12-0.13, left/right difference 0. After the fix, blinks reaching >= 0.9 closed: seated 28 of 41 events, hands 35 of 55 (before: 0); rest stays at 0. Seated blink rate ~37/min, possibly some false blinks (to watch live).
+- Status: merged into `dev` (2026-11-14), used live via `mtservice` (`modules/service.md`).
 - Tests live with the consumer: `service/tests/test_face.py`.
 
 ## Tests
