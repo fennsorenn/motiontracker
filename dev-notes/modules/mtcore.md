@@ -14,13 +14,14 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 | `paths.py` | Repo and data locations. |
 | `mhr.py` | Loads the MHR rig via pymomentum **without blendshapes** (`MHR.from_files` segfaults with them, pymomentum 0.1.114 CPU), FK (`skeleton_state`, `positions`), `[Limits]` parser (`limits`), `FLEX_T` (flexible-translation parameters, kept at zero). |
 | `convert.py` | MHR skeleton state → VRM 1.0 normalized local rotations (`MhrToVrm`), VRM FK, quaternion helpers. `REST_ALIGNED` (torso + shoulders) map rest-to-rest, other bones use direction matching. Method: `modules/mhr-vrm-spike.md` (Conversion). |
-| `vrm.py` | Minimal VRM 0.x/1.0 humanoid reader (0.x turned to face +Z). |
+| `vrm.py` | Minimal VRM 0.x/1.0 humanoid reader (0.x turned to face +Z). Planned (WIP, `relational-retarget`): glTF skinned-mesh reader. |
 | `cmu.py` | CMU ASF/AMC reader + FK (cm), with optional per-frame rotations. |
 | `cmu_fit.py` | CMU clip → MHR (pymomentum sequence IK). See below. |
 | `landmarks.py` | `LandmarkModel`: MediaPipe's 33 pose landmarks from an MHR pose. See below. |
 | `features.py` | M1 model input (moved from `mttrain.features`, 2026-11-12), numpy only. See below. |
 | `lifter_pose.py` | M1 lifter output → MHR globals → VRM locals, numpy only. See below. |
 | `facepose.py` | Head pose from Holistic's face mesh: weighted similarity fit of MediaPipe's canonical face model (33 Procrustes points); metadata read from the cached Face Landmarker bundle with a minimal protobuf wire decoder; numpy only. Used by the merger (`modules/merger.md`). |
+| `relretarget.py` | WIP prototype (2026-11-14, branch `feature/relational-retarget`; not a decision). See below. |
 
 ## cmu_fit
 - `fit(subject, clip, ...)`: spike-style single-clip fit (shared scales + per-frame pose), default `PAIRS`.
@@ -49,6 +50,9 @@ Shared by training (`mttrain.dataset`, `model`, `infer`, mirrored by `gpugen/fea
 - `bones=`: compute only the MHR joints those VRM bones need (plus forearm twist joints); live use computes 18 of 127 joints, ~1 ms/frame instead of ~3 ms. `set_avatar` swaps the avatar rest pose.
 - Also `quat_to_mat`, `mat_to_quat` (xyzw); `mttrain.skeleton` re-exports `quat_to_mat`.
 - Used by `mttrain.infer.Runner` (same output as before within ~0.01 deg, float32 vs float64 rest data) and `mtservice.lifter.LiveLifter`.
+
+## relretarget (WIP prototype)
+Relation-preserving retargeting onto a VRM avatar ("option A", `dev-notes/ARCHITECTURE.md` retargeting section), numpy-only, not built yet. Planned approach: for each hand point (palm centre, fingertips), a signed gap to nearby body parts' mesh surfaces (capsule profile per bone, fitted from the skinned mesh: MHR mesh for the human, VRM mesh via the planned `vrm.py` skinned-mesh reader for the avatar), plus absolute hand-to-hand vectors; distance-weighted, with plain rotation copy (`lifter_pose` / `MhrToVrm`) as the far-field fallback; solved with two-bone arm IK on the avatar. Demo driver planned in `train/src/mttrain/` (ground truth vs rotation copy vs relational). Still unclear: weighting scheme, which body parts count as "nearby", whether it stays in `mtcore` if adopted (owner is weighing it against "option B", retargeting inside the merger, `modules/merger.md`).
 
 ## Tests
 `core/tests/` (`uv run pytest`): streaming vs batch features, conversion round trip (direction match for non-`REST_ALIGNED` bones; MHR rest → identity locals and torso following MHR world rotation for `REST_ALIGNED`; arm world rotations equal to all-direction matching), CMU fit, landmarks, quaternions. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
