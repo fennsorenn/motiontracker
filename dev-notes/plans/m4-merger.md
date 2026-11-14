@@ -110,3 +110,20 @@ Merge into `dev` when the owner accepts the evaluation.
   input jitter is small (default 0.75 deg).
 - Step 4 done: `mttrain.merger.model` (residuals over offsets 0, 1, 2, 4, 8 frames) and `mttrain.merger.train`
   (resumable; validation compares merger, base pose and body model).
+- Step 6 tooling: `mttrain.merger.run` (landmarks -> merger / base / body-model VRM tracks) and a rendered-set
+  evaluation through the harness with ground truth.
+- Pilots (3000 steps on ~140 early pool sequences), evaluated on real Holistic output from the renders:
+  - pilot 1: head better (head1 17.7 -> 11.0 deg vs body model), but hands fell back from the base pose's 32-39 deg
+    to the body model's level (hands3 40, head1 54). Cause: a sim-to-real gap in the body model's outputs. On real
+    renders `m1-v10`'s globals are 2-3x as far off as on synthetic observations (forearms 31 vs 12 deg, wrists
+    55-65 vs 25, spine 13 vs 6; head matches; `merger.gapcal`, `data/merger/calib/m1_gap.json`), so the merger
+    learned to trust the body model too much. The hand model has no such gap (23 deg in view, both).
+  - pilot 2: the body model's outputs degraded in training to their real error level (`batch.degrade`: extra global
+    noise per joint, 70% per-sequence offset, the rest drifting). Lower arms better on all four sets
+    (pairs3 55 -> 42-44 deg), hands pairs3 49 -> 35, but hands still a little behind the base pose elsewhere.
+  - pilot 3: residuals on global rotations instead of locals (a forearm correction no longer moves the hand model's
+    wrist). Lower arms pairs3 55 -> 35-39, hands3 28-37 -> 24-30, contact1 32-36 -> 27-33; hands pairs3 49 -> 37,
+    contact1 equal to the base pose, hands3/head1 1-2 deg behind it; out-of-view wrists better than the base pose
+    (51 -> 44 deg). Remaining in-view wrist gap (~4 deg where the hand model is moderately confident): the hand
+    model is slightly worse on synthetic data than on renders in that band (28 vs 24 deg) and the degraded body
+    wrist slightly too far off (69 vs 65 deg); calibration levers for later.
