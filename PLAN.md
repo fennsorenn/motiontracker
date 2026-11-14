@@ -129,6 +129,7 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
 - Heads output **rotations + per-bone confidence**, optionally a small latent. Merger predicts **residual corrections** to head rotations. `[USER]` (2026-11-14: corrections on top of the combined head outputs, `mttrain.hands.wrist`'s combination as the starting point)
 - **First merger (M4, 2026-11-14): body + hands + head/face.** Joins the body model (`m1`) and the pair hand model (`p3`): forearm twist, wrist, body pose preferred where hand confidence is low, hands/arms kept out of the body (the correction data of §5.6); plus neck/head and the face (blendshapes as input). `[USER]`
 - **Merger design (2026-11-14):** head seen as a head pose fitted to Holistic's face mesh (canonical face model), simulated in training with an error model calibrated on renders; blendshape input trained on real, unpaired recorded sequences with dropout (passed through unchanged); short history of part outputs; trained on a new combined pool (body sources + hand events, full MHR sequences) with clipping-correction samples. `[USER]` Plan: `dev-notes/plans/m4-merger.md`.
+- **Runtime (2026-11-14):** `mg3` goes live first, as ONNX + numpy (no torch/pymomentum). `[USER]` Details §7.6.
 - **Merger smoothing through training (2026-11-14):** extra jitter on the merger's inputs (calibrated on real part-model noise), jitter-free targets (smooth idle, no finger tremor, sharp motion kept). `[USER]` (idea); calibration and details `[CLAUDE]`.
 - **Merger inputs, first version: head outputs only** (rotations, confidences, the hand model's image position and size); internal features follow as a second step with feature dropout. `[USER]` (2026-11-14)
   - Reasons: swappable sources (e.g. ARKit can plug in as an alternative head module), staged training, graceful degradation if merger is off, confidence-weighted fusion at shared joints.
@@ -382,6 +383,11 @@ Plan: `dev-notes/plans/m2-face-hands.md`. Model stays m1-v10 for the body. `[USE
   - Left/right: the avatar mirrors the person. On the mirrored frames MediaPipe's pose "left" is the person's right, and its *Left blendshapes follow the image's right side as well (measured), so face and body agree when the blendshapes are passed on unswapped, as vspark's MediaPipe Tracking does. `[CLAUDE]` `[CORRECTED]` (2026-11-12): a first version swapped them to the person's own left, which put winks on the opposite side from the arms. Note: vspark's VMC "mirror" option swaps bones only, not ARKit shapes.
 - **Hands:** port vspark's algorithmic finger solve into the runtime first so fingers work end to end, then replace it with a learned hand model (procedural finger poses, §5.6). `[USER]`
 - Same runtime, same VMC stream (blendshapes as `/VMC/Ext/Blend/Val` with ARKit names, fingers as bones). `[CLAUDE]` vspark's VMC receiver reads ARKit only from RhyLive's `/Face` today, so it gets standard `Blend/Val` support. `[CLAUDE]`
+
+### 7.6 Merger in the runtime (2026-11-14)
+Branch `feature/merger-runtime`. Merger decisions: §3.4; legs/hip/up: §3.9.
+- **Merger `mg3` goes live first** (legs, hip position as root in the camera frame, up direction; body model `m1-v14`). `[USER]` (2026-11-14)
+- **ONNX + numpy runtime, no torch or pymomentum in the runtime.** `[USER]` (2026-11-14) Separate ONNX exports of `m1-v14` (root model), the `p3` pair hand model and the merger; numpy ports of the code in between (hand model frame features, face-mesh head pose already numpy in `mtcore.facepose`, the base combination `mttrain.merger.batch.combine`, finger parameters → VRM finger locals via an exported table). Note: three ONNX graphs plus numpy glue, not §4's single-graph idea (`[CLAUDE]`, unchanged).
 
 ---
 
