@@ -20,6 +20,7 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 | `landmarks.py` | `LandmarkModel`: MediaPipe's 33 pose landmarks from an MHR pose. See below. |
 | `features.py` | M1 model input (moved from `mttrain.features`, 2026-11-12), numpy only. See below. |
 | `lifter_pose.py` | M1 lifter output → MHR globals → VRM locals, numpy only. See below. |
+| `facepose.py` | Head pose from Holistic's face mesh: weighted similarity fit of MediaPipe's canonical face model (33 Procrustes points); metadata read from the cached Face Landmarker bundle with a minimal protobuf wire decoder; numpy only. Used by the merger (`modules/merger.md`). |
 
 ## cmu_fit
 - `fit(subject, clip, ...)`: spike-style single-clip fit (shared scales + per-frame pose), default `PAIRS`.

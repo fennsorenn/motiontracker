@@ -30,6 +30,7 @@ Status (2026-11-13): v1 single-hand model (`h1`, `h2`), v2 pair model (`p2`) and
 - `evaluate2 <set> --ckpt <run>/best.pt [--landmarks landmarks.jsonl|landmarks-hl.jsonl]`: fingers and camera-frame orientation against exact truth.
 
 ## Combination onto the body model (`wrist`, merger stand-in)
+To be replaced by the learned merger (WIP, `modules/merger.md`), whose base pose is this combination done in the body model's frame (`merger.batch.combine`).
 `HandOrient` chains the pair model's palm frame (camera frame) → body model frame (`lifter_pose.R0`) → MHR wrist via the rest palm frame → VRM hand global via `MhrToVrm` (`q_rest_inv`, `D`; `mtcore.convert`) → local to the body model's `lowerArm`.
 - The whole rotation goes onto the hand bone: the rendered truth carries the forearm twist on the hand. `twist_to_forearm=True` moves the twist onto the lower arm but put it 129 deg off the truth; it stays off until a truth convention for forearm twist exists.
 - Bends beyond `MAX_BEND_DEG` (100) after removing the forearm twist are rejected (likely palm/back flip): the body model's hand is kept.
@@ -51,6 +52,8 @@ Training data for counting, off-screen rest and body contact, plus a per-hand de
 - Render tools: `tools/render/handlandmarker.py` stores scores and is resumable; `render_blender.py` resumes per frame; `render.py prepare` is resumable. Avatar-video renders (`tools/avatar-video`) are not resumable yet.
 
 Owner decisions on the way: the folded-in-the-lap pose stays at its best version although the top hand sits a fist's height above the leg (refine later); clipping correction data goes to the merger, not the hand model (deferred).
+
+Merger support (2026-11-14, `modules/merger.md`): `pool2 --full` (full MHR parameter sequences) and `--no-tremor`; `HandMotion` tremor flag; `observe2.PairObserver` optional camera (shared with the body observation); `evaluate2.LearnedPair` exposes raw outputs (`raw`, `lost`, `score`).
 
 ## Extending
 - Anything inference needs must stay in `mtcore.hand_features` so training and the runtime cannot diverge.

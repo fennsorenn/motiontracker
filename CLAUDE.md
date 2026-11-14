@@ -26,7 +26,7 @@ When the owner confirms or changes something, update the tag in `PLAN.md` (e.g. 
 - Person selection is out of scope (detector problem).
 
 ## Current state
-M0 tools done: the baseline (`baseline/`, frozen copy of vspark's solver), the session recorder (`tools/recorder/`), the label-free evaluation harness (`eval/`); one real session recorded (2026-11-01). M3 spike done (MHR canonical skeleton). M1 body lifter (`train/`) trained through m1-v10 (merged into `dev` 2026-11-12); go/no-go not yet met on the numbers. Now: live runtime `service/` (M2 slice, 2026-11-12) driven by a vspark "Learned Tracking" behavior (`dev-notes/plans/m2-vspark-runtime.md`). Repo public since 2026-11-12, no license yet. See `dev-notes/ARCHITECTURE.md`.
+M0 tools done: the baseline (`baseline/`, frozen copy of vspark's solver), the session recorder (`tools/recorder/`), the label-free evaluation harness (`eval/`); one real session recorded (2026-11-01). M3 spike done (MHR canonical skeleton). M1 body lifter (`train/`) trained through m1-v10 (merged into `dev` 2026-11-12); go/no-go not yet met on the numbers. Now: M4, live runtime `service/` (M2 slice) in place since 2026-11-12, hand model merged into `dev` 2026-11-14, learned merger WIP on `feature/m4-merger` (`dev-notes/plans/m4-merger.md`). Repo public since 2026-11-12, no license yet. See `dev-notes/ARCHITECTURE.md`.
 
 ## Housekeeping
 - Maintain a license register (e.g. `docs/LICENSES-REGISTER.md`): source, license, link and usage for every asset, dataset, model and recording.

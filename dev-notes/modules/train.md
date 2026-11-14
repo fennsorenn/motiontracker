@@ -37,6 +37,8 @@ Package `mttrain/gpugen/`: batched torch port of the synthesis pipeline; the tra
 | `features.py` | `causal_scale`, `frame_features`, `history_indices`, `model_input`; exact port of `mtcore.features`. |
 | `generator.py` | `GpuGenerator(split, device, K, p_seated, seed).sample(B)`: same dict as `dataset.Generator.sample`, batched. Flattening uses the shoulder distance over valid frames. |
 
+For the merger (2026-11-14, `modules/merger.md`): `GpuGenerator.sample` is split into `crop` / `observe` (m1 batches bit-identical) with an optional landmark `push` hook; `Seater` has `smooth_life` (low-passed idle life for jitter-free targets).
+
 Differences from the numpy generator: fixed 97-frame source crop (clips shorter than 97 frames are unused) and different random streams. Tests (`tests/test_gpugen.py`): FK vs pymomentum; geometry and features exact vs numpy; the whole generator statistically vs numpy.
 
 Extending: any change to a numpy synthesis stage must be mirrored in `gpugen` (and vice versa), with the comparison test kept passing; the numpy pipeline is the reference.
@@ -151,6 +153,9 @@ Moved to `mtcore.features` (2026-11-12) so the live runtime shares one implement
 
 ## Hand model (`mttrain.hands`, M4 WIP)
 Subpackage `train/src/mttrain/hands/`: finger motion and two-hand choreography, calibration on rendered hands, synthetic observations, single-hand (v1) and pair (v2) models, evaluation, combination onto the body model's arm. Details: `modules/hands.md`; plan: `plans/m4-hand-model.md`.
+
+## Merger (`mttrain.merger`, M4 WIP)
+Subpackage `train/src/mttrain/merger/`: learned merger of body model, hand model and face-mesh head pose. Details: `modules/merger.md`; plan: `plans/m4-merger.md`.
 
 ## Running heavy jobs
 Run CPU-heavy jobs (fits, training) through `tools/guarded-run.sh [-c CORES] [-l MAX_LOAD] [-m MIN_AVAIL_GB] [-o LOG] -- command...`. It pins the job and all its threads to a core set (default: upper half of the logical CPUs, i.e. 8-15 here), nices it, and kills the whole process group if available memory drops below 6 GB or the load runs away. Pinning is needed because pymomentum's dispenso thread pool starts one thread per logical CPU in every process regardless of OMP/BLAS limits or affinity; `taskset` still confines where those threads run, so it is the only reliable cap. The `fits-v3` refit (16 min, 3 workers) ran under it.
