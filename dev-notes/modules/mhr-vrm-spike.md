@@ -23,7 +23,7 @@ Spike code, not production. The reusable code (MHR loading/FK, conversion, VRM r
   - Torso and shoulders (`REST_ALIGNED` in `mtcore` `convert.py`: hips, spine, chest, upperChest, neck, head, leftShoulder, rightShoulder): `D` = identity. MHR rest maps onto the avatar's rest; only the rotation away from rest is copied. Reason: direction matching copied MHR's anatomical spine S-curve and backward clavicles onto VRoid's straight spines (at MHR rest: chest +30, upperChest +32 deg forward, neck -32, hips -20; shoulders ~37 deg back).
   - Limbs and fingers: direction matching, `D` = the minimal rotation taking the bone's direction in the avatar's T-pose rest onto the matching MHR bone's direction in MHR's A-pose rest (the direction target is the MHR joint where the VRM child bone sits).
   - Arm world rotations are the same as under all-direction matching; torso/shoulders only move where the arm attaches.
-- Forearm twist: MHR's forearm twist is moved onto VRM `lowerArm` by a swing-twist split.
+- Forearm twist: MHR's forearm twist is moved onto VRM `lowerArm` by a swing-twist split (measured from MHR's rest relation and with no roll left on the hand since 2026-11-16; `modules/mtcore.md`, convert).
 - MHR flexible joint translations are kept at zero (rotation-only output).
 
 ## CMU → MHR fitting
