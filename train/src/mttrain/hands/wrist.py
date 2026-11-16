@@ -6,9 +6,11 @@ index knuckle, their cross product; from image points, right hands mirrored). Ch
 2. palm frame -> MHR wrist orientation: the palm frame is rigid to the wrist, so the rotation from MHR's rest
    palm frame to the observed one, applied to the rest wrist orientation;
 3. MHR wrist -> VRM hand global (`mtcore.convert.MhrToVrm`'s hand rotation offset);
-4. relative to the body model's lower arm (VRM globals from its locals): the whole rotation goes onto the hand
-   (the rendered ground truth also carries most of the forearm twist on the hand: median 120 deg about the
-   forearm axis; moving it onto the lower arm, `twist_to_forearm`, put the lower arm 129 deg off the truth);
+4. relative to the body model's lower arm (VRM globals from its locals): the twist about the forearm axis goes
+   onto the lower arm and the hand keeps the swing (`twist_to_forearm`, default; owner 2026-11-16: a wrist can't
+   roll, the same rule as `MhrToVrm`). Before the v0.1.1 converter fix the rendered truth put ~120 deg of rest
+   twist on the hand, which made this look 129 deg off; with the fixed truth it is the better choice (pairs2,
+   Holistic: hand-local 39.4 -> 29.7 deg median, hand world unchanged, lower arm 53.2 -> 58.6 deg);
    bends (the part off the forearm twist) beyond MAX_BEND_DEG (a likely palm/back flip) keep the body model's hand;
    otherwise the result is blended with the body model's hand by the hand model's confidence (CONF_DEG).
 """
@@ -52,7 +54,7 @@ def unmirror_frame(F):
 
 
 class HandOrient:
-    def __init__(self, ch, vrm_rest, twist_to_forearm=False):
+    def __init__(self, ch, vrm_rest, twist_to_forearm=True):
         self.twist_to_forearm = twist_to_forearm
         pn = list(ch.parameter_transform.names)
         jn = list(ch.skeleton.joint_names)
