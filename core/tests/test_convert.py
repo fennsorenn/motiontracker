@@ -72,3 +72,53 @@ def test_torso_follows_mhr_rotation_from_rest_and_arms_are_unaffected(mhr, rng, 
     for s in ("left", "right"):
         for b in (f"{s}UpperArm", f"{s}LowerArm", f"{s}Hand"):
             assert _angle(G[b], glob[b]).max() < 0.2, b
+
+
+def _twist_deg(q, axis):
+    """Signed twist angle of q about a unit axis, deg."""
+    from mtcore.convert import twist
+    t = twist(np.asarray(q, float), axis)
+    return float((np.degrees(2 * np.arctan2(t[:3] @ axis, t[3])) + 180) % 360 - 180)
+
+
+@needs_mhr
+@needs_avatars
+def test_forearm_carries_the_roll_and_the_wrist_only_bends(mhr, rng):
+    """MHR's wrist_twist rest frame differs from lowarm's by ~114 deg about the forearm: only the change since rest
+    may count (it once put ~130 deg on lowerArm that the hand undid: a wrung forearm). A wrist can't roll, so the VRM
+    hand keeps no twist about the forearm in any pose, and a pure 40 deg forearm twist (wrist_twist and everything
+    below it) turns lowerArm by 40 deg."""
+    from mtcore.convert import qrot
+    ch, jn, pn = mhr
+    rest = skeleton_state(ch, np.zeros(len(pn))).astype(np.float64)
+    _, _, vrm_rest = load_vrm(AVATARS / "AvatarSample_D.vrm")
+    conv = MhrToVrm(jn, rest, vrm_rest)
+    parents = list(ch.skeleton.joint_parents)
+    pose_idx = [i for i, n in enumerate(pn) if not n.startswith(("scale_", "root_t")) and n not in FLEX_T]
+    poses = [rest]
+    for _ in range(10):
+        mp = np.zeros(len(pn), np.float32)
+        mp[pose_idx] = rng.uniform(-0.6, 0.6, len(pose_idx))
+        poses.append(skeleton_state(ch, mp).astype(np.float64))
+    for side, m in (("left", "l"), ("right", "r")):
+        axis = vrm_rest[f"{side}Hand"] - vrm_rest[f"{side}LowerArm"]
+        axis /= np.linalg.norm(axis)
+        for st in poses:
+            assert abs(_twist_deg(conv.locals(st)[f"{side}Hand"], axis)) < 0.5
+
+        lo, wt, wr = (jn.index(f"{m}_{n}") for n in ("lowarm", "wrist_twist", "wrist"))
+        d = rest[wr, :3] - rest[lo, :3]
+        d /= np.linalg.norm(d)
+        R = np.append(d * np.sin(np.radians(20)), np.cos(np.radians(20)))  # 40 deg about the forearm, world frame
+        st = rest.copy()
+        below = {wt}
+        for j in range(len(jn)):  # parents come before children
+            if parents[j] in below:
+                below.add(j)
+        for j in below:
+            st[j, 3:7] = qmul(R, rest[j, 3:7])
+            st[j, :3] = rest[wt, :3] + qrot(R, rest[j, :3] - rest[wt, :3])
+        L0, L = conv.locals(rest), conv.locals(st)
+        turn = _twist_deg(qmul(qinv(L0[f"{side}LowerArm"]), L[f"{side}LowerArm"]), axis)
+        assert abs(abs(turn) - 40.0) < 1.0
+        assert abs(_twist_deg(L[f"{side}Hand"], axis)) < 0.5
