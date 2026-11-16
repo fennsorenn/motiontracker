@@ -25,6 +25,14 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 | `merged.py` | Live merger runner `LiveMerged` (2026-11-14, branch `feature/merger-runtime`). See below. |
 | `relretarget.py` | WIP prototype (2026-11-14, branch `feature/relational-retarget`; not a decision). See below. |
 
+## convert (forearm twist)
+`MhrToVrm` general method: `modules/mhr-vrm-spike.md` (Conversion). Forearm twist, fixed 2026-11-16 (commit 43347af, release v0.1.1):
+- `self.forearm[<side>LowerArm]` = (lowarm, wrist_twist, forearm axis in lowarm's local frame, inverse rest relation). MHR's `{l,r}_wrist_twist` rest frame differs from `{l,r}_lowarm`'s by ~114 deg about the forearm; the twist part of wrist_twist relative to lowarm is taken after removing that rest relation, so only the change since rest goes onto VRM `lowerArm`.
+- Wrist-roll rule (`self.wrist_roll`, applied in `_globals`; owner decision 2026-11-16, `PLAN.md` §3.10): a wrist can't roll. After the mapping, any twist about the forearm left in the VRM hand's rotation relative to `lowerArm` moves onto `lowerArm` (axis: the VRM rest forearm direction, normalized space). Hand world rotation is unchanged; the hand's local rotation keeps only swing. Spreading roll onto the upper arm is the renderer's job (vspark: frontend forearm twist bones, `forceTwistBone`), not the converter's.
+- Before the fix (since the first conversion code, 2026-11-01: `m1-v10` and every runtime output up to v0.1.0) the converter took the twist of the full relative rotation, so `lowerArm` carried ~130 deg of twist at rest and the hand undid it: hand world rotation right, forearm wrung one way at the elbow and back at the wrist (seen in vspark 2026-11-15). Eval numbers on VRM local rotations of lowerArm/hand from before 2026-11-16 include this offset; bone-direction metrics and hand world rotations are unaffected.
+- Measured on session 2026-11-12T21-40-58 (`mg3`): hand twist about the forearm ~±130 → under 6 deg; lowerArm carries the real roll (median near 0, tails ~±18 deg). Not fixed: p99 frame-to-frame twist jump ~15 deg at 10 FPS (model noise).
+- The `m1-v10` parity reference used by `service/tests/test_lifter.py` (`data/m1/runs/m1-v10/2026-11-01T15-29-11-session.poses.jsonl`, local, gitignored) was regenerated with the fixed converter; the old one is kept as `...poses.pre-twist-fix.jsonl`.
+
 ## cmu_fit
 - `fit(subject, clip, ...)`: spike-style single-clip fit (shared scales + per-frame pose), default `PAIRS`.
 - `fit_subject_scales(ch, subject, clips, ...)`: one set of performer scales per CMU subject from frames sampled across its clips.
@@ -84,7 +92,7 @@ Algorithmic, causal post-processing of MediaPipe's ARKit blendshapes (owner deci
 - Tests live with the consumer: `service/tests/test_face.py`.
 
 ## Tests
-`core/tests/` (`uv run pytest`): streaming vs batch features, conversion round trip (direction match for non-`REST_ALIGNED` bones; MHR rest → identity locals and torso following MHR world rotation for `REST_ALIGNED`; arm world rotations equal to all-direction matching), CMU fit, landmarks, quaternions (incl. `mat_to_quat` near 180 deg). `LiveMerged` is tested from `service/tests/test_merged.py`. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
+`core/tests/` (`uv run pytest`): streaming vs batch features, conversion round trip (direction match for non-`REST_ALIGNED` bones; MHR rest → identity locals and torso following MHR world rotation for `REST_ALIGNED`; arm world rotations equal to all-direction matching; `test_forearm_carries_the_roll_and_the_wrist_only_bends`: hand keeps < 0.5 deg twist about the forearm in rest and random poses, a pure 40 deg forearm twist turns lowerArm 40 deg, fails on the pre-2026-11-16 code), CMU fit, landmarks, quaternions (incl. `mat_to_quat` near 180 deg). `LiveMerged` is tested from `service/tests/test_merged.py`. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
 
 ## Extending
 - New reusable code that more than one project (spike, `train/`, later the service) needs goes here, not into a consumer.
