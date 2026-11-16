@@ -130,13 +130,23 @@ class MhrToVrm:
         self.bones = [b for b in MAP if b in vrm_rest_positions]
         self.q_rest_inv, self.D = {}, {}
         P, Q = mhr_rest_state[:, :3], mhr_rest_state[:, 3:7]
-        # forearm twist: wrist_twist's rotation relative to lowarm, twist part about the forearm axis
-        # (in lowarm's local frame), goes onto VRM lowerArm. The hand keeps the remaining swing.
+        # forearm twist: wrist_twist's rotation relative to lowarm, measured from their rest relation (MHR's rest
+        # frames differ by ~114 deg about the forearm), twist part about the forearm axis (in lowarm's local frame),
+        # goes onto VRM lowerArm. The hand keeps the remaining swing.
         self.forearm = {}
         for side, m in (("left", "l"), ("right", "r")):
             lo, wt, wr = (self.jn.index(f"{m}_{n}") for n in ("lowarm", "wrist_twist", "wrist"))
             axis = qrot(qinv(Q[lo]), P[wr] - P[lo])
-            self.forearm[f"{side}LowerArm"] = (lo, wt, axis / np.linalg.norm(axis))
+            rest_rel_inv = qinv(qmul(qinv(Q[lo]), Q[wt]))
+            self.forearm[f"{side}LowerArm"] = (lo, wt, axis / np.linalg.norm(axis), rest_rel_inv)
+        # a wrist can't roll: whatever twist about the forearm is left in the VRM hand's rotation relative to lowerArm
+        # moves onto lowerArm (hand world rotation unchanged); axis = VRM rest forearm direction (normalized space)
+        self.wrist_roll = {}
+        for side in ("left", "right"):
+            lo, hd = f"{side}LowerArm", f"{side}Hand"
+            if lo in vrm_rest_positions and hd in vrm_rest_positions:
+                a = np.asarray(vrm_rest_positions[hd], float) - np.asarray(vrm_rest_positions[lo], float)
+                self.wrist_roll[side] = (lo, hd, a / np.linalg.norm(a))
         for b in self.bones:
             j, jd = MAP[b][:2]
             jp = MAP[b][2] if len(MAP[b]) > 2 else j  # joint where the VRM bone sits
@@ -178,18 +188,22 @@ class MhrToVrm:
                 par.append(-1 if p is None else B.index(p))
             par = np.array(par)
             fore = [(B.index(b), v) for b, v in self.forearm.items() if b in B]
-            self._idx = (jidx, rest_inv, D, par, fore)
+            roll = [(B.index(lo), B.index(hd), axis) for lo, hd, axis in self.wrist_roll.values() if lo in B and hd in B]
+            self._idx = (jidx, rest_inv, D, par, fore, roll)
         return self._idx
 
     def _globals(self, state):
         """(..., B, 4) VRM world rotations, bones in self.bones order (all bones in one batched product)."""
-        jidx, rest_inv, D, _, fore = self._index()
+        jidx, rest_inv, D, _, fore, roll = self._index()
         Q = state[..., 3:7]
         Qj = Q[..., jidx, :].copy()
-        for i, (lo, wt, axis) in fore:
-            rel = qmul(qinv(Q[..., lo, :]), Q[..., wt, :])
+        for i, (lo, wt, axis, rest_rel_inv) in fore:
+            rel = qmul(qmul(qinv(Q[..., lo, :]), Q[..., wt, :]), rest_rel_inv)  # change since rest, lowarm frame
             Qj[..., i, :] = qmul(Q[..., lo, :], twist(rel, axis))
-        return qmul(qmul(Qj, rest_inv), D)
+        G = qmul(qmul(Qj, rest_inv), D)
+        for lo, hd, axis in roll:
+            G[..., lo, :] = qmul(G[..., lo, :], twist(qmul(qinv(G[..., lo, :]), G[..., hd, :]), axis))
+        return G
 
     def globals(self, state):
         G = self._globals(state)
