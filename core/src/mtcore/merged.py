@@ -134,16 +134,40 @@ class LiveMerged:
         self.offsets = m["merger"]["offsets"]
         self.nj = m["merger"]["joints"]
         self.head3d = head3d
+        # live retargeting (`relretarget.LiveRetarget`) to an avatar given as a VRM file; the human side is MHR's mean
+        # body from `retarget.npz` (`mttrain.retarget_asset`); off without it, without a VRM or with retarget_enabled off
+        self.skeleton = sk
+        f = bundle / "retarget.npz"
+        self.human_mesh = None
+        if f.exists():
+            z = np.load(f)
+            self.human_mesh = (z["verts"].astype(np.float64), z["labels"])
+        self.retarget_enabled = self.human_mesh is not None
+        self.retarget, self.retarget_error = None, None
         self.reset()
 
     # --- avatar -------------------------------------------------------------------------------------------------
     def set_avatar(self, rest_positions=None):
+        """Rest positions only (None: the default avatar): no retargeting (it needs the avatar's mesh)."""
         self.rest = self.default_rest if rest_positions is None else {b: np.asarray(p, dtype=float) for b, p in rest_positions.items()}
         self.pose.set_avatar(self.rest)
+        self.retarget, self.retarget_error = None, None
 
     def set_avatar_vrm(self, path):
-        from .vrm import load_vrm
+        """Avatar from its VRM file: its rest pose, and retargeting to it (when enabled). A retargeting failure
+        leaves the rotation copy and is kept in `retarget_error`."""
+        from .vrm import load_vrm, load_vrm_mesh
         self.set_avatar(load_vrm(path)[2])
+        if not self.retarget_enabled or self.human_mesh is None:
+            return
+        try:
+            from .relretarget import ANCHORS, LiveRetarget
+            verts, labels = load_vrm_mesh(path)
+            anchors = [a for a in ANCHORS if a in self.bones]  # no leg bones sent: the receiver's legs are unknown
+            self.retarget = LiveRetarget(self.skeleton, *self.human_mesh, self.rest, verts, labels, self.pose.conv,
+                                         anchors=anchors)
+        except Exception as e:
+            self.retarget_error = f"{type(e).__name__}: {e}"
 
     def reset(self):
         self.features = StreamFeatures(self.head3d)
@@ -248,7 +272,10 @@ class LiveMerged:
             q[k, self.out_idx] = hand[s]["fingers"] + out["fingers_res"][k]
         q = np.clip(q, self.lo, self.hi).reshape(1, -1)
         self.last = {"hand": hand, "out": out, "base": base, "fingers": q}  # for checks
-        locals_ = self.pose.vrm(L[None], fingers=q)
+        G = self.pose.mhr_globals(L[None], fingers=q)
+        locals_ = self.pose.vrm_from_globals(G)
+        if self.retarget is not None:
+            locals_ = self.retarget(G, locals_)
         bones = {b: locals_[b][0] for b in self.bones if b in locals_}
         conf = dict(zip(self.joints, np.exp(-out["log_s"][:len(self.joints)]).tolist()))
         return bones, conf, present, root_m, up_m

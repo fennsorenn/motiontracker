@@ -23,7 +23,7 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 | `face_filter.py` | Causal blendshape post-processing (eye correction, glide), plain Python. See below. |
 | `facepose.py` | Head pose from Holistic's face mesh: weighted similarity fit of MediaPipe's canonical face model (33 Procrustes points); metadata read from the cached Face Landmarker bundle with a minimal protobuf wire decoder; numpy only. Used by the merger (`modules/merger.md`). |
 | `merged.py` | Live merger runner `LiveMerged` (2026-11-14, branch `feature/merger-runtime`). See below. |
-| `relretarget.py` | WIP prototype (2026-11-14, branch `feature/relational-retarget`; not a decision). See below. |
+| `relretarget.py` | WIP prototype (2026-11-14, branch `feature/relational-retarget`; not a decision); being wired into the live runtime (WIP 2026-11-16). See below. |
 
 ## convert (forearm twist)
 `MhrToVrm` general method: `modules/mhr-vrm-spike.md` (Conversion). Forearm twist, fixed 2026-11-16 (commit 43347af, release v0.1.1):
@@ -70,6 +70,7 @@ Shared by training (`mttrain.dataset`, `model`, `infer`, mirrored by `gpugen/fea
 
 ## relretarget (WIP prototype)
 Relation-preserving retargeting onto a VRM avatar ("option A", `dev-notes/ARCHITECTURE.md` retargeting section), numpy-only. Prototype built 2026-11-14 (commit c5d7b7d, branch `feature/relational-retarget`); awaiting the owner's evaluation, not adopted.
+- **Live wiring (WIP, 2026-11-16, branch `feature/runtime-retarget`)**: until now used only by `mttrain.retarget_demo`; being wired into `merged.LiveMerged` and `service` (`modules/service.md`, Live retargeting). The live human side is MHR's mean body, precomputed into the merger live bundle (no pymomentum at runtime); this addresses the "mean or estimated body" open point below for the mean case.
 - **Anchors**: torso bones (hips..head) and the other arm's upper/lower arm. Each has a frame, a bone axis (in frame coordinates) and a `Profile`: surface radius per position along the axis and direction (90th percentile of skinned vertices, kernel-interpolated). Human profiles from the MHR identity mesh, avatar profiles from `vrm.load_vrm_mesh`.
 - **Source frames must match rotation copy**: human anchor frames are `MhrToVrm.globals` times the avatar's rest frame, i.e. exactly what rotation copy gives the avatar. Independent anatomical frames from each body's rest geometry failed, because the converter's per-bone rest alignment and forearm twist differ between bodies.
 - **Hand points**: palm centre (plus index/middle/thumb distal joints with `--tips`).

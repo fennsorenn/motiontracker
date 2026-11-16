@@ -222,6 +222,11 @@ Tradeoff: hedging also protects against glitches; less hedging → more committe
   - **Self-supervised objective**: preserve vectors between key points (fingertips, hands, face, chest) scaled to each body, weighted up as pairs get closer; regularized by rotation similarity, joint limits (also serves the no-impossible-poses requirement, §3.3) and smoothness. Training pairs = any motion × randomly sampled avatar MHR identity; no paired labels needed. Prior art: spatial-relationship-preserving retargeting.
   - **Evaluation split**: performer-space hand accuracy label-free on real video; retargeting quality on synthetic poses with the same relation metric.
   - **Timing**: not needed for M1; fits M4, after the M3 MHR mapping spike.
+- **Runtime retargeting, first live step (2026-11-16)** `[USER]`: the relational retarget prototype (`mtcore.relretarget`, analytic, relation-preserving, not contact snapping) goes into the runtime as a per-avatar stage after the merger, to see live whether it helps before anything learned. The human side is MHR's mean body (the performer's proportions are unknown).
+  - Retargeted output only fits the avatar it was computed for, and one input may drive several avatars (several in vspark, or a VMC receiver with its own avatar). Design: the default VMC stream is retargeted to the avatar given as a VRM (`--avatar-vrm`, the `avatar` command's `vrm_path`); with no VRM it uses the default reference rest pose and skips retargeting. Later: a command that adds an output (avatar plus VMC destination host:port, one destination port per avatar since VMC carries no avatar id) and returns an id for removing it. `[USER]`
+  - Avatar data: the VRM file path for now (shared filesystem); a compact avatar profile (rest positions plus surface measurements) later, so remote clients can register avatars. `[USER]`
+  - `--no-retarget` switches it off (live comparison, fallback). `[CLAUDE]`
+  - Order: the default stream first, measured on renders with Fenn_2 and compared live by the owner; the add-output command only if it helps. `[CLAUDE]` (proposed, owner did not object)
 
 ### 3.11 Blendshapes
 - Not the owner's focus (many setups use ARKit), but **include for completeness**. `[USER]`

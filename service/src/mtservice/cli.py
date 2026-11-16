@@ -1,7 +1,7 @@
 """mtservice: camera or video -> MediaPipe Holistic -> learned models -> VMC.
 
     mtservice [--camera N | --video FILE [--realtime]] [--vmc HOST:PORT] [--merger DIR | --no-merger [--bundle DIR]]
-              [--task FILE] [--avatar-vrm FILE] [--face-mesh full|lite] [--no-face] [--face-rate HZ] [--no-eye-filter]
+              [--task FILE] [--avatar-vrm FILE] [--no-retarget] [--face-mesh full|lite] [--no-face] [--face-rate HZ] [--no-eye-filter]
               [--no-fingers] [--no-legs] [--stdio] [--dump-poses FILE]
               [--dump-landmarks FILE] [--no-head3d] [--list-cameras]
 
@@ -11,6 +11,10 @@ alone (--bundle, upper body) with hands.py's fingers, as before 2026-11-14 (also
 bundle is missing).
 --no-legs: no leg bones (receivers without a lower-body mask). Hip position and up direction go out as /MT/Root and
 /MT/Up (vmc.py).
+--avatar-vrm: the bones are computed for this avatar's rest pose and, with the merger bundle, retargeted to its
+proportions (`mtcore.relretarget`: hands keep their relations to the body and each other; the human side is MHR's
+mean body, the bundle's `retarget.npz`). Without a VRM: the default avatar's rest pose and plain rotation copy (as
+with an avatar given as rest positions only). --no-retarget: rotation copy even with a VRM.
 
 --face-mesh: MediaPipe face mesh for the blendshapes: "full" (default, Face Landmarker's mesh in the
 Holistic bundle) or "lite" (stock Holistic, slightly cheaper, less accurate blendshapes; detector.py).
@@ -22,13 +26,13 @@ Holistic bundle) or "lite" (stock Holistic, slightly cheaper, less accurate blen
 Standalone: runs until Ctrl+C or the end of the video; log lines go to stderr.
 
 --stdio (driven by a parent such as vspark's Learned Tracking behavior): JSON lines.
-  stdin (commands):  {"cmd": "avatar", "vrm_path": "/abs/avatar.vrm"}   avatar rest pose from its file
+  stdin (commands):  {"cmd": "avatar", "vrm_path": "/abs/avatar.vrm"}   avatar rest pose and retargeting from its file
                      {"cmd": "avatar", "rest_positions": {vrmBone: [x, y, z]} | null}  (null: default)
                      {"cmd": "camera", "index": n}      switch camera
                      {"cmd": "cameras"}                 list cameras
                      {"cmd": "stop"}                    exit (closing stdin does the same)
   stdout (events):   {"event": "ready", "model": ..., "bones": [...], "face": "full" | "lite" | null,
-                                      "fingers": bool, "legs": bool, "merger": bool}
+                                      "fingers": bool, "legs": bool, "merger": bool, "retarget": bool}
                      {"event": "status", "fps", "detect_ms", "model_ms", "latency_ms", "present"}  (about 1/s)
                      {"event": "cameras", "cameras": [{"index", "name"}]}
                      {"event": "error", "message": ...}
@@ -149,7 +153,10 @@ def main(argv=None):
     ap.add_argument("--stdio", action="store_true")
     ap.add_argument("--dump-poses", type=Path)
     ap.add_argument("--dump-landmarks", type=Path)
-    ap.add_argument("--avatar-vrm", type=Path, help="avatar .vrm whose rest pose the bones are computed for")
+    ap.add_argument("--avatar-vrm", type=Path,
+                    help="avatar .vrm: the bones are computed for its rest pose and retargeted to its proportions")
+    ap.add_argument("--no-retarget", action="store_true",
+                    help="plain rotation copy onto the avatar (no relational retargeting)")
     ap.add_argument("--face-mesh", choices=["full", "lite"], default="full",
                     help="face mesh for the blendshapes (default full; ignored with --task)")
     ap.add_argument("--no-face", action="store_true", help="don't compute or send face blendshapes")
@@ -176,6 +183,18 @@ def main(argv=None):
     return code
 
 
+def set_avatar_vrm(lifter, path, emit):
+    """Avatar from a VRM file; a retargeting failure is reported and leaves the rotation copy."""
+    t0 = time.monotonic()
+    lifter.set_avatar_vrm(path)
+    err = getattr(lifter, "retarget_error", None)
+    if err:
+        emit("error", message=f"retarget: {err}")
+        log(f"retarget off: {err}")
+    elif getattr(lifter, "retarget", None) is not None:
+        log(f"retargeting to {Path(path).name} ({(time.monotonic() - t0) * 1000:.0f} ms to set up)")
+
+
 def open_source(a, camera):
     if a.video:
         return VideoSource(a.video, realtime=a.realtime)
@@ -188,8 +207,10 @@ def run(a, emit):
     if a.stdio:
         threading.Thread(target=stdin_commands, args=(commands,), daemon=True).start()
     lifter = load_model(a)
+    if a.no_retarget and isinstance(lifter, LiveMerged):
+        lifter.retarget_enabled = False
     if a.avatar_vrm:
-        lifter.set_avatar_vrm(a.avatar_vrm)
+        set_avatar_vrm(lifter, a.avatar_vrm, emit)
     detector = Detector(model_path(a.task, face_mesh=a.face_mesh, log=log), blendshapes=not a.no_face)
     vmc = None
     if a.vmc != "off":
@@ -206,6 +227,7 @@ def run(a, emit):
     merged = isinstance(lifter, LiveMerged)
     emit("ready", model=lifter.meta["source"], bones=lifter.bones, face=None if a.no_face else a.face_mesh,
          fingers=not a.no_fingers, legs=merged and not a.no_legs, merger=merged,
+         retarget=merged and lifter.retarget is not None,
          source={"video": str(a.video)} if a.video else {"camera": camera})
     log(f"running: model {lifter.name}, " + (f"video {a.video}" if a.video else f"camera {camera}")
         + (f", VMC -> {a.vmc}" if vmc else ""))
@@ -223,7 +245,7 @@ def run(a, emit):
                 if cmd == "avatar":
                     try:
                         if c.get("vrm_path"):
-                            lifter.set_avatar_vrm(c["vrm_path"])
+                            set_avatar_vrm(lifter, c["vrm_path"], emit)
                         else:
                             lifter.set_avatar(c.get("rest_positions"))
                     except Exception as e:  # keep running with the previous avatar
