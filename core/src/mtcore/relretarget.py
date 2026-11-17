@@ -21,7 +21,7 @@ Here the hands keep their spatial relations to the body instead, with no contact
 
 import numpy as np
 
-from .convert import VRM_PARENT, vrm_fk
+from .convert import VRM_PARENT
 from .lifter_pose import mat_to_quat, quat_to_mat
 
 SIDES = ("left", "right")
@@ -96,6 +96,10 @@ class Profile:
                     uc.append((i + 0.5) / self.NU)
                     nc.append(DIRS[k])
                     rc.append(np.percentile(rho[m], self.PCT))
+        if not uc:  # too few vertices for any cell (a sparse body part): one round radius
+            r = np.percentile(rho, self.PCT) if len(rho) else 0.0
+            uc = [(i + 0.5) / self.NU for i in range(self.NU) for _ in DIRS]
+            nc, rc = list(DIRS) * self.NU, [r] * len(uc)
         self.uc, self.nc, self.rc = np.array(uc), np.array(nc), np.array(rc)
 
     def radius(self, u, d):
@@ -116,6 +120,34 @@ def profiles(verts, labels, pos, frames, lengths, anchors, axes=None):
     return out
 
 
+class ProfileSet:
+    """Several anchors' profiles evaluated at once: radius (T, A) at u (T, A), directions d (T, A, 3)."""
+
+    def __init__(self, prof, anchors):
+        ps = [prof[a] for a in anchors]
+        n = [len(p.uc) for p in ps]
+        assert min(n) > 0, "an anchor without surface profile"
+        self.uc = np.concatenate([p.uc for p in ps])
+        self.nc = np.concatenate([p.nc for p in ps])
+        self.rc = np.concatenate([p.rc for p in ps])
+        self.seg = np.repeat(np.arange(len(ps)), n)
+        self.starts = np.cumsum([0] + n[:-1])
+
+    def radius(self, u, d):
+        e = -((u[:, self.seg] - self.uc) / Profile.SIGMA_U) ** 2
+        e += Profile.KAPPA * (np.einsum("tcj,cj->tc", d[:, self.seg], self.nc) - 1.0)
+        k = np.exp(e)
+        return np.add.reduceat(k * self.rc, self.starts, axis=1) / np.maximum(np.add.reduceat(k, self.starts, axis=1), 1e-12)
+
+
+def _axis_coords_all(local, L, axis):
+    """_axis_coords for A anchors at once: local (T, A, 3), L (A,), axis (A, 3)."""
+    u = np.clip(np.sum(local * axis, -1) / L, 0.0, 1.0)
+    q = local - (u * L)[..., None] * axis
+    rho = np.linalg.norm(q, axis=-1)
+    return u, q / np.maximum(rho, 1e-9)[..., None], rho
+
+
 def head_length(verts, labels, pos, frame):
     """Head axis length: the top of the head above the head joint, along the head's up axis."""
     m = np.isin(labels, ("head", "leftEye", "rightEye"))
@@ -131,6 +163,11 @@ class Body:
 
     def point(self, names):
         return np.mean([self.pos[n] for n in names], 0)
+
+    def stacked(self, anchors):
+        """Anchor positions (T, A, 3), frames (T, A, 3, 3), axis lengths (A,), axes (A, 3)."""
+        return (np.stack([self.pos[a] for a in anchors], 1), np.stack([self.frames[a] for a in anchors], 1),
+                np.array([self.lengths[a] for a in anchors]), np.stack([self.axes[a] for a in anchors]))
 
     def hand_points(self, side, tips):
         pts = {"palm": self.point(PALM[side])}
@@ -152,15 +189,51 @@ class Avatar:
         self.lengths = {a: (head_length(verts, labels, self.rest[a], self.rest_frames[a]) if AXIS_END[a] is None
                             else float(np.linalg.norm(self.rest[AXIS_END[a]] - self.rest[a]))) for a in self.anchors}
         self.prof = profiles(verts, labels, self.rest, self.rest_frames, self.lengths, self.anchors)
+        # FK only over the bones the solver reads (anchors, axis ends, arm chains, hand points) and their parents
+        need = set(self.anchors) | {AXIS_END[a] for a in self.anchors if AXIS_END[a]}
+        for s in SIDES:
+            need |= {f"{s}UpperArm", f"{s}LowerArm", f"{s}Hand", *PALM[s], *TIPS[s]}
+        need = {b for b in need if b in self.rest}
+        for b in list(need):
+            while VRM_PARENT.get(b) is not None:
+                b = VRM_PARENT[b]
+                while b is not None and b not in self.rest:  # e.g. no upperChest
+                    b = VRM_PARENT.get(b)
+                if b is None:
+                    break
+                need.add(b)
+        self.fk = []  # (bone, nearest parent the avatar has or None, rest offset from it), parents first
+        done = set()
+        while len(done) < len(need):
+            for b in need - done:
+                p = VRM_PARENT.get(b)
+                while p is not None and p not in self.rest:
+                    p = VRM_PARENT.get(p)
+                if p is None or p in done:
+                    self.fk.append((b, p, self.rest[b] - (self.rest[p] if p else 0)))
+                    done.add(b)
+        self.arm_parent = {s: dict((b, p) for b, p, _ in self.fk)[f"{s}UpperArm"] for s in SIDES}
 
-    def body(self, local):
-        """local: bone -> (T, 4) normalized local quaternions (missing bones at rest) -> (Body, global quats)."""
-        T = len(next(iter(local.values())))
-        full = {b: local.get(b, np.tile([0, 0, 0, 1.0], (T, 1))) for b in self.rest}
-        P, G = vrm_fk(full, self.rest)
-        P = {b: np.broadcast_to(p, (T, 3)) for b, p in P.items()}
-        G = {b: np.broadcast_to(q, (T, 4)) for b, q in G.items()}
-        frames = {a: quat_to_mat(G[a]) @ self.rest_frames[a] for a in self.anchors}
+    def local_mats(self, local):
+        """bone -> (T, 4) local quaternions -> bone -> (T, 3, 3), only the bones the FK uses."""
+        have = [b for b, _, _ in self.fk if b in local]
+        return dict(zip(have, quat_to_mat(np.stack([local[b] for b in have], 1)).transpose(1, 0, 2, 3)))
+
+    def body(self, local, mats=None):
+        """local: bone -> (T, 4) normalized local quaternions (missing bones at rest), or mats: bone -> (T, 3, 3)
+        local rotation matrices (`local_mats`) -> (Body, global rotation matrices bone -> (T, 3, 3))."""
+        Lm = self.local_mats(local) if mats is None else mats
+        T = len(next(iter(Lm.values())))
+        eye = np.broadcast_to(np.eye(3), (T, 3, 3))
+        P, G = {}, {}
+        for b, p, off in self.fk:
+            L = Lm.get(b, eye)
+            if p is None:
+                G[b], P[b] = L, np.broadcast_to(off, (T, 3))
+            else:
+                G[b] = G[p] @ L
+                P[b] = P[p] + G[p] @ off
+        frames = {a: G[a] @ self.rest_frames[a] for a in self.anchors}
         return Body(P, frames, self.lengths, self.prof), G
 
 
@@ -206,64 +279,157 @@ def arm_ik(P, Gm, side, target):
 class RelRetarget:
     def __init__(self, avatar, rounds=6, tips=False):
         self.av, self.rounds, self.tips = avatar, rounds, tips
+        self.anchors = list(avatar.anchors)
+        self.av_ps = ProfileSet(avatar.prof, self.anchors)
+        own = {s: np.array([a in (f"{s}UpperArm", f"{s}LowerArm") for a in self.anchors]) for s in SIDES}
+        self.own, self.moving = own, {"left": own["right"], "right": own["left"]}
+        self._src_ps = (None, None)
+
+    def _src_profiles(self, src):
+        if self._src_ps[0] is not src.prof:
+            self._src_ps = (src.prof, ProfileSet(src.prof, self.anchors))
+        return self._src_ps[1]
 
     def relations(self, src, side):
-        """Source body -> per hand point: list of (anchor, u, d, gap) and the hand-hand vectors."""
-        own = {f"{side}UpperArm", f"{side}LowerArm"}
+        """Source body -> per hand point: (u, d, gap) per anchor ((T, A), (T, A, 3), (T, A)) and the weights (T, A)
+        (zero for the hand's own arm)."""
+        sp, sf, sL, sax = src.stacked(self.anchors)
+        ps = self._src_profiles(src)
         rel = {}
         for name, h in src.hand_points(side, self.tips).items():
-            rel[name] = []
-            for a in self.av.anchors:
-                if a in own:
-                    continue
-                local = np.einsum("tji,tj->ti", src.frames[a], h - src.pos[a])
-                u, d, rho = _axis_coords(local, src.lengths[a], src.axes[a])
-                rel[name].append((a, u, d, rho - src.prof[a].radius(u, d)))
+            local = np.einsum("taji,taj->tai", sf, h[:, None] - sp)
+            u, d, rho = _axis_coords_all(local, sL, sax)
+            gap = rho - ps.radius(u, d)
+            w = weight(gap)
+            w[:, self.own[side]] = 0.0
+            rel[name] = (u, d, gap, w)
         return rel
 
     def solve(self, src, local):
         """src: the human Body; local: avatar bone -> (T, 4) rotation copy -> new local quats for the arm chains."""
-        body0, G0 = self.av.body(local)
-        Gm0 = {b: quat_to_mat(q) for b, q in G0.items()}
+        Lm0 = self.av.local_mats(local)
+        body0, Gm0 = self.av.body(local, Lm0)
         rel = {s: self.relations(src, s) for s in SIDES}
+        aL = np.array([self.av.lengths[a] for a in self.anchors])
+        # the avatar's surface at each relation's (u, d) does not change between rounds
+        offs = {s: {n: (u * aL)[..., None] * X + d * (self.av_ps.radius(u, d) + gap)[..., None]
+                    for n, (u, d, gap, w) in rel[s].items()} for s in SIDES}
         src_pts = {s: src.hand_points(s, self.tips) for s in SIDES}
         other = {"left": "right", "right": "left"}
-        cur = dict(local)
+        cur = Lm0
+        new = {}
         for _ in range(self.rounds):
-            body, G = self.av.body(cur)
+            body, _ = self.av.body(None, cur)
+            ap, af = body.stacked(self.anchors)[:2]
             pts = {s: body.hand_points(s, self.tips) for s in SIDES}
             new = {}
             for s in SIDES:
                 wrist = body.pos[f"{s}Hand"]
-                moving = {f"{other[s]}UpperArm", f"{other[s]}LowerArm"}
                 num = np.zeros_like(wrist)
                 den = np.zeros(len(wrist))
-                for name, items in rel[s].items():
+                mv = self.moving[s]
+                for name, (u, d, gap, w) in rel[s].items():
                     off = pts[s][name] - wrist  # rigid hand: point relative to the wrist
-                    for a, u, d, gap in items:
-                        t = body.pos[a] + np.einsum("tij,tj->ti", body.frames[a],
-                                                    np.stack([u * body.lengths[a], 0 * u, 0 * u], -1)
-                                                    + d * (body.prof[a].radius(u, d) + gap)[:, None])
-                        if a in moving:  # the other arm moves too: go half way
-                            t = pts[s][name] + 0.5 * (t - pts[s][name])
-                        w = weight(gap)
-                        num += w[:, None] * (t - off)
-                        den += w
+                    t = ap + np.einsum("taij,taj->tai", af, offs[s][name])
+                    t[:, mv] = pts[s][name][:, None] + 0.5 * (t[:, mv] - pts[s][name][:, None])  # the other arm moves too
+                    num += np.einsum("ta,tai->ti", w, t - off[:, None])
+                    den += w.sum(1)
                     for oname, oh in pts[other[s]].items():  # hand to hand: absolute vectors, in the chest frame
                         v = src_pts[s][name] - src_pts[other[s]][oname]
                         vl = np.einsum("tji,tj->ti", src.frames[REF], v)
-                        w = weight(np.linalg.norm(v, axis=-1), HAND_FALLOFF_M)
+                        wh = weight(np.linalg.norm(v, axis=-1), HAND_FALLOFF_M)
                         want = oh + np.einsum("tij,tj->ti", body.frames[REF], vl)  # where this point should be
-                        num += w[:, None] * (pts[s][name] + 0.5 * (want - pts[s][name]) - off)  # half: the other hand moves too
-                        den += w
+                        num += wh[:, None] * (pts[s][name] + 0.5 * (want - pts[s][name]) - off)  # half: the other hand moves too
+                        den += wh
                     w0 = 1.0 / FALLBACK_M ** 2  # rotation copy
                     num += w0 * body0.pos[f"{s}Hand"]
                     den += w0
                 target = num / den[:, None]
                 G_up, G_low = arm_ik(body0.pos, Gm0, s, target)
-                parent = quat_to_mat(G0[VRM_PARENT[f"{s}UpperArm"]])
-                new[f"{s}UpperArm"] = mat_to_quat(np.swapaxes(parent, -1, -2) @ G_up)
-                new[f"{s}LowerArm"] = mat_to_quat(np.swapaxes(G_up, -1, -2) @ G_low)
-                new[f"{s}Hand"] = mat_to_quat(np.swapaxes(G_low, -1, -2) @ Gm0[f"{s}Hand"])
-            cur = {**local, **new}
-        return cur
+                new[f"{s}UpperArm"] = np.swapaxes(Gm0[self.av.arm_parent[s]], -1, -2) @ G_up
+                new[f"{s}LowerArm"] = np.swapaxes(G_up, -1, -2) @ G_low
+                new[f"{s}Hand"] = np.swapaxes(G_low, -1, -2) @ Gm0[f"{s}Hand"]
+            cur = {**Lm0, **new}
+        return {**local, **{b: mat_to_quat(M) for b, M in new.items()}}
+
+
+# --- live use: the human side from the model's MHR rotations ---
+
+ANCHORS = list(TORSO) + [f"{s}{b}" for s in SIDES for b in ("UpperArm", "LowerArm", "UpperLeg", "LowerLeg")]
+HEAD_PARTS = ("leftEye", "rightEye", "jaw")  # their vertices count for the head's profile
+
+
+class MhrBody:
+    """One fixed human body (MHR's mean identity live) posed by MHR world joint rotations (`LifterPose.mhr_globals`):
+    the skeleton at rest (J, 8; cm, as in the bundles' skeleton table) and the rest mesh's vertices (metres, same
+    world as the rest state) labelled with VRM bones (`mttrain.retarget_asset`). Anchor frames are those rotation
+    copy gives the avatar (`conv`: the `MhrToVrm` the copy is made with; `av`: the Avatar), as in
+    `mttrain.retarget_demo.human_body`. numpy only."""
+
+    def __init__(self, joint_names, parents, rest_state, verts, labels, av, conv, tips=False):
+        from .convert import MAP
+        self.conv = conv
+        self.anchors = [a for a in av.anchors if a in conv.bones]
+        self.rest_frames = av.rest_frames
+        rest = np.asarray(rest_state, dtype=np.float64)
+        jn = list(joint_names)
+        need = set(self.anchors) | {AXIS_END[a] for a in self.anchors if AXIS_END[a]}
+        need |= {b for s in SIDES for b in PALM[s] + (TIPS[s] if tips else ())}
+        self.j_of = {b: jn.index(MAP[b][0]) for b in need}
+        joints = set(self.j_of.values())
+        for j in list(joints):
+            while parents[j] >= 0:
+                j = parents[j]
+                joints.add(j)
+        rest_g = quat_to_mat(rest[:, 3:7])
+        P = rest[:, :3] / 100.0
+        # FK steps: joint, parent, rest offset in the parent's rest frame (parents come first in MHR's order)
+        self.fk = [(j, parents[j], rest_g[parents[j]].T @ (P[j] - P[parents[j]]) if parents[j] >= 0 else P[j])
+                   for j in sorted(joints)]
+        # rest geometry -> axis lengths, axes in the anchor frames, surface profiles
+        p0 = {b: P[j] for b, j in self.j_of.items()}
+        G0 = conv.globals(rest)
+        f0 = {a: quat_to_mat(G0[a]) @ av.rest_frames[a] for a in self.anchors}
+        verts, labels = np.asarray(verts, dtype=np.float64), np.asarray(labels)
+        self.lengths, self.axes = {}, {}
+        for a in self.anchors:
+            if AXIS_END[a] is None:
+                self.axes[a] = X
+                self.lengths[a] = head_length(verts, labels, p0[a], f0[a])
+            else:
+                v = f0[a].T @ (p0[AXIS_END[a]] - p0[a])
+                self.lengths[a] = float(np.linalg.norm(v))
+                self.axes[a] = v / self.lengths[a]
+        self.prof = profiles(verts, labels, p0, f0, self.lengths, self.anchors, self.axes)
+
+    def body(self, G):
+        """G: (T, J, 3, 3) MHR world rotations -> Body."""
+        P = {}
+        for j, p, off in self.fk:
+            P[j] = np.broadcast_to(off, G.shape[:1] + (3,)) if p < 0 else P[p] + np.einsum("tij,j->ti", G[:, p], off)
+        state = np.zeros(G.shape[:2] + (8,))
+        state[..., 3:7] = mat_to_quat(G)
+        Gv = self.conv.globals(state)
+        frames = {a: quat_to_mat(Gv[a]) @ self.rest_frames[a] for a in self.anchors}
+        return Body({b: P[j] for b, j in self.j_of.items()}, frames, self.lengths, self.prof, self.axes)
+
+
+class LiveRetarget:
+    """Rotation copy -> relational retarget for one avatar, per frame: MHR world rotations and the copy's VRM locals
+    in, the locals with the arm chains (upper arm, lower arm, hand) replaced out."""
+
+    def __init__(self, skeleton, verts, labels, rest, avatar_verts, avatar_labels, conv, anchors=ANCHORS,
+                 tips=False, rounds=6):
+        """skeleton: the bundle's skeleton table (joint_names, parents, rest_state); verts / labels: the human rest
+        mesh (`retarget.npz`); rest, avatar_verts / avatar_labels: the avatar's rest positions and mesh
+        (`vrm.load_vrm`, `vrm.load_vrm_mesh`); conv: the copy's `MhrToVrm`; anchors: body parts the hands relate
+        to (drop the legs when the receiver doesn't get leg bones)."""
+        self.av = Avatar(rest, avatar_verts, avatar_labels, [a for a in anchors if a in conv.bones])
+        self.src = MhrBody(skeleton["joint_names"], skeleton["parents"], skeleton["rest_state"], verts, labels,
+                           self.av, conv, tips)
+        self.rr = RelRetarget(self.av, rounds=rounds, tips=tips)
+
+    def __call__(self, G, local):
+        """G: (T, J, 3, 3); local: bone -> (T, 4) -> bone -> (T, 4) (same bones)."""
+        out = self.rr.solve(self.src.body(G), local)
+        return {b: out[b] for b in local}

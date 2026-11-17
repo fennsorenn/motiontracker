@@ -36,3 +36,31 @@ def test_no_legs_no_fingers():
     t, obs = frames(1)[0]
     bones = m.step(t, obs)[0]
     assert "hips" in bones and not any("Leg" in b or "Foot" in b or "Index" in b for b in bones)
+
+
+def test_retarget_switch():
+    from mtcore.paths import AVATARS
+    vrm = AVATARS / "AvatarSample_D.vrm"
+    if not vrm.exists() or not (DEFAULT_MERGER / "retarget.npz").exists():
+        pytest.skip("avatar or retarget.npz not available")
+    m = MergerModel(DEFAULT_MERGER, head3d=True, fingers=True, legs=False)
+    m.set_avatar_vrm(vrm)
+    assert m.retarget is not None and not m.retarget_on and not m.retarget_active  # set up, off by default
+    seq = frames(20)
+
+    def run(on):
+        m.reset()
+        m.retarget_on = on
+        for t, obs in seq:
+            bones = m.step(t, obs)[0]
+        return bones
+
+    off, on = run(False), run(True)
+    arms = {f"{s}{b}" for s in ("left", "right") for b in ("UpperArm", "LowerArm", "Hand")}
+    for b in off:
+        same = np.allclose(off[b], on[b], atol=1e-9)
+        assert same or b in arms, b  # only the arm chain changes
+    assert any(not np.allclose(off[b], on[b], atol=1e-6) for b in arms)
+    m.set_avatar(None)  # rest positions only: nothing to retarget to
+    m.retarget_on = True
+    assert not m.retarget_active

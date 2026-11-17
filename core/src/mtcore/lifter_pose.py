@@ -136,8 +136,12 @@ class LifterPose:
 
     def vrm(self, rot, fingers=None):
         """Predictions (T, K, 3, 3) [, finger parameters (T, P)] -> VRM bone -> local rotation quaternions (T, 4) xyzw."""
-        state = np.zeros(rot.shape[:1] + (len(self.jn), 8))
-        state[..., 3:7] = mat_to_quat(self.mhr_globals(rot, fingers))
+        return self.vrm_from_globals(self.mhr_globals(rot, fingers))
+
+    def vrm_from_globals(self, G):
+        """MHR world rotations (T, J, 3, 3) (`mhr_globals`) -> VRM bone -> local rotation quaternions (T, 4) xyzw."""
+        state = np.zeros(G.shape[:2] + (8,))
+        state[..., 3:7] = mat_to_quat(G)
         state[..., 7] = 1.0
         out = self.conv.locals(state)
         return out if self.only is None else {b: q for b, q in out.items() if b in self.only}

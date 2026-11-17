@@ -22,8 +22,16 @@ Location: `core/` (uv project, Python package `mtcore`). Shared code moved out o
 | `lifter_pose.py` | M1 lifter output → MHR globals → VRM locals, numpy only. See below. |
 | `face_filter.py` | Causal blendshape post-processing (eye correction, glide), plain Python. See below. |
 | `facepose.py` | Head pose from Holistic's face mesh: weighted similarity fit of MediaPipe's canonical face model (33 Procrustes points); metadata read from the cached Face Landmarker bundle with a minimal protobuf wire decoder; numpy only. Used by the merger (`modules/merger.md`). |
-| `merged.py` | Live merger runner `LiveMerged` (2026-11-14, branch `feature/merger-runtime`). See below. |
-| `relretarget.py` | WIP prototype (2026-11-14, branch `feature/relational-retarget`; not a decision). See below. |
+| `merged.py` | Live merger runner `LiveMerged` (2026-11-14, branch `feature/merger-runtime`); optional live retargeting (2026-11-17). See below. |
+| `relretarget.py` | Relational retargeting: prototype (2026-11-14, branch `feature/relational-retarget`; not a decision) plus the live path `LiveRetarget` used by `merged` (implemented, merged into `dev` 2026-11-17, off by default). See below. |
+
+## convert (forearm twist)
+`MhrToVrm` general method: `modules/mhr-vrm-spike.md` (Conversion). Forearm twist, fixed 2026-11-16 (commit 43347af, release v0.1.1):
+- `self.forearm[<side>LowerArm]` = (lowarm, wrist_twist, forearm axis in lowarm's local frame, inverse rest relation). MHR's `{l,r}_wrist_twist` rest frame differs from `{l,r}_lowarm`'s by ~114 deg about the forearm; the twist part of wrist_twist relative to lowarm is taken after removing that rest relation, so only the change since rest goes onto VRM `lowerArm`.
+- Wrist-roll rule (`self.wrist_roll`, applied in `_globals`; owner decision 2026-11-16, `PLAN.md` §3.10): a wrist can't roll. After the mapping, any twist about the forearm left in the VRM hand's rotation relative to `lowerArm` moves onto `lowerArm` (axis: the VRM rest forearm direction, normalized space). Hand world rotation is unchanged; the hand's local rotation keeps only swing. Spreading roll onto the upper arm is the renderer's job (vspark: frontend forearm twist bones, `forceTwistBone`), not the converter's.
+- Before the fix (since the first conversion code, 2026-11-01: `m1-v10` and every runtime output up to v0.1.0) the converter took the twist of the full relative rotation, so `lowerArm` carried ~130 deg of twist at rest and the hand undid it: hand world rotation right, forearm wrung one way at the elbow and back at the wrist (seen in vspark 2026-11-15). Eval numbers on VRM local rotations of lowerArm/hand from before 2026-11-16 include this offset; bone-direction metrics and hand world rotations are unaffected.
+- Measured on session 2026-11-12T21-40-58 (`mg3`): hand twist about the forearm ~±130 → under 6 deg; lowerArm carries the real roll (median near 0, tails ~±18 deg). Not fixed: p99 frame-to-frame twist jump ~15 deg at 10 FPS (model noise).
+- The `m1-v10` parity reference used by `service/tests/test_lifter.py` (`data/m1/runs/m1-v10/2026-11-01T15-29-11-session.poses.jsonl`, local, gitignored) was regenerated with the fixed converter; the old one is kept as `...poses.pre-twist-fix.jsonl`.
 
 ## cmu_fit
 - `fit(subject, clip, ...)`: spike-style single-clip fit (shared scales + per-frame pose), default `PAIRS`.
@@ -58,17 +66,28 @@ Shared by training (`mttrain.dataset`, `model`, `infer`, mirrored by `gpugen/fea
 `LiveMerged(bundle)` runs the merger bundle from `mttrain.merger.export` (`modules/merger.md`) per detector frame, numpy + onnxruntime (imported on use). Used by `service/` as its default model (`modules/service.md`). Status: built and parity-checked 2026-11-14, owner's live test pending, branch `feature/merger-runtime`.
 - Chain: body model (`body.onnx`, `m1-v14`, `StreamFeatures` input) → 23 joint rotations, log scales, hip position (camera frame, m), up; pair hand model (`hands.onnx`, `p3`; per-frame hand features cached; numpy port of `hands.model2.frame_features` / `evaluate2.LearnedPair`); face-mesh head pose (`facepose`, `CanonicalFace.from_arrays` from the bundle); base combination (numpy port of `mttrain.merger.batch.combine`); merger (`merger.onnx`, `mg3`) over offsets (0, 1, 2, 4, 8) → global, finger and root/up residuals (port of `apply_root`); VRM via `LifterPose` with the fingers table.
 - `step(t, obs)` → `(bones, conf, present, root, up)`; `self.last` keeps the frame's internals for checks.
+- **Retargeting** (2026-11-17, branch `feature/runtime-retarget`, merged into `dev`): loads `retarget.npz` from the bundle when present (MHR mean body: rest vertices + VRM body-part labels, written by `mttrain.retarget_asset`, `modules/train.md`).
+  - `set_avatar_vrm(path)`: avatar rest pose from the VRM, and always builds a `relretarget.LiveRetarget` to it (`vrm.load_vrm_mesh`) when the bundle has the mesh. Failures (incl. "the model bundle has no retarget.npz") leave `retarget = None` and the message in `retarget_error`.
+  - `set_avatar(rest_positions | None)`: rest pose only, no mesh, so it clears the retargeting.
+  - `retarget_on` (default False): the retargeting replaces the copy's arm chains in `step` only while on. `retarget_active` (property) = on and set up.
+  - Used by `service` (`modules/service.md`, Live retargeting).
 - Changes to the training-side chain (`mttrain.merger`, `mttrain.hands`) must be mirrored here; the export's `--check` catches drift.
 
-## relretarget (WIP prototype)
-Relation-preserving retargeting onto a VRM avatar ("option A", `dev-notes/ARCHITECTURE.md` retargeting section), numpy-only. Prototype built 2026-11-14 (commit c5d7b7d, branch `feature/relational-retarget`); awaiting the owner's evaluation, not adopted.
+## relretarget (prototype; live path implemented, off by default)
+Relation-preserving retargeting onto a VRM avatar ("option A", `dev-notes/ARCHITECTURE.md` retargeting section), numpy-only. Prototype built 2026-11-14 (commit c5d7b7d, branch `feature/relational-retarget`); live path merged into `dev` 2026-11-17 (branch `feature/runtime-retarget`). Not adopted: off by default in the runtime, the owner's live on/off comparison is pending.
+- **Live path** (used by `merged.LiveMerged`, `modules/service.md` Live retargeting):
+  - `MhrBody`: the human side from MHR's mean body (`retarget.npz`: rest vertices + VRM bone labels, from `mttrain.retarget_asset`) and the bundle's skeleton table, no pymomentum. Matrix FK on the needed bones only; anchor frames from `MhrToVrm.globals` as for the prototype (see below).
+  - `ProfileSet`: several anchors' `Profile`s evaluated at once (vectorised radius lookup over all anchors per frame).
+  - `LiveRetarget(skeleton, verts, labels, rest, avatar_verts, avatar_labels, conv, anchors=ANCHORS, tips=False, rounds=6)`: one avatar; `__call__(G, local)` takes MHR world rotations and the copy's VRM locals and returns the locals with the arm chains (upper arm, lower arm, hand) replaced. Anchors not in `conv.bones` are dropped (e.g. legs off).
+  - Cost: ~5 ms/frame on one core; setup ~165-265 ms per avatar.
+  - Result on renders with Fenn_2 (reason it is off by default): separated hands 2-3 cm better, touching hands worse (the tracked pose's gap on MHR's mean body is carried over), hand-to-face unchanged (tracking error).
 - **Anchors**: torso bones (hips..head) and the other arm's upper/lower arm. Each has a frame, a bone axis (in frame coordinates) and a `Profile`: surface radius per position along the axis and direction (90th percentile of skinned vertices, kernel-interpolated). Human profiles from the MHR identity mesh, avatar profiles from `vrm.load_vrm_mesh`.
 - **Source frames must match rotation copy**: human anchor frames are `MhrToVrm.globals` times the avatar's rest frame, i.e. exactly what rotation copy gives the avatar. Independent anatomical frames from each body's rest geometry failed, because the converter's per-bone rest alignment and forearm twist differ between bodies.
 - **Hand points**: palm centre (plus index/middle/thumb distal joints with `--tips`).
 - **Relations**: per anchor (u along the axis, direction, signed gap to the surface, absolute) and hand-hand vectors in the upperChest frame. Weights `(1 - s/falloff)^2 / (s + 2 cm)^2`; falloff 30 cm (body), 60 cm (hand-hand); rotation-copy fallback weighted like an anchor at 25 cm. All hand-tuned.
 - **Solve**: two-bone arm IK keeping the copy's elbow plane and the hand's global rotation, 6 rounds; relations to moving targets (other hand, other arm) take half steps (full steps oscillated).
 - **Demo**: `uv run python -m mttrain.retarget_demo <render dir> --out-dir <dir> [--avatar AvatarSample_F] [--tips]` (in `train/`): true MHR pose and identity mesh from `seq.npz` -> `relational.poses.jsonl`; prints per segment palm-palm distance, signed left-right separation, palm gap to head surface and closest hand-hand pair for true body / rotation copy / relational. Results are in the ARCHITECTURE retargeting section; videos (gitignored) in `data/videos/retarget-*`.
-- **Open**: weights hand-tuned; only arms move (no torso lean when out of reach); legs not anchors (the ground truth has no legs); the source body here is the true identity, live use would need a mean or estimated body; runtime cost not measured; not connected to the merger output; whether it stays in `mtcore` if adopted (vs "option B", retargeting inside the merger, `modules/merger.md`).
+- **Open**: weights hand-tuned; only arms move (no torso lean when out of reach); legs not anchors (the ground truth has no legs); the demo's source body is the true identity, the live path uses MHR's mean body (an estimated body would avoid carrying over the mean body's contact gaps); whether it stays on by default after the owner's live comparison; whether it stays in `mtcore` if adopted (vs "option B", retargeting inside the merger, `modules/merger.md`).
 
 ## face_filter
 Algorithmic, causal post-processing of MediaPipe's ARKit blendshapes (owner decision 2026-11-14, `PLAN.md` §3.11/§7.5; learned face head in reserve). Used by `mtservice.face` (live) and `mtservice.faceproc` (offline), `modules/service.md`.
@@ -84,7 +103,7 @@ Algorithmic, causal post-processing of MediaPipe's ARKit blendshapes (owner deci
 - Tests live with the consumer: `service/tests/test_face.py`.
 
 ## Tests
-`core/tests/` (`uv run pytest`): streaming vs batch features, conversion round trip (direction match for non-`REST_ALIGNED` bones; MHR rest → identity locals and torso following MHR world rotation for `REST_ALIGNED`; arm world rotations equal to all-direction matching), CMU fit, landmarks, quaternions (incl. `mat_to_quat` near 180 deg). `LiveMerged` is tested from `service/tests/test_merged.py`. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
+`core/tests/` (`uv run pytest`): streaming vs batch features, conversion round trip (direction match for non-`REST_ALIGNED` bones; MHR rest → identity locals and torso following MHR world rotation for `REST_ALIGNED`; arm world rotations equal to all-direction matching; `test_forearm_carries_the_roll_and_the_wrist_only_bends`: hand keeps < 0.5 deg twist about the forearm in rest and random poses, a pure 40 deg forearm twist turns lowerArm 40 deg, fails on the pre-2026-11-16 code), CMU fit, landmarks, quaternions (incl. `mat_to_quat` near 180 deg). `LiveMerged` is tested from `service/tests/test_merged.py`. Tests skip when `data/mhr`, `data/cmu` or the avatar files are missing.
 
 ## Extending
 - New reusable code that more than one project (spike, `train/`, later the service) needs goes here, not into a consumer.

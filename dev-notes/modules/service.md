@@ -1,15 +1,25 @@
-# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; face post-processing implemented 2026-11-14; merger runtime implemented 2026-11-14, live test pending; released v0.1.0 2026-11-14)
+# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; face post-processing implemented 2026-11-14; merger runtime implemented 2026-11-14, live test pending; released v0.1.0 2026-11-14, v0.1.1 2026-11-16; live retargeting implemented 2026-11-17, off by default)
 
 Location: `service/` (uv project, package `mtservice`, CLI `mtservice`). Live runtime: camera or video → MediaPipe Holistic → merger bundle (`mtcore.merged`) or M1 lifter (ONNX) → VRM bone rotations as VMC over UDP. Usage: `service/README.md`. Plan: `plans/m2-vspark-runtime.md` (steps 0-4 done, step 4 = vspark behavior `learned_tracker` on vspark `feature/learned-tracker`, not merged; step 5, the owner's live test, open). Decisions: `PLAN.md` §7.4. Model: merger `mg3` by default (see Merger runtime); `--no-merger` = `m1-v10` (`m1-v11`, body co-rotation, discarded by the owner 2026-11-12).
 
 ## Merger runtime (implemented 2026-11-14, owner's live test pending)
-Branch `feature/merger-runtime` (with `feature/legs-root` and the relational-retarget prototype) merged into `dev` and `main` 2026-11-14; part of v0.1.0. Decisions: `PLAN.md` §7.6.
+Branch `feature/merger-runtime` (with `feature/legs-root`; the relational-retarget prototype came along but was not used by the runtime) merged into `dev` and `main` 2026-11-14; part of v0.1.0. Decisions: `PLAN.md` §7.6.
 - Default model: the merger bundle `data/merger/runs/mg3/live` (written by `mttrain.merger.export`, `modules/merger.md`) when present, or `--merger DIR`. Run per detector frame by `mtcore.merged.LiveMerged` (`modules/mtcore.md`): body `m1-v14`, pair hand model `p3`, face-mesh head pose, base combination, merger. cli's `MergerModel` subclasses it.
 - `--no-merger`: the old M1 lifter (`--bundle`, default `m1-v10`) with `hands.py` fingers, wrapped in `LiveMerged`'s shape; also the fallback when the default merger bundle is missing.
 - Bones: 50 (body, legs, fingers). Legs on by default (vspark's mixer can zero their influence, owner 2026-11-14); `--no-legs` drops them for other consumers.
 - Hip position and up direction: `/MT/Root`, `/MT/Up` (see VMC conventions). vspark ignores them for now. `--dump-poses` records root/up.
 - Cost: model ~2.4 ms/frame on one core (after batching `MhrToVrm`, was 8.0), MediaPipe ~20 ms. Run on the seated-v1 video: 50 bones at 10 Hz.
 - Known model caveats (from the evaluations, `plans/legs-root.md`): `m1-v14` depth reads 10-50% too far; `mg3` regresses on the pairs3 two-hand set and its thighs are 2-6 deg worse than `m1-v14`; `m1-v14` head 1-2.5 deg worse on some render sets.
+
+## Live retargeting (implemented, merged into `dev` 2026-11-17; off by default)
+Branch `feature/runtime-retarget` (started 2026-11-16, merged into `dev` 2026-11-17, not yet released). Decisions: `PLAN.md` §3.10a ("Runtime retargeting, first live step"). Wires `mtcore.relretarget.LiveRetarget` (`modules/mtcore.md`) into `LiveMerged` and `cli.py`; merger runtime only (not `--no-merger`).
+- Setup: a VRM avatar (`--avatar-vrm` or the stdin `avatar` command's `vrm_path`) always gets a retargeting built (`LiveMerged.set_avatar_vrm`, ~165-265 ms per avatar) when the bundle has `retarget.npz`. An avatar given as `rest_positions` only has no mesh: no retargeting. Without a VRM: default reference rest pose, rotation copy.
+- Switch: applied only while on. **Off by default** (rotation copy); `--retarget` starts with it on; the stdin `retarget` command toggles it live. A request without a VRM avatar stays requested and applies once one is set. vspark's Learned Tracking sends the command from its "Fit to the avatar's proportions" checkbox (vspark `feature/learned-tracker`, 9ae36c8f).
+- Setup failures leave the rotation copy; the message is kept in `LiveMerged.retarget_error`, logged, and sent as an `error` event when retargeting is on.
+- Human side: MHR's mean body (rest vertices + VRM body-part labels), `retarget.npz` in the merger live bundle, written by `mttrain.retarget_asset` (the runtime has no pymomentum). See Releases: not yet part of `mttrain.merger.export`.
+- Cost: ~5 ms/frame on one core (matrix FK on the needed bones only).
+- Why off by default (measured on renders with the Fenn_2 avatar): helps separated hands (2-3 cm), makes touching hands worse (the tracked pose's gap on MHR's mean body is carried over), hand-to-face unchanged (tracking error). The owner compares on/off live in vspark (pending).
+- Later step, only if it helps live: per-avatar extra VMC outputs (planned).
 
 ## Face and fingers (implemented 2026-11-12, owner's live test pending)
 Plan: `plans/m2-face-hands.md` (steps 1-4 done, numbers in its Progress section); decisions: `PLAN.md` §7.5. Branch `feature/m2-face-hands` (commits 1f7f7db, ec0904d).
@@ -40,22 +50,24 @@ Dependencies: `mtcore` without the `mhr` extra (numpy-only modules, `modules/mtc
 | `face.py` | `FaceStream`: eye correction + glided blendshape stream on its own thread (see Face post-processing). |
 | `faceproc.py` | Offline face post-processing of a landmarks dump → 60 Hz blendshape JSONL for the avatar video. |
 | `vmc.py` | Own OSC encoder (`message`, `bundle`) and `VmcSender` (`send` per frame, `send_blend` for the face stream). See VMC conventions. |
-| `cli.py` | `mtservice` entry point and main loop; standalone or `--stdio`. `--dump-poses` / `--dump-landmarks` write JSONL for offline comparison; `--vmc off` disables sending; `--face-mesh`, `--no-face`, `--no-fingers`, `--face-rate`, `--no-eye-filter`, `--merger DIR`, `--no-merger` (+ `--bundle`), `--no-legs`. |
+| `cli.py` | `mtservice` entry point and main loop; standalone or `--stdio`. `--dump-poses` / `--dump-landmarks` write JSONL for offline comparison; `--vmc off` disables sending; `--face-mesh`, `--no-face`, `--no-fingers`, `--face-rate`, `--no-eye-filter`, `--merger DIR`, `--no-merger` (+ `--bundle`), `--no-legs`, `--avatar-vrm FILE`, `--retarget` (see Live retargeting). |
 
 Default bundles: `data/merger/runs/mg3/live/` (merger), `data/m1/runs/m1-v10/live/` (`--no-merger`); gitignored, CMU-derived weights, never committed.
 
-## Releases (first: v0.1.0, 2026-11-14)
+## Releases (first: v0.1.0, 2026-11-14; latest: v0.1.1, 2026-11-16)
 Decisions: `PLAN.md` §7.4 (vspark pinning), §9 #9 (weights as release assets). Scripts in `tools/release/`.
 - `motiontracker-runtime-<version>.zip` (`package-runtime.sh`): `core/` + `service/` from `git archive` at the tag, plus the model bundles and `MODELS-NOTICE.md` (via `package-models.sh`); top folder `motiontracker-<version>/`. Run: `uv run --project motiontracker-<version>/service mtservice`. vspark downloads this asset itself (`packages/backend/src/behaviors/learned_tracker/download.ts`, `MOTIONTRACKER_RUNTIME`); the version is pinned in vspark and updated together with vspark.
-- `motiontracker-models-<version>.zip` (`package-models.sh`): models only, in the repo's `data/` layout. v0.1.0 ships `mg3` and `m1-v10`.
+- `motiontracker-models-<version>.zip` (`package-models.sh`): models only, in the repo's `data/` layout. v0.1.0 and v0.1.1 ship `mg3` and `m1-v10`.
 - v0.1.0: https://github.com/fennsorenn/motiontracker/releases/tag/v0.1.0; runtime asset SHA-256 `c6b33c080937e1921cdafe30a5c0d7be3884adee2cf8caa344dfc98dcf6e0a1e`.
-- Procedure: tag on `main` → `tools/release/package-runtime.sh vX.Y.Z OUT` (prints the SHA-256) → `gh release create` / `gh release upload` → bump vspark's `MOTIONTRACKER_RUNTIME`.
-- Code only, no models: `uvx --python 3.12 --from git+https://github.com/fennsorenn/motiontracker@v0.1.0#subdirectory=service mtservice` (needs `--python 3.12`: mediapipe 0.10.18 has no 3.13 wheels).
+- v0.1.1 (2026-11-16, forearm twist fix in `MhrToVrm`, `modules/mtcore.md` convert; same models as v0.1.0): https://github.com/fennsorenn/motiontracker/releases/tag/v0.1.1; runtime asset `motiontracker-runtime-v0.1.1.zip` SHA-256 `6941054c07cb7124abafc62814ef34db6cc984a4026daa7d945822c631eae8d1`, 16653741 bytes; models asset `motiontracker-models-v0.1.1.zip`. vspark pins it since vspark e32d6f2d (2026-11-16, `feature/learned-tracker`).
+- Before packaging a new merger bundle: run `uv run python -m mttrain.retarget_asset <bundle dir>` (in `train/`) so the bundle has `retarget.npz` (MHR mean body for live retargeting). `mttrain.merger.export` does not write it yet, and `package-models.sh` ships whatever is in the bundle dir, so without this step the release has no retargeting (`retarget_error`, the `retarget` event's reason "setup failed"). The `mg3` bundle shipped in v0.1.0/v0.1.1 has no `retarget.npz`; the next release needs this step.
+- Procedure: tag on `main` → `tools/release/package-runtime.sh vX.Y.Z OUT` (prints the SHA-256) → `gh release create` / `gh release upload` → bump vspark's `MOTIONTRACKER_RUNTIME` (`version`, `asset`, `sha256`, `bytes`, `folder`) and its `dev-notes/modules/learned-tracker.md`, run vspark's `test/learned_tracker.download.test.ts`, commit and push in vspark. The bump is part of every release, done in the same session: vspark prefers its downloaded pinned runtime over a sibling checkout, so without the bump a restarted vspark keeps running the old release. The pin's `bytes` is the zip's download size (`stat -c %s`), not `unzip -l`'s uncompressed total (v0.1.0's pin used the uncompressed 18254834; the asset is 16652689 bytes).
+- Code only, no models: `uvx --python 3.12 --from git+https://github.com/fennsorenn/motiontracker@v0.1.1#subdirectory=service mtservice` (needs `--python 3.12`: mediapipe 0.10.18 has no 3.13 wheels).
 
 ## Stdio protocol (`--stdio`)
 JSON lines; stdout carries only events (MediaPipe and log output go to stderr). Authoritative list: `cli.py` docstring.
-- Commands (stdin): `{"cmd":"avatar","rest_positions":{vrmBone:[x,y,z]} | null}` (null = bundle's default avatar, AvatarSample_D), `{"cmd":"camera","index":n}` (ignored for video sources), `{"cmd":"cameras"}`, `{"cmd":"stop"}`.
-- Events (stdout): `ready` (model source, bones, source, `face`: "full"|"lite"|null, `fingers`: bool, `legs`: bool, `merger`: bool), `status` (~1/s: fps, detect_ms, model_ms (includes the finger solve), latency_ms capture → output, present fraction), `cameras`, `error`, `stopped` (reason).
+- Commands (stdin): `{"cmd":"avatar","vrm_path":"/abs/avatar.vrm"}` (rest pose and retargeting from the file) or `{"cmd":"avatar","rest_positions":{vrmBone:[x,y,z]} | null}` (null = bundle's default avatar, AvatarSample_D; no retargeting), `{"cmd":"retarget","enabled":bool}` (retargeting on/off, see Live retargeting), `{"cmd":"camera","index":n}` (ignored for video sources), `{"cmd":"cameras"}`, `{"cmd":"stop"}`.
+- Events (stdout): `ready` (model source, bones, source, `face`: "full"|"lite"|null, `fingers`: bool, `legs`: bool, `merger`: bool, `retarget`: bool = active), `retarget` (`enabled` = requested, `active` = applied, `reason`: why requested but not applied (no merger / needs a VRM avatar / setup failed) or null; sent after `ready`, after every `avatar` command and every `retarget` command), `status` (~1/s: fps, detect_ms, model_ms (includes the finger solve), latency_ms capture → output, present fraction), `cameras`, `error`, `stopped` (reason).
 - Closing stdin stops the runtime, so it never outlives its parent. Unknown or malformed commands produce an `error` event, not an exit.
 
 ## VMC conventions
@@ -75,7 +87,7 @@ JSON lines; stdout carries only events (MediaPipe and log output go to stderr). 
 ## Extending
 - **New frame source**: a class with `__iter__` yielding `(t seconds, BGR frame)` at the lifter's frame rate (10 FPS; the model's history offsets assume it) and `close()`; `CameraSource` also exposes `t0` for the latency stat. Wire it into `open_source` in `cli.py`. Keep the recorder's capture settings (mirroring happens in `detector.prepare`).
 - **New output sink** (e.g. the deferred WebSocket): take `(t, bones, conf, present)` per frame like `VmcSender.send`, plus a rest-pose update hook if it sends positions; call it from the main loop next to `vmc.send`. New VMC extension addresses go under the same (provisional) namespace.
-- **New merger bundle**: export with `mttrain.merger.export` and pass `--merger DIR` (or replace the default run name `DEFAULT_MERGER` in `cli.py`). Changes to the chain go into `mtcore.merged` and must keep parity with `mttrain.merger.run.infer` (`--check`).
+- **New merger bundle**: export with `mttrain.merger.export`, then run `mttrain.retarget_asset` on the bundle dir (writes `retarget.npz`, needed for live retargeting; not part of the export yet), and pass `--merger DIR` (or replace the default run name `DEFAULT_MERGER` in `cli.py`). Changes to the chain go into `mtcore.merged` and must keep parity with `mttrain.merger.run.infer` (`--check`).
 - **New bundle version**: `lifter.json` carries `"format": "motiontracker-lifter", "version": 1`. `LiveLifter` currently checks only the input layout (offsets, frame dim) against `mtcore.features`, not the version. When the bundle format changes (new inputs such as hands/face, other output bones), bump `version` in `mttrain.export` and branch on it in `LiveLifter`; feature changes go into `mtcore.features` so training, export and runtime stay identical.
 - **New output bones**: come from the bundle (`output_bones`); add their Unity names to `vmc.UNITY_NAMES` and parents to `vmc.VRM_PARENT`.
 - **Learned hand model** (`p3`): runs inside the merger runtime (`mtcore.merged`), not as a separate runner; `hands.py` remains for `--no-merger`.
@@ -83,6 +95,8 @@ JSON lines; stdout carries only events (MediaPipe and log output go to stderr). 
 
 ## Open
 - Owner's live test of the merger runtime in vspark.
+- Owner's live on/off comparison of retargeting in vspark; whether it stays off by default.
+- `mttrain.retarget_asset` not yet folded into `mttrain.merger.export`.
 - Owner's live test of face and fingers (face post-processing approved 2026-11-14); whether vspark should also interpolate blendshapes; finger calibration.
 - Checking the stream with vspark's existing `vmc_receiver` (plan step 3) is not recorded as done; only the unit test against its mapping exists.
 - vspark-side smoothing, camera naming (OpenCV indices vs the browser's device list), camera exclusivity with MediaPipe Tracking, the OSC namespace name (plan open questions).

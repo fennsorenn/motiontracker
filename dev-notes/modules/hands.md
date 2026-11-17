@@ -32,7 +32,16 @@ Status (2026-11-13): v1 single-hand model (`h1`, `h2`), v2 pair model (`p2`) and
 ## Combination onto the body model (`wrist`, merger stand-in)
 To be replaced by the learned merger (WIP, `modules/merger.md`), whose base pose is this combination done in the body model's frame (`merger.batch.combine`).
 `HandOrient` chains the pair model's palm frame (camera frame) → body model frame (`lifter_pose.R0`) → MHR wrist via the rest palm frame → VRM hand global via `MhrToVrm` (`q_rest_inv`, `D`; `mtcore.convert`) → local to the body model's `lowerArm`.
-- The whole rotation goes onto the hand bone: the rendered truth carries the forearm twist on the hand. `twist_to_forearm=True` moves the twist onto the lower arm but put it 129 deg off the truth; it stays off until a truth convention for forearm twist exists.
+- `twist_to_forearm=True` (default since 2026-11-16, commit eee0b04): the hand's twist about the forearm goes onto the lower arm (overriding the body model's), the hand keeps only the swing, per the owner's wrist-roll rule (`PLAN.md` §3.10, `modules/mtcore.md` convert). `False` puts the whole rotation on the hand. Until 2026-11-16 it was off because it put the lower arm 129 deg off the rendered truth; that came from the `MhrToVrm` forearm twist bug (fixed in v0.1.1, 43347af), not from the hand model.
+- p3 on pairs2 (Holistic landmarks, fixed truth), median angular error in deg, all frames (both hands detected):
+
+| system | lowerArm world | hand world | hand local |
+|---|---|---|---|
+| m1-v10 | 53.2 (55.4) | 64.3 (68.2) | 30.8 (30.6) |
+| p3, twist on hand | 53.2 (55.4) | 53.9 (55.6) | 39.4 (42.0) |
+| p3, `twist_to_forearm` | 58.6 (63.5) | 53.9 (55.6) | 29.7 (29.7) |
+
+- Hand Landmarker excluded from that rerun: pairs2's `landmarks-hl.jsonl` holds only left hands and p3's confidence there is ~0.01. Open: every system is 50-65 deg off in world orientation (lower arm and hand); not investigated.
 - Bends beyond `MAX_BEND_DEG` (100) after removing the forearm twist are rejected (likely palm/back flip): the body model's hand is kept.
 - `pair_track` / CLI: `python -m mttrain.hands.wrist <ckpt> <landmarks> --body <poses> --out <out> --avatar <name> [--no-wrist]` writes a pose track with learned fingers and (unless `--no-wrist`) learned hand orientation. Since v3, no hold: the result blends to the body model's hand by the pair model's confidence (rotation scale).
 

@@ -194,7 +194,23 @@ Fingers on hands2 are worse than h2's (13.2): the pair model regressed on single
 Combination (`mttrain.hands.wrist`, merger stand-in): palm frame -> VRM hand global -> local to m1-v10's lower
 arm. The rendered truth carries most of the forearm twist on the hand bone (median 120 deg about the forearm
 axis), so the whole rotation goes onto the hand; moving the twist onto the lower arm put it 129 deg off.
-Avatar level on pairs2 (Holistic / Hand Landmarker), hand global: m1-v10 68.9 / 69.2 deg -> 21.1 / 18.1 deg.
+**Corrected 2026-11-16:** the 120 / 129 deg were the `MhrToVrm` forearm twist bug (fixed in v0.1.1, 43347af:
+MHR's wrist_twist rest frame, ~114 deg about the forearm from lowarm's, was taken as twist), not a truth
+convention. All render `gt.jsonl` were regenerated; `twist_to_forearm` is now the default (eee0b04), per the
+owner's wrist-roll rule (`PLAN.md` §3.10). The p2 avatar-level numbers after the table used the pre-fix truth
+(its lowerArm and hand local carry the offset; hand world truth moved <= 0.42 deg). Rerun of p3 on pairs2
+(Holistic, fixed truth), median deg, all frames (both hands detected):
+
+| system | lowerArm world | hand world | hand local |
+|---|---|---|---|
+| m1-v10 | 53.2 (55.4) | 64.3 (68.2) | 30.8 (30.6) |
+| p3, twist on hand | 53.2 (55.4) | 53.9 (55.6) | 39.4 (42.0) |
+| p3, `twist_to_forearm` | 58.6 (63.5) | 53.9 (55.6) | 29.7 (29.7) |
+
+Hand Landmarker excluded (pairs2's `landmarks-hl.jsonl` holds only left hands; p3 confidence ~0.01). Open:
+every system is 50-65 deg off in world orientation; not investigated.
+
+Pre-fix (p2): avatar level on pairs2 (Holistic / Hand Landmarker), hand global: m1-v10 68.9 / 69.2 deg -> 21.1 / 18.1 deg.
 The lower arm stays m1-v10's (50 deg off), so the hand-vs-lower-arm local gets worse (33.8 -> 49.8 / 56.4).
 
 Comparison video `data/videos/seated-v1-p2/compare-landmarks.mp4` (ported vs p2 fingers + wrist on the
@@ -202,7 +218,7 @@ seated-v1 session). Held last pose for lost hands is visible (open hand while th
 
 Open: occlude/wrist/turn acceptance rates; finger fixes (counting, independent fingers, bend axis) and the
 single-hand finger regression; lost-hand behaviour (relax toward rest); forearm twist from the hand model
-onto the lower arm needs a truth convention first; Hand Landmarker runtime option; hands-only arms; the
+onto the lower arm needs a truth convention first (resolved 2026-11-16, see above); Hand Landmarker runtime option; hands-only arms; the
 hands-v1 retake isn't used for calibration yet.
 
 ## v3: training data for counting, off-screen and body contact (owner, 2026-11-13)
