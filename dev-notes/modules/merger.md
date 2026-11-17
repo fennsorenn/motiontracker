@@ -65,6 +65,7 @@ Body-model side: `modules/train.md` ("Legs, root and up").
 - `body.onnx` (body model, `StreamFeatures` input; root/up outputs), `hands.onnx` (pair hand model), `merger.onnx`.
 - `merger.json`: skeleton table incl. the finger map (`LifterPose` `fingers`), output bones, default avatar (AvatarSample_D), hand constants (`F_rest`, `out_idx`, limits), combination constants (`conf_deg`, `max_bend`, head weight 0.8), canonical face Procrustes points + head offset (from `data/merger/calib/face.json` and the MHR rest head), blendshape names, merger offsets.
 - `--check`: parity against the torch runner (`run.infer`). `mg3` on hands-v1 (1281 frames) and seated-v1 (670): body bones well under 0.1 deg, fingers <= 0.18 deg (pymomentum float32; same with random finger poses), hip position 0.0001 cm, up 0.03 deg.
+- `retarget.npz` (MHR mean body for live retargeting) is NOT written by the export: run `uv run python -m mttrain.retarget_asset <live dir>` afterwards (`modules/train.md`), before release packaging (`modules/service.md` Releases).
 - Runtime is three ONNX graphs plus numpy glue (owner decision, `PLAN.md` §7.6), not one graph for all heads (§4 idea, left as is).
 - Anything changed in `batch.combine`, `apply_root`, `hands.model2.frame_features` or `evaluate2.LearnedPair` must be mirrored in `mtcore.merged`; re-run `--check`.
 

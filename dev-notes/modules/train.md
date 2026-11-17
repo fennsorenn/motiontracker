@@ -27,6 +27,7 @@ WIP (branch `feature/legs-root`, trained and evaluated, awaiting the owner's rev
 | `choreo` | Designed contact choreography (see Contacts). |
 | `limitcheck` | Criterion 8: `python -m mttrain.limitcheck <ckpt> <session>`. IK of MHR parameters to the predicted orientations with limits off, checked against `[Limits]` (angles wrapped). Runs on the session plus stressed copies (tracking loss, low confidence, extra noise, arms out of frame, glitches) and on synthetic ground truth for validation. |
 | `retarget_demo` | WIP prototype (`relational-retarget`, 2026-11-14): ground truth vs rotation copy vs `mtcore.relretarget` on a render set. See `modules/mtcore.md` (relretarget). |
+| `retarget_asset` | `uv run python -m mttrain.retarget_asset <bundle dir>` (2026-11-17): writes `retarget.npz` (MHR mean body rest vertices + VRM bone labels, anchor bones only) into a merger live bundle for live retargeting (`modules/mtcore.md` relretarget, merged). Not part of `mttrain.merger.export` yet: run it by hand after each export, before release packaging (`modules/service.md` Releases). |
 
 ## GPU data generator (`gpugen`, implemented 2026-11-08)
 Package `mttrain/gpugen/`: batched torch port of the synthesis pipeline; the training default. Builds whole batches on the RTX 4060 instead of CPU DataLoader workers, which crashed the machine (see ARCHITECTURE key decisions). ~4,800 samples/s, 40k steps in 36 min, ~1 CPU core.
