@@ -1,15 +1,22 @@
-# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; face post-processing implemented 2026-11-14; merger runtime implemented 2026-11-14, live test pending; released v0.1.0 2026-11-14, v0.1.1 2026-11-16)
+# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; face post-processing implemented 2026-11-14; merger runtime implemented 2026-11-14, live test pending; released v0.1.0 2026-11-14, v0.1.1 2026-11-16; live retargeting WIP 2026-11-16)
 
 Location: `service/` (uv project, package `mtservice`, CLI `mtservice`). Live runtime: camera or video → MediaPipe Holistic → merger bundle (`mtcore.merged`) or M1 lifter (ONNX) → VRM bone rotations as VMC over UDP. Usage: `service/README.md`. Plan: `plans/m2-vspark-runtime.md` (steps 0-4 done, step 4 = vspark behavior `learned_tracker` on vspark `feature/learned-tracker`, not merged; step 5, the owner's live test, open). Decisions: `PLAN.md` §7.4. Model: merger `mg3` by default (see Merger runtime); `--no-merger` = `m1-v10` (`m1-v11`, body co-rotation, discarded by the owner 2026-11-12).
 
 ## Merger runtime (implemented 2026-11-14, owner's live test pending)
-Branch `feature/merger-runtime` (with `feature/legs-root` and the relational-retarget prototype) merged into `dev` and `main` 2026-11-14; part of v0.1.0. Decisions: `PLAN.md` §7.6.
+Branch `feature/merger-runtime` (with `feature/legs-root`; the relational-retarget prototype came along but was not used by the runtime) merged into `dev` and `main` 2026-11-14; part of v0.1.0. Decisions: `PLAN.md` §7.6.
 - Default model: the merger bundle `data/merger/runs/mg3/live` (written by `mttrain.merger.export`, `modules/merger.md`) when present, or `--merger DIR`. Run per detector frame by `mtcore.merged.LiveMerged` (`modules/mtcore.md`): body `m1-v14`, pair hand model `p3`, face-mesh head pose, base combination, merger. cli's `MergerModel` subclasses it.
 - `--no-merger`: the old M1 lifter (`--bundle`, default `m1-v10`) with `hands.py` fingers, wrapped in `LiveMerged`'s shape; also the fallback when the default merger bundle is missing.
 - Bones: 50 (body, legs, fingers). Legs on by default (vspark's mixer can zero their influence, owner 2026-11-14); `--no-legs` drops them for other consumers.
 - Hip position and up direction: `/MT/Root`, `/MT/Up` (see VMC conventions). vspark ignores them for now. `--dump-poses` records root/up.
 - Cost: model ~2.4 ms/frame on one core (after batching `MhrToVrm`, was 8.0), MediaPipe ~20 ms. Run on the seated-v1 video: 50 bones at 10 Hz.
 - Known model caveats (from the evaluations, `plans/legs-root.md`): `m1-v14` depth reads 10-50% too far; `mg3` regresses on the pairs3 two-hand set and its thighs are 2-6 deg worse than `m1-v14`; `m1-v14` head 1-2.5 deg worse on some render sets.
+
+## Live retargeting (WIP, started 2026-11-16)
+Branch `feature/runtime-retarget`. Decisions: `PLAN.md` §3.10a ("Runtime retargeting, first live step (2026-11-16)"). Wires `mtcore.relretarget` (`modules/mtcore.md`) into `LiveMerged` and `cli.py`.
+- With a VRM avatar (`--avatar-vrm` or the stdin `avatar` command's `vrm_path`): the default VMC stream is retargeted to that avatar. Without a VRM: default reference rest pose, no retargeting. `--no-retarget` switches it off.
+- Human side: MHR's mean body, shipped as a small precomputed asset in the merger live bundle (the runtime has no pymomentum).
+- Later step, only if it helps live: per-avatar extra VMC outputs.
+- Not yet recorded: asset format, cost per frame, results.
 
 ## Face and fingers (implemented 2026-11-12, owner's live test pending)
 Plan: `plans/m2-face-hands.md` (steps 1-4 done, numbers in its Progress section); decisions: `PLAN.md` §7.5. Branch `feature/m2-face-hands` (commits 1f7f7db, ec0904d).
