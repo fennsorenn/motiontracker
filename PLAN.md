@@ -401,6 +401,13 @@ Branch `feature/merger-runtime`. Merger decisions: §3.4; legs/hip/up: §3.9.
 - **Leg bones on by default**: vspark's mixer can zero the leg influence; `--no-legs` drops them for other consumers. `[USER]` (2026-11-14)
 - Hip position and up direction go out as VMC extensions `/MT/Root x y z` (m) and `/MT/Up x y z` (unit), in the body model's camera frame (x right in the mirrored image, y down, z away), not vspark's pose space; `Root/Pos` stays zero; vspark ignores both for now. `[CLAUDE]` (2026-11-14, following the owner's answer)
 
+### 7.7 Frame rate and history shift (2026-11-23)
+Released in v0.4.0. Measured on renders (15 sequences pairs1/body1/body2 vs ground truth) and live end to end (virtual camera → vspark → headless Chrome).
+- **Frame rate configurable** (`mtservice --fps N`, live `fps` command; models trained at 10 FPS, histories picked by age so 10 FPS output is unchanged). `[USER]` (2026-11-23, owner asked to test it) Accuracy unchanged across rates (median direction error 13.4-13.6 deg), model's own delay ~40-60 ms at all rates. Live end to end (rendered arm), halfway: 107 ms at 10 FPS → 57 ms at 20; 90%: 191 → 90 ms. Runtime CPU 82% of one core at 20 FPS (~half at 10).
+- **Default rate** `[OPEN]` (owner deciding; 10 stays default for now). Cost of a higher rate: per-frame detector noise is about the same at any rate, so visible shake after vspark's Minimal motion filter grows with rate (0.73 deg at 10 → 1.03 at 20 → 1.16 at 30 FPS; truth 0.5), through the Smooth preset 0.46 → 0.53 deg.
+- **History shift** (`--history-shift none|every|alternate`, live command): at 20 FPS consecutive outputs alternate (lag-1 correlation of second differences -0.80; random noise -0.5) because neighbours share no history frames. At 20 FPS: `alternate` -0.43, shake Minimal 1.03 / Smooth 0.48 deg, error 13.73 deg; `every` -0.62, 0.97 / 0.46, 13.68; `none` -0.80, 1.03 / 0.53, 13.55. Shifting only steps ≥0.3 s barely helps. `every` vs `alternate` `[OPEN]` (owner comparing live in vspark; the differences are small and may be noise); default stays `none`.
+- **GPU detector** `[OPEN]` (measured, not adopted): pinned MediaPipe 0.10.18 crashes running Holistic on GPU (TfLite GPU delegate "Batch size mismatch"); MediaPipe 1.2.3 (Apache 2.0) runs it: RTX 3090 15.5 ms wall / 17 ms CPU per frame vs CPU 22 / 32 ms, landmarks within ~1 px (320x240). Adopting needs a migration to the 1.x API (the raw-packet path `_process_video_data` is gone; the public detect works), re-validation, and integrated-GPU/Windows testing.
+
 ---
 
 ## 8. Discarded and deprioritized approaches
