@@ -29,6 +29,7 @@ Standalone: runs until Ctrl+C or the end of the video; log lines go to stderr.
 --stdio (driven by a parent such as vspark's Learned Tracking behavior): JSON lines.
   stdin (commands):  {"cmd": "avatar", "vrm_path": "/abs/avatar.vrm"}   avatar rest pose and retargeting from its file
                      {"cmd": "retarget", "enabled": bool}  retargeting on/off (answered by a "retarget" event)
+                     {"cmd": "preview", "image": bool, "landmarks": bool}  camera preview (preview.py); both false: off
                      {"cmd": "avatar", "rest_positions": {vrmBone: [x, y, z]} | null}  (null: default)
                      {"cmd": "camera", "index": n}      switch camera
                      {"cmd": "cameras"}                 list cameras
@@ -37,6 +38,8 @@ Standalone: runs until Ctrl+C or the end of the video; log lines go to stderr.
                                       "fingers": bool, "legs": bool, "merger": bool, "retarget": bool}
                      {"event": "status", "fps", "detect_ms", "model_ms", "latency_ms", "present"}  (about 1/s)
                      {"event": "cameras", "cameras": [{"index", "name"}]}
+                     {"event": "preview", "t", "width", "height", "mirrored", "image"?, "landmarks"?}
+                         per processed frame while the preview is on (preview.py)
                      {"event": "retarget", "enabled": bool, "active": bool, "reason": str | null}
                          after the retarget command and each avatar change: enabled = requested, active = applied;
                          reason: why it is requested but not applied (no merger / no VRM avatar / setup failed)
@@ -59,6 +62,7 @@ from .detector import Detector, model_path, prepare
 from .face import EyeFilter, FaceStream
 from .hands import solve_hands
 from .lifter import LiveLifter
+from .preview import Preview
 from mtcore.merged import LiveMerged
 from .sources import CameraSource, VideoSource, list_cameras
 from .vmc import VmcSender
@@ -250,6 +254,7 @@ def run(a, emit):
         + (f", VMC -> {a.vmc}" if vmc else ""))
     stats = {"n": 0, "det": 0.0, "mod": 0.0, "lat": 0.0, "present": 0}
     last_status = time.monotonic()
+    preview = Preview()
     try:
         it = iter(source)
         while True:
@@ -276,6 +281,8 @@ def run(a, emit):
                     st = retarget_state(lifter)
                     emit("retarget", **st)
                     log(f"retarget {'on' if st['active'] else 'off'}" + (f" ({st['reason']})" if st["reason"] else ""))
+                elif cmd == "preview":
+                    preview.configure(c.get("image"), c.get("landmarks"))
                 elif cmd == "cameras":
                     emit("cameras", cameras=list_cameras())
                 elif cmd == "camera" and not a.video:
@@ -299,7 +306,8 @@ def run(a, emit):
             except StopIteration:
                 return "end of video"
             wall0 = time.monotonic()
-            obs = detector.detect(prepare(frame), t * 1000 + 1)
+            rgb = prepare(frame)
+            obs = detector.detect(rgb, t * 1000 + 1)
             wall1 = time.monotonic()
             bones, conf, present, root, up = lifter.step(t, obs)
             shapes = obs.get("blendshapes")
@@ -310,6 +318,8 @@ def run(a, emit):
                 face.push(shapes)
             if vmc:
                 vmc.send(t, bones, conf, present, None if face else shapes, root=root, up=up)
+            if preview.on and a.stdio:
+                emit("preview", **preview.event(t * 1000, rgb, obs))
             if dump_p:
                 rec = {"t": round(t * 1000, 1), "bones": {b: [round(float(v), 6) for v in q] for b, q in bones.items()},
                        "conf": {j: round(c, 3) for j, c in conf.items()}}

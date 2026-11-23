@@ -25,7 +25,8 @@ controlled over stdio by vspark's "Learned Tracking" behavior, or run on its own
 `--stdio` turns on the control protocol for a parent process (JSON lines; full list in
 `src/mtservice/cli.py`): commands `avatar` (`vrm_path` of the avatar being driven, read with `mtcore.vrm`;
 or explicit `rest_positions`; null for the default VRoid rest), `retarget` (`enabled`: retarget to the VRM avatar's
-proportions, `mtcore.relretarget`; off by default, `--retarget` at start), `camera`, `cameras`, `stop`; events `ready`,
+proportions, `mtcore.relretarget`; off by default, `--retarget` at start), `preview` (`image` and/or `landmarks`: the
+detector's mirrored 320x240 frame as JPEG and its 2D landmarks, per frame as `preview` events, `preview.py`), `camera`, `cameras`, `stop`; events `ready`,
 `status` (about once a second: fps, detection and model time, capture-to-output latency, pose presence), `retarget`
 (requested, applied, reason), `cameras`, `error`, `stopped`. Closing stdin stops the runtime, so it never outlives its parent.
 
