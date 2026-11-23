@@ -2,7 +2,10 @@
 
 - CameraSource: a reader thread keeps only the newest camera frame (no buffered lag); every 1/fps
   seconds the newest frame is taken, like the recorder's throttled capture loop. t = capture time
-  since start (monotonic).
+  since start (monotonic). The camera is asked for MJPEG at 30 FPS (cameras without it stay on their
+  default format) and keeps the driver's normal buffers: a single buffer (as before 2026-11-23) drops
+  every frame that starts while the reader still holds the last one, halving the rate (measured: a
+  30 FPS camera gave 15, a webcam's 12.6 FPS YUYV gave 6.4; the same webcam gives 25 FPS as MJPEG).
 - VideoSource: the recorder's stepped replay (ts = k / fps + 1 ms, latest frame at or before ts);
   deterministic. realtime=True paces it to the wall clock (for driving vspark from a file).
 """
@@ -43,9 +46,10 @@ class CameraSource:
         self.cap = cv2.VideoCapture(index, api)
         if not self.cap.isOpened():
             raise RuntimeError(f"cannot open camera {index}")
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # ignored if unsupported
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
         self.interval = 1.0 / fps
         self.t0 = time.monotonic()
         self.latest, self.seq, self.running = None, 0, True
