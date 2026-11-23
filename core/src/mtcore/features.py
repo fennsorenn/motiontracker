@@ -18,6 +18,7 @@ import numpy as np
 
 OFFSETS = np.array([0.0, 0.1, 0.2, 0.4, 0.8, 1.6])  # seconds
 SCALE_WINDOW = 2.0
+KEEP_EXTRA = 0.05  # s of history kept beyond the oldest offset (shifted offsets, mtcore.merged.HISTORY_SHIFTS)
 DEFAULT_SCALE = 0.33  # metres, recorded session's median MediaPipe shoulder width
 FRAME_DIM = 33 * 3 + 33 * 3 + 33 + 1
 L_SH, R_SH = 11, 12
@@ -81,8 +82,9 @@ class StreamFeatures:
     identical to frame_features + history_indices + model_input over the whole sequence so far. Keeps
     only the frames the scale window and the oldest offset still need."""
 
-    def __init__(self, head3d=True):
+    def __init__(self, head3d=True, offsets=None):
         self.head3d = head3d
+        self.offsets = OFFSETS if offsets is None else np.asarray(offsets, float)  # ages (s) of the history steps
         self.widths = deque()  # (t, shoulder width) of frames that pass the scale check
         self.scale = None
         self.frames = deque()  # (t, features)
@@ -100,12 +102,12 @@ class StreamFeatures:
             self.scale = DEFAULT_SCALE
         f = scaled_features(world[None], image[None], vis[None], np.array([present]), np.array([self.scale]), self.head3d)[0]
         self.frames.append((t, f))
-        oldest = t - OFFSETS[-1] + 0.02
+        oldest = t - OFFSETS[-1] - KEEP_EXTRA + 0.02  # a little more than needed: offsets may change live
         while len(self.frames) > 1 and self.frames[1][0] <= oldest:
             self.frames.popleft()
-        out = np.zeros((len(OFFSETS), FRAME_DIM + 2), np.float32)
+        out = np.zeros((len(self.offsets), FRAME_DIM + 2), np.float32)
         times = [ft for ft, _ in self.frames]
-        for o, off in enumerate(OFFSETS):
+        for o, off in enumerate(self.offsets):
             k = int(np.searchsorted(times, t - off + 0.02, side="right")) - 1
             if k < 0:
                 out[o, -1] = 1.0

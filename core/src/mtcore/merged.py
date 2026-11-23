@@ -5,11 +5,19 @@ The same chain as the offline runner (`mttrain.merger.run.infer`), one frame at 
 1. body model (`m1-v12+`, ONNX): rotations of the 23 output joints, their log scales, hip position (camera frame, m),
    its log scales and the up direction; streaming input features as `mtcore.features.StreamFeatures`;
 2. pair hand model (`p3`, ONNX): per hand fingers, orientation, image position and size over the last HISTORY
-   frames, with the detector's confidence for each slot;
+   frames (10 FPS steps, `TRAIN_DT`), with the detector's confidence for each slot;
 3. head pose from the face mesh (`mtcore.facepose`), rotated into MHR's head frame by the calibrated offset;
 4. the base pose: the hand-written combination of the three (`mttrain.merger.batch.combine`);
-5. the merger (ONNX) over its frame offsets: residuals on the base pose's global rotations, finger residuals,
-   hip position and up residuals.
+5. the merger (ONNX) over its frame offsets (10 FPS steps): residuals on the base pose's global rotations, finger
+   residuals, hip position and up residuals.
+The hand model and the merger were trained on 10 FPS sequences and look back a fixed number of steps; live, each step
+is picked by age (`TRAIN_DT` apart, the latest frame at or before it), as the body model's features already are, so
+the runtime can process more frames per second (or drop some) without retraining.
+`history_shift` (experiment, for 20 FPS): at 20 FPS neighbouring outputs share no history frames (each reads every
+other frame), and the output alternates slightly from frame to frame. Shifting steps half a step older (50 ms) makes
+neighbouring outputs mix both sets of frames: "every" shifts every step but the newest, "alternate" every second step
+(by index), in all three histories. Measured on renders at 20 FPS (2026-11-23): both lower the alternation and the
+visible shake a little, at ~0.15 deg more error.
 onnxruntime is imported on use: `mtcore` itself stays numpy-only.
 """
 
@@ -19,13 +27,45 @@ from pathlib import Path
 import numpy as np
 
 from .facepose import CanonicalFace, fit
-from .features import StreamFeatures
+from .features import OFFSETS, StreamFeatures
 from .hand_features import canonical, palm_frame
 from .lifter_pose import LifterPose
 
 HAND_ASPECT = 4 / 3  # frame width / height (the recorder's 320x240)
 POSE_HAND = {"l": [15, 17, 19, 21], "r": [16, 18, 20, 22]}  # Holistic pose points of each hand
 MIRROR = np.diag([-1.0, 1.0, 1.0])
+TRAIN_DT = 0.1  # history step of the hand model and the merger: they were trained on 10 FPS sequences
+HISTORY_TOL = 0.02  # a frame up to this much younger than a step's age still counts (as features.StreamFeatures)
+HISTORY_SHIFTS = ("none", "every", "alternate")
+SHIFT = TRAIN_DT / 2
+
+
+def shifted_ages(ages, mode):
+    """History step ages (s) with `history_shift` applied: "every" step but the newest, or every "alternate" one
+    (odd index), half a step older."""
+    if mode not in HISTORY_SHIFTS:
+        raise ValueError(f"history shift must be one of {HISTORY_SHIFTS}, not {mode!r}")
+    return [a + SHIFT if (mode == "every" and i >= 1) or (mode == "alternate" and i % 2 == 1) else a
+            for i, a in enumerate(ages)]
+
+
+def pick_history(times, t, ages):
+    """times: frame times, newest first; per age (s) the index of the latest frame at or before t - age (within
+    HISTORY_TOL), or None when every kept frame is younger."""
+    out = []
+    for age in ages:
+        due = t - age + HISTORY_TOL
+        out.append(next((i for i, ft in enumerate(times) if ft <= due), None))
+    return out
+
+
+def prune_history(items, times, t, oldest_age):
+    """Drop frames older than the newest one the oldest age (plus a shift, so it can change live) still needs
+    (both lists newest first)."""
+    due = t - oldest_age - SHIFT + HISTORY_TOL
+    keep = next((i for i, ft in enumerate(times) if ft <= due), None)
+    if keep is not None:
+        del items[keep + 1:], times[keep + 1:]
 
 
 # --- rotations (numpy ports of mttrain.merger.batch) ------------------------------------------------------------
@@ -145,6 +185,7 @@ class LiveMerged:
             z = np.load(f)
             self.human_mesh = (z["verts"].astype(np.float64), z["labels"])
         self.retarget_on = False
+        self._history_shift = "none"
         self.retarget, self.retarget_error = None, None
         self.reset()
 
@@ -177,10 +218,23 @@ class LiveMerged:
         """Retargeting is applied: switched on and set up for the current avatar."""
         return self.retarget_on and self.retarget is not None
 
+    @property
+    def history_shift(self):
+        return self._history_shift
+
+    @history_shift.setter
+    def history_shift(self, mode):
+        """Switchable live: the histories keep half a step more than they need."""
+        shifted_ages([], mode)  # validates
+        self._history_shift = mode
+        self.features.offsets = np.array(shifted_ages(list(OFFSETS), mode))
+
     def reset(self):
-        self.features = StreamFeatures(self.head3d)
+        self.features = StreamFeatures(self.head3d, shifted_ages(list(OFFSETS), self.history_shift))
         self.hands = []  # newest first: per frame the hand model's features {(slot, mirrored): (FRAME_DIM,)}
+        self.hand_times = []  # their times (s), newest first
         self.frames = []  # merger frame inputs, newest first
+        self.frame_times = []
 
     # --- parts --------------------------------------------------------------------------------------------------
     def _body(self, t, obs):
@@ -194,7 +248,7 @@ class LiveMerged:
         log_s = -np.log(np.clip(np.exp(-ls[0].astype(np.float64)), 1e-6, None))  # as the offline runner (conf -> log)
         return present, rot[0].astype(np.float64), log_s, root[0].astype(np.float64), root_ls[0].astype(np.float64), up[0].astype(np.float64)
 
-    def _hands(self, obs):
+    def _hands(self, t, obs):
         img, canon, lost = np.zeros((2, 21, 3)), np.zeros((2, 21, 3)), np.ones(2, bool)
         score = np.array([hand_score(obs, s) for s in "lr"])
         for k, (side, S) in enumerate((("l", "left"), ("r", "right"))):
@@ -204,10 +258,12 @@ class LiveMerged:
                 lost[k] = False
         self.hands.insert(0, {(k, m): hand_frame_features(img[k], canon[k], lost[k], m, score[k])
                               for k in range(2) for m in (False, True)})
-        del self.hands[self.hand_history:]
+        self.hand_times.insert(0, t)
+        ages = shifted_ages([k * TRAIN_DT for k in range(self.hand_history)], self.history_shift)
+        prune_history(self.hands, self.hand_times, t, (self.hand_history - 1) * TRAIN_DT)
         pad = {(k, m): hand_frame_features(np.zeros((21, 3)), np.zeros((21, 3)), True, m, 0.0)
                for k in range(2) for m in (False, True)}  # before the session's first frames: lost, score 0
-        H = self.hands + [pad] * (self.hand_history - len(self.hands))
+        H = [pad if i is None else self.hands[i] for i in pick_history(self.hand_times, t, ages)]
         ff = lambda k, mirror: np.stack([h[(k, mirror)] for h in H])
         own = np.stack([ff(0, False), ff(1, True)]).astype(np.float32)
         other = np.stack([ff(1, False), ff(0, True)]).astype(np.float32)
@@ -247,7 +303,7 @@ class LiveMerged:
         """t: seconds; obs: Detector.detect output (or a recorder-format frame with arrays). Returns (bones: VRM
         bone -> quaternion xyzw, confidence: joint -> 0..1, present, root (3,) camera frame m, up (3,) camera frame)."""
         present, rot, log_s, root, root_ls, up = self._body(t, obs)
-        hand = self._hands(obs)
+        hand = self._hands(t, obs)
         head_G, centre, log_scale, seen = self._head(obs)
         base = self._combine(rot, hand, head_G, self.head_w * float(seen))
         nj = self.nj
@@ -261,8 +317,12 @@ class LiveMerged:
         parts += [to6d(head_G) * sv, centre * sv, [log_scale * sv], [sv],
                   [bs.get(n, 0.0) for n in self.blend_names] if bs else [0.0] * len(self.blend_names), [float(bool(bs))]]
         self.frames.insert(0, np.concatenate([np.asarray(p, dtype=np.float64).reshape(-1) for p in parts]))
-        del self.frames[max(self.offsets) + 1:]
-        x = np.stack([self.frames[min(o, len(self.frames) - 1)] for o in self.offsets])[None].astype(np.float32)
+        self.frame_times.insert(0, t)
+        prune_history(self.frames, self.frame_times, t, max(self.offsets) * TRAIN_DT)
+        # a step older than the whole history takes the oldest frame (the session's first)
+        ages = shifted_ages([o * TRAIN_DT for o in self.offsets], self.history_shift)
+        idx = [len(self.frames) - 1 if i is None else i for i in pick_history(self.frame_times, t, ages)]
+        x = np.stack([self.frames[i] for i in idx])[None].astype(np.float32)
         names = [o.name for o in self.merger_net.get_outputs()]
         out = dict(zip(names, (v[0].astype(np.float64) for v in self.merger_net.run(None, {"x": x}))))
         L = locals_from_globals(globals_from_locals(base[:nj], self.parent_idx) @ out["res"], self.parent_idx)
