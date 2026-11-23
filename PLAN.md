@@ -139,6 +139,15 @@ webcam → [MediaPipe detectors: pose / hands / face]   (frozen, existing cost)
 - **Training order:** heads first → merger with heads frozen → optional short joint fine-tune at low LR. **Keep head rotation losses active during joint fine-tune** so head outputs stay meaningful. `[CLAUDE]`
 - Latent-only interface: see §8 (discarded as the primary interface).
 
+- **Merger v2 (2026-11-23)**, plan `dev-notes/plans/m4-merger-deltas.md`. Measured on renders: the body model's arms run ~15 deg low at every height (hands at eye level end at shoulder height), uncorrected by `mg3`; `mg3` makes the hand worse than the hand-written combination (hand direction 31 -> 39 deg; the hand model alone 20 deg; twist range 0.41 -> 0.23, the hand model alone 0.48). Cause: in training the body model's sim-to-real gap is unsigned noise only (no bias, no MediaPipe landmark smoothing lag, no wrist offset), so trusting the body was the best strategy.
+  - Realistic body and hand errors in the merger's training data (signed bias, landmark smoothing lag, wrist offset, dropouts), calibrated on renders. `[USER]` 2026-11-23
+  - Output: deltas from the merger's own previous output (previous output as input), so no input source is the starting point by design. `[USER]` 2026-11-23 (supersedes "residual corrections on the combined part outputs" above for v2; `mg3` stays as is)
+  - Staged training: on true previous poses, then fine-tuned on its own output (rollouts over 1-2 s). `[USER]` 2026-11-23. A middle stage on deliberately wrong previous poses. `[CLAUDE]`
+  - A responsiveness vs stability lever as a model input, trained with lever-weighted losses, exposed in vspark. `[USER]` 2026-11-23
+  - Control variant: absolute output on the same new data, to separate the data's effect from the output form's. `[CLAUDE]`
+  - A hand-led base pose (wrist from the hand model, arm fitted to it): `[DISCARDED]` 2026-11-23, struggles with hand dropout. A geometric override after the merger: `[DISCARDED]` 2026-11-23, defeats the purpose of the merger.
+  - The hand model reproduces only about half the true twist range on its own. `[OPEN]` (separate task on `p3`)
+
 ### 3.5 Context fed to heads
 - **Part heads get full-pose context.** Owner argued this (example: a falling body should default to open hands even when hand tracking is weak). `[USER]`
   - Design detail: feed a **compact embedding** (a few dozen numbers) of the previous merged pose and its motion, not all raw bones; mask it in training. `[CLAUDE]`
