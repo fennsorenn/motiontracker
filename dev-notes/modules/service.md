@@ -1,4 +1,4 @@
-# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; face post-processing implemented 2026-11-14; merger runtime implemented 2026-11-14, live test pending; released v0.1.0 2026-11-14, v0.1.1 2026-11-16; live retargeting implemented 2026-11-17, off by default)
+# service (runtime and vspark behavior implemented 2026-11-12; face/fingers implemented 2026-11-12; face post-processing implemented 2026-11-14; merger runtime implemented 2026-11-14, live test pending; released v0.1.0 2026-11-14, v0.1.1 2026-11-16; live retargeting implemented 2026-11-17, off by default; camera preview implemented 2026-11-23, unreleased)
 
 Location: `service/` (uv project, package `mtservice`, CLI `mtservice`). Live runtime: camera or video → MediaPipe Holistic → merger bundle (`mtcore.merged`) or M1 lifter (ONNX) → VRM bone rotations as VMC over UDP. Usage: `service/README.md`. Plan: `plans/m2-vspark-runtime.md` (steps 0-4 done, step 4 = vspark behavior `learned_tracker` on vspark `feature/learned-tracker`, not merged; step 5, the owner's live test, open). Decisions: `PLAN.md` §7.4. Model: merger `mg3` by default (see Merger runtime); `--no-merger` = `m1-v10` (`m1-v11`, body co-rotation, discarded by the owner 2026-11-12).
 
@@ -49,6 +49,7 @@ Dependencies: `mtcore` without the `mhr` extra (numpy-only modules, `modules/mtc
 | `hands.py` | `solve_hands(obs)`: port of vspark's finger solve (`hand_landmarks_to_bones`) → VRM finger bone rotations. Reference: `baseline/src/hands-cli.ts` runs the frozen TS node over JSONL frames. |
 | `face.py` | `FaceStream`: eye correction + glided blendshape stream on its own thread (see Face post-processing). |
 | `faceproc.py` | Offline face post-processing of a landmarks dump → 60 Hz blendshape JSONL for the avatar video. |
+| `preview.py` | `Preview`: camera preview for the stdio parent (JPEG of the detector input and/or 2D landmarks per frame); see Camera preview. |
 | `vmc.py` | Own OSC encoder (`message`, `bundle`) and `VmcSender` (`send` per frame, `send_blend` for the face stream). See VMC conventions. |
 | `cli.py` | `mtservice` entry point and main loop; standalone or `--stdio`. `--dump-poses` / `--dump-landmarks` write JSONL for offline comparison; `--vmc off` disables sending; `--face-mesh`, `--no-face`, `--no-fingers`, `--face-rate`, `--no-eye-filter`, `--merger DIR`, `--no-merger` (+ `--bundle`), `--no-legs`, `--avatar-vrm FILE`, `--retarget` (see Live retargeting). |
 
@@ -67,9 +68,18 @@ Decisions: `PLAN.md` §7.4 (vspark pinning), §9 #9 (weights as release assets).
 
 ## Stdio protocol (`--stdio`)
 JSON lines; stdout carries only events (MediaPipe and log output go to stderr). Authoritative list: `cli.py` docstring.
-- Commands (stdin): `{"cmd":"avatar","vrm_path":"/abs/avatar.vrm"}` (rest pose and retargeting from the file) or `{"cmd":"avatar","rest_positions":{vrmBone:[x,y,z]} | null}` (null = bundle's default avatar, AvatarSample_D; no retargeting), `{"cmd":"retarget","enabled":bool}` (retargeting on/off, see Live retargeting), `{"cmd":"camera","index":n}` (ignored for video sources), `{"cmd":"cameras"}`, `{"cmd":"stop"}`.
-- Events (stdout): `ready` (model source, bones, source, `face`: "full"|"lite"|null, `fingers`: bool, `legs`: bool, `merger`: bool, `retarget`: bool = active), `retarget` (`enabled` = requested, `active` = applied, `reason`: why requested but not applied (no merger / needs a VRM avatar / setup failed) or null; sent after `ready`, after every `avatar` command and every `retarget` command), `status` (~1/s: fps, detect_ms, model_ms (includes the finger solve), latency_ms capture → output, present fraction), `cameras`, `error`, `stopped` (reason).
+- Commands (stdin): `{"cmd":"avatar","vrm_path":"/abs/avatar.vrm"}` (rest pose and retargeting from the file) or `{"cmd":"avatar","rest_positions":{vrmBone:[x,y,z]} | null}` (null = bundle's default avatar, AvatarSample_D; no retargeting), `{"cmd":"retarget","enabled":bool}` (retargeting on/off, see Live retargeting), `{"cmd":"camera","index":n}` (ignored for video sources), `{"cmd":"cameras"}`, `{"cmd":"preview","image":bool,"landmarks":bool}` (camera preview on/off, both false = off; see Camera preview), `{"cmd":"stop"}`.
+- Events (stdout): `ready` (model source, bones, source, `face`: "full"|"lite"|null, `fingers`: bool, `legs`: bool, `merger`: bool, `retarget`: bool = active), `retarget` (`enabled` = requested, `active` = applied, `reason`: why requested but not applied (no merger / needs a VRM avatar / setup failed) or null; sent after `ready`, after every `avatar` command and every `retarget` command), `status` (~1/s: fps, detect_ms, model_ms (includes the finger solve), latency_ms capture → output, present fraction), `cameras`, `preview` (per processed frame while the preview is on; see Camera preview), `error`, `stopped` (reason).
 - Closing stdin stops the runtime, so it never outlives its parent. Unknown or malformed commands produce an `error` event, not an exit.
+
+### Camera preview (implemented, merged into `dev` 2026-11-23, unreleased)
+The runtime holds the webcam, so the parent (vspark) cannot show a camera preview itself; it asks the runtime for frames instead. `preview.py` (`Preview`), test `tests/test_preview.py`.
+- Off until the stdin `preview` command turns on `image` and/or `landmarks`; both false turns it off. Only emitted with `--stdio`.
+- While on, one `preview` event per processed frame (~10/s), sent after the VMC send in the `cli.py` frame loop (which keeps `rgb = prepare(frame)` for it): `{"event":"preview","t":ms,"width":320,"height":240,"mirrored":true,"image":<base64 JPEG>,"landmarks":{...}}`.
+  - `image` (if requested): base64 JPEG, quality 70, ~6 KB, of the exact detector input (the mirrored 320x240 frame from `detector.prepare`).
+  - `landmarks` (if requested): `pose` `[[x,y,visibility]]` x33, `leftHand` / `rightHand` `[[x,y]]` x21, `face` `[[x,y]]` x478; normalized image coordinates of that mirrored frame. Streams not detected in the frame are left out. Left/right are MediaPipe's labels on the mirrored frame.
+  - ~16 KB per event with both.
+- vspark side (branch `feature/learned-tracker`, b3dc60ba): floating "Camera preview" window opened from the Learned Tracking properties, Picture/Landmarks checkboxes; the backend requests the union of what open windows want and forwards frames only to them.
 
 ## VMC conventions
 - One OSC bundle per frame: `/VMC/Ext/OK 1`, `/VMC/Ext/T`, `/VMC/Ext/Root/Pos` (identity), one `/VMC/Ext/Bone/Pos` per output bone, then the extensions.
