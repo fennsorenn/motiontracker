@@ -1,6 +1,6 @@
 """mtservice: camera or video -> MediaPipe Holistic -> learned models -> VMC.
 
-    mtservice [--camera N | --video FILE [--realtime]] [--vmc HOST:PORT] [--merger DIR | --no-merger [--bundle DIR]]
+    mtservice [--camera N | --video FILE [--realtime]] [--fps N] [--vmc HOST:PORT] [--merger DIR | --no-merger [--bundle DIR]]
               [--task FILE] [--avatar-vrm FILE] [--retarget] [--face-mesh full|lite] [--no-face] [--face-rate HZ] [--no-eye-filter]
               [--no-fingers] [--no-legs] [--stdio] [--dump-poses FILE]
               [--dump-landmarks FILE] [--no-head3d] [--list-cameras]
@@ -9,6 +9,9 @@ Models: by default the merger bundle (`mttrain.merger.export`, `mtcore.merged`):
 head pose and the merger -> body, leg and finger bones, hip position and up direction. --no-merger: the M1 lifter
 alone (--bundle, upper body) with hands.py's fingers, as before 2026-11-14 (also used when the default merger
 bundle is missing).
+--fps: frames processed per second (default 10, the rate the models were trained at). The models look back by age
+(`mtcore.merged.TRAIN_DT`, `mtcore.features.OFFSETS`), so other rates work without retraining; each frame costs
+one detector pass (~25 ms on one core), so CPU use grows with the rate.
 --no-legs: no leg bones (receivers without a lower-body mask). Hip position and up direction go out as /MT/Root and
 /MT/Up (vmc.py).
 --avatar-vrm: the bones are computed for this avatar's rest pose. Without a VRM: the default avatar's rest pose.
@@ -157,6 +160,7 @@ def main(argv=None):
     ap.add_argument("--merger", type=Path, help=f"merger bundle (default {DEFAULT_MERGER} if present)")
     ap.add_argument("--no-merger", action="store_true", help="M1 lifter alone (--bundle) with hands.py's fingers")
     ap.add_argument("--bundle", type=Path, default=DEFAULT_BUNDLE, help="M1 lifter bundle for --no-merger")
+    ap.add_argument("--fps", type=float, default=10.0, help="frames processed per second (default 10)")
     ap.add_argument("--no-legs", action="store_true", help="don't send leg bones")
     ap.add_argument("--task", type=Path, help="Holistic .task file (default: pinned model, downloaded once)")
     ap.add_argument("--stdio", action="store_true")
@@ -217,8 +221,8 @@ def retarget_state(lifter):
 
 def open_source(a, camera):
     if a.video:
-        return VideoSource(a.video, realtime=a.realtime)
-    return CameraSource(camera)
+        return VideoSource(a.video, fps=a.fps, realtime=a.realtime)
+    return CameraSource(camera, fps=a.fps)
 
 
 def run(a, emit):
